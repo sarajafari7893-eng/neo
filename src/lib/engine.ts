@@ -65,6 +65,7 @@ import { relaySignalEvent, relayArmed, ensureAutoDiscover, sendDirect } from "@/
 import { onsetTagFor } from "@/lib/volOnset";
 import { volCauseBoost } from "@/lib/volCause";
 import { peekSymbolFlow, maybeFlowScan, flowShiftTracking, type MtfRollup } from "@/lib/flow-scanner";
+import { engineFlags } from "@/lib/engine-flags"; // v10.18 phased-consolidation flags (operator option A)
 // v8.1 P1/P2 (operator mandate «P1 و P2 رو کامل اجرا کن»): OI/funding board,
 // liquidation heatmap, volatility forecast and the risk overlay — all bounded
 // modules with zero new network dependencies on the hot path.
@@ -98,7 +99,7 @@ import { buildResearchLadder, journalResearchShadowDeploy, settleResearchShadow 
 
 // v10.16 — engine identity bumped with the deep-audit fix package (P0-2 gate,
 // futures unification, event retention/archive, serial race, pump leak).
-const ENGINE_VERSION = "NEXUS-LIVE v10.16";
+const ENGINE_VERSION = "NEXUS-LIVE v10.18"; // v10.18 — phased consolidation (option A): radar-primary gated emission, ledger-integrity guards, sensor-bus dormancy
 const MIN_TICK_MS = 3500;
 // v6.3: MAX_ACTIVE is now the governor-owned gate.maxActive knob (2–8, default 5)
 // — the static constant only remains as the fallback if the gate read fails.
@@ -599,6 +600,7 @@ async function resolveSignals(assets: MarketAsset[]) {
     let status = s.status;
     let closedAt: Date | null = null;
     let stopLossNext: number | null = null; // v5.4: trail the stop when ladder rungs are banked
+    let qualityFlagNext: string | null = null; // v10.18 ledger-integrity flag — threaded into the update below
 
     const hitTp = (level: 1 | 2 | 3) => {
       const target = level === 1 ? s.tp1 : level === 2 ? s.tp2 : s.tp3;
@@ -612,14 +614,30 @@ async function resolveSignals(assets: MarketAsset[]) {
     const reachedTp = Math.max(s.reachedTp, hitTp(1) ? 1 : 0, hitTp(2) ? 2 : 0, hitTp(3) ? 3 : 0);
 
     if (hitSl) {
+      const stopMovePct = ((s.stopLoss - s.entryPrice) / s.entryPrice) * (isLong ? 1 : -1) * 100;
+      const grossAtStop = stopMovePct * s.leverage;
+      // ── v10.18 SETTLEMENT INTEGRITY GUARD (ledger forensics 2026-09-24) ──
+      // Forensic note (corrected): the historical "+pnl SL" rows are LEGIT —
+      // v5.4 TP1-TRAILED stops (stopLossNext = tp1/entry, counted as wins by
+      // isTpWin). A TRUE anomaly is a stop that sits in profit territory
+      // WITHOUT ever having been trailed: reachedTp==0 AND stop==
+      // initialStopLoss AND gross-at-stop > 0 — geometrically impossible
+      // (birth defect), zero occurrences lifetime, must stay zero. When it
+      // fires: settle honestly at the geometric +1R touch (tp1 ≡ stop for
+      // such rows), flag the row, integrity event.
+      if (s.reachedTp === 0 && (s.initialStopLoss === null || s.stopLoss === s.initialStopLoss) && grossAtStop > 0.5) {
+        status = "TP1";
+        closedAt = now;
+        qualityFlagNext = "DEGEN_STOP";
+        await fireEvent(s.id, s.symbol, "ENGINE", "error", `INTEGRITY: ${s.symbol} stop born on the PROFIT side (${s.engine}) — impossible "SL with +pnl" refused; settled honestly at the geometric +1R touch, row flagged DEGEN_STOP (forensics 2026-09-24)`);
+      } else {
       status = "SL";
       closedAt = now;
       // v5.4: PnL is measured to the EFFECTIVE stop (trailed stops are real):
       // original stop → -1R · breakeven trail after TP1 → ~0R · TP1 trail after TP2 → +1R
-      const stopMovePct = ((s.stopLoss - s.entryPrice) / s.entryPrice) * (isLong ? 1 : -1) * 100;
-      const grossAtStop = stopMovePct * s.leverage;
       const trailNote = grossAtStop > 0.5 ? " · trailed stop executed at TP1 — +1R locked on the runner" : Math.abs(grossAtStop) <= 0.5 ? " · breakeven stop executed — runner flat, TP1 profit banked" : "";
       await fireEvent(s.id, s.symbol, "SL", "error", `${s.symbol} stopped @ ${s.stopLoss.toFixed(s.stopLoss > 100 ? 1 : 4)} — risk contained (${grossAtStop >= 0 ? "+" : "-"}${Math.abs(grossAtStop).toFixed(1)}% gross)${trailNote || (reachedTp >= 1 ? " · TP1 had been banked earlier" : "")}`);
+      }
     } else if (hitTp(3)) {
       status = "TP3";
       closedAt = now;
@@ -783,6 +801,7 @@ async function resolveSignals(assets: MarketAsset[]) {
         feeUsd: closedAt ? finalFb.commissionUsd : s.feeUsd,
         swapUsd: closedAt ? finalFb.swapUsd : s.swapUsd,
         afterlife: status === "EXPIRED" ? "TRACKING" : s.afterlife,
+        ...(qualityFlagNext ? { qualityFlag: qualityFlagNext } : {}), // v10.18 ledger-integrity flag
       },
     });
 
@@ -1642,6 +1661,25 @@ export async function deploySignal(symbol?: string, directionHint?: "LONG" | "SH
   const stopLoss = entry * (isLong ? 1 - slDistPct : 1 + slDistPct);
   const risk = Math.abs(entry - stopLoss);
 
+  // ── v10.18 DEGEN-STOP BIRTH GUARD (ledger forensics 2026-09-24) ──
+  // Forensic note (corrected): the historical 200 entry==SL rows are NOT
+  // birth defects — all carry initialStopLoss != stopLoss and 197/200 went
+  // green first: they are v5.4/R2 BE-TRAIL breakeven exits (legit). Zero
+  // true births (initial==stop==entry) exist in the ledger, and the 0.7%
+  // floor above already makes the formula structurally safe. This guard
+  // keeps that safety VERIFIED, not assumed: any candidate whose stop is
+  // non-finite, not strictly on the loss side, or closer than 0.25% to
+  // entry is refused here, journaled (gate DEGEN-STOP), and never reaches
+  // the book — the class stays at zero by construction.
+  const slSideOk = isLong ? stopLoss < entry : stopLoss > entry;
+  const slBirthDistPct = Math.abs((stopLoss - entry) / entry) * 100;
+  if (!Number.isFinite(stopLoss) || !slSideOk || slBirthDistPct < 0.25) {
+    const reason = `degenerate stop geometry — dist ${slBirthDistPct.toFixed(3)}% (floor 0.25%) · side ${slSideOk ? "ok" : "INVERTED"} · finite ${Number.isFinite(stopLoss)}`;
+    void recordGateBlock({ gate: "DEGEN-STOP", symbol: asset.symbol, direction, reason });
+    await fireEvent(null, asset.symbol, "ENGINE", "error", `INTEGRITY GUARD: ${direction} ${asset.symbol} deploy refused — ${reason} (ledger forensics 2026-09-24: 200 entry==SL births in the feed-loss era)`);
+    return { error: `degen-stop birth guard: ${asset.symbol} ${direction} stop geometry invalid — ${reason}`, status: 409 };
+  }
+
   // ── v5.4 DYNAMIC RISK:REWARD CALCULATOR (root-cause fix for "R:R always 1:2.6") ──
   // RR was hardcoded at 2.6 for every deployment. It is now computed per-signal
   // from four measured drivers, so the analytics AVG R:R and per-card R:R become
@@ -2239,7 +2277,12 @@ export async function tick(force = false): Promise<{ ran: boolean; resolved: num
       void recordRawcalQuality().catch((e) => console.error("[rawcal-quality]", e)); // v9.3 — sample-quality journal (10min cadence, forced on new settles)
     }
 
-    const spawned = await autoSpawn(activeCount);
+    // v10.18 PHASE-2 CONSOLIDATION — the legacy random full-universe
+    // auto-spawn is RETIRED (engine-flags.legacyAutoSpawn=false): the
+    // PUMP/DUMP RADAR (pumpTick above) is the primary detection source and
+    // its nominations pass the FULL gate stack; event-trigger spawns (trigger
+    // bus) remain live. One flag flips the old behavior back.
+    const spawned = engineFlags().legacyAutoSpawn ? await autoSpawn(activeCount) : 0;
     await flavorEvents(assets);
 
     // v8.2 SHADOW-VETO — paper sweep for the would-have-won ledger (in-memory

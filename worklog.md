@@ -29095,3 +29095,25 @@ Work Log:
 Stage Summary:
 - No code or data changed (advisory run). Decision-grade evidence: contaminated ledger (200 degenerate entry==SL rows, 31 misclassified SLs), pump cohort underperformance on clean data (10.8% vs 24.3% WR 7d), weight concentrated in next-server (2.37GB) not strategy libs.
 - NEW P1 findings filed for next work package: (1) deploy-path slDistPct floor guard (engine.ts:1642), (2) settlement label integrity (SL rows with positive pnl), (3) legacy catch-up rows need RESTORE_CATCHUP annotation to keep analytics honest.
+
+---
+Task ID: 8 (v10.18 — operator option A)
+Agent: Z.ai Code (lead)
+Task: اجرای کامل و مهندسی «گزینه A» — تثبیت فازی سیستم بر پایه MARKET MATRIX + PUMP/DUMP RADAR (فاز ۰ تا ۳ از ADVISORY-20260924-matrix-radar).
+
+Work Log:
+- PHASE-0 (ledger integrity): (a) DEGEN-STOP birth guard در deploySignal بعد از محاسبه stopLoss — ردِ deploy با استاپ non-finite / سمت اشتباه / فاصله <0.25٪ + recordGateBlock(DEGEN-STOP) + رخداد INTEGRITY؛ (b) settlement integrity guard در resolveSignals — استاپِ reachedTp==0 && stop==initialStopLoss که سمت سود باشد → تسویه صادقانه TP1 + qualityFlag=DEGEN_STOP + رخداد؛ (c) ستون qualityFlag در schema.prisma + db:push + فیلتر clean-ledger در buildStats (qualityFlag:null) + شمارنده dataQuality در PlatformStats/api-types.
+- FORENSIC CORRECTION (honesty contract): فرضیه «۲۰۰ تولد ناقص entry==SL» رد شد — همه ۲۰۰ ردیف initialStopLoss != stopLoss دارند و ۱۹۷/۲۰۰ اول سبز شده‌اند (maxPnl≥8٪) = خروج‌های قانونی BE-TRAIL؛ «۳۱ SL با سود مثبت» = TP1-trail های قانونی v5.4 (isTpWin آنها را win می‌شمارد). صفر ردیف تاریخی واجد فلگ. متدولوژی هم اصلاح شد: تعریف بردِ status-only اشتباه بود — با تعریف TP-proven پلتفرم (reachedTp≥1)، WR 7d واقعی ~23٪ است نه 3.6٪. کوهورت نهایی: pump 203/ WR 17.7٪/ avg −1.67٪ vs other 151/ WR 23.2٪/ +3.04٪.
+- scripts/annotate-quality-flags.ts: ابزار verification ایدمپوتنت (شمارش BE-trail vs true-birth، flip خودکار pump.authority→gated، چاپ کوهورت با تعریف برد صحیح). اجرا شد — خروجی سازگار.
+- PHASE-1 (sensor-bus dormant): src/config/engine-flags.json + src/lib/engine-flags.ts (client-safe، fail-open به دستور اپراتور)؛ pulse route: captureTopVolCauses زیر فلگ sensorBusDormant؛ AiCoreSection: سه کارت (SmartMoneyBoard/VolOnsetRadarCard/VolCauseCard) → SensorBusDormantStrip (کارت شفاف با لیست ماژول‌ها + دستور بازگردانی یک-فلگ؛ با فلگ off خودش مخفی می‌شود). ورودی‌های گیت-بحرانی (vol-forecast/flow/klines/liq) دست‌نخورده. RAWCAL همچنان disarmed (بدون تغییر).
+- PHASE-2 (radar-primary gated): pump-dump.ts maybeSpawnSignal — شاخه direct/authorityBypass حذف؛ همه نامزدها از پشته کامل گیت‌ها (learning gate + کف ۷۸ + spacing + max-open + گیت‌های موتور)؛ getPumpAuthority همیشه "gated" (صداقت-by-construction برای بج داشبورد)؛ EngineSetting در DB هم gated شد؛ engine.ts tick: autoSpawn زیر فلگ legacyAutoSpawn=false بازنشستگی شد (trigger-bus و RAW-CAL دست‌نخورده). ENGINE_VERSION → NEXUS-LIVE v10.18.
+- ACCEPTANCE GATE: /api/analytics/radar-probation (کوهورت رادار v10.18 vs baseline؛ ≥30 settle، ≥14d؛ PASS فقط اگر WR≥baseline && avgPnl>0؛ doctrine degraded-200). زنده و PENDING (0 rows v10.18 — vintage جدید).
+- PHASE-3 (archive doctrine): انتقال فیزیکی research modules رد شد (backtest/research-factors/tp3-lab/near-miss همه در گراف import موتورند)؛ بازنشستگی فلگ‌محور + ثبت کامل در research/README.md §5. هیچ فایلی حذف یا جابجا نشد.
+- VERIFICATION: (a) lint — ۱۷ خطا، همه pre-existing scripts/ operator-debris؛ صفر خطا در فایل‌های من؛ (b) restart تمیز Next (Prisma client جدید بعد از regenerate — خطای PrismaClientValidationError اولیه با restart حل شد)؛ (c) pulse 200 @ ~110ms ×2، engine events زنده (liq stream + dislocation)، verdict-core runs=465؛ (d) سنتینل: GREEN، 6/6 services؛ (e) agent-browser: صفحه رندر، صفر console/page error، MARKET MATRIX + hero + radar زنده، AI CORE نوار SENSOR BUS // DORMANT را نشان می‌دهد و کارت‌های قدیمی حذف شده‌اند، موبایل 390px سالم، footer درست (sticky روی صفحه کوتاه/پیشرانش روی بلند)، اسکرین‌شات /tmp/nexus-v1018-ai-core.png.
+- docs/CHANGELOG-human.md: بخش کامل v10.18 ثبت شد.
+
+Stage Summary:
+- v10.18 شروع به کار کرد: کتاب = MARKET MATRIX (کشف) → PUMP/DUMP RADAR (تشخیص اصلی، از دروازه گیت‌ها) → deploy؛ spawn تصادفی legacy خاموش؛ سنسورهای محیطی dormant؛ دفتر کل با گاردهای دائمی محافظت و شمارنده شفافیت مجهز شد.
+- نرخ spawn عمداً پایین‌تر خواهد بود (کیفیت > کمیت): فقط نامزدهای رادار با conviction ≥78 + trigger-bus. دروازه ۱۴روزه radar-probation شاهد پذیرش است.
+- اصلاح صادقانه ثبت شد: ادوای قبلی WR 3.6٪/«تولد ناقص» را اغراق‌شده گزارش کرده بود؛ اعداد تصحیح‌شده مبنای همین اجراست (worklog append-only — ادوای قبلی دست نخورد).
+- Reversibility: یک فایل (engine-flags.json) همه رفتارها را به قبل برمی‌گرداند؛ هیچ ردیف تاریخچه‌ای بازنویسی نشد.

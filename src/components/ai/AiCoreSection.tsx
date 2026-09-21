@@ -25,9 +25,7 @@ import DeepLearnCard from "@/components/ai/DeepLearnCard";
 import VerdictCoreCard from "@/components/ai/VerdictCoreCard";
 import GovernorModulesCard from "@/components/ai/GovernorModulesCard";
 import ThoughtCoreCard from "@/components/ai/ThoughtCoreCard";
-import SmartMoneyBoard from "@/components/dashboard/SmartMoneyBoard";
-import VolOnsetRadarCard from "@/components/dashboard/VolOnsetRadarCard";
-import VolCauseCard from "@/components/dashboard/VolCauseCard";
+import SensorBusDormantStrip from "@/components/ai/SensorBusDormantStrip"; // v10.18 phase-1: sensor bus demoted to dormant
 
 /* ── config / types ─────────────────────────────────────────────────── */
 
@@ -540,14 +538,12 @@ export default function AiCoreSection() {
         <GateTunablesCard />
       </div>
 
-      {/* ══ SMART MONEY · WHALE FLOW + VOL-ONSET RADAR + VOL-CAUSE FORENSICS —
-          operator relocations 2026-09-07:
-          «SMART MONEY · WHALE FLOW را به صفحه AI CORE ببر» ثم
-          «VOL-ONSET RADAR و VOL-CAUSE FORENSICS رو هم به صفحه AI CORE ببر» —
-          the full market-forensics desk now lives beside the AI analyst. ══ */}
-      <SmartMoneyBoard />
-      <VolOnsetRadarCard />
-      <VolCauseCard />
+      {/* ══ v10.18 PHASE-1 CONSOLIDATION (operator option A, 2026-09-24) —
+          the peripheral sensor bus (SMART-MONEY flow matrix / VOL-ONSET radar /
+          VOL-CAUSE forensics) is DORMANT: components stay in code, display and
+          telemetry capture are suspended, gate-critical inputs stay live.
+          Restore = flip engine-flags.sensorBusDormant to false. ══ */}
+      <SensorBusDormantStrip />
 
       {/* ══ v4.8 BACKTEST & LEARNER — replayed-history performance learner ══ */}
       <div className="mt-4">

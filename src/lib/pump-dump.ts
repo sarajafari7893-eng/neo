@@ -539,24 +539,20 @@ export async function pumpGateAllows(): Promise<{ unlocked: boolean; successful:
   };
 }
 
-// ── v9.1 DIRECT AUTHORITY (operator mandate 2026-09-13: «اجازه مستقیم برای
-// صدور سیگنال داشته باشه») — the 5-success learning gate is BANKED (5/5 on
-// 2026-09-12), and the operator now grants the radar DIRECT signal authority:
-// EngineSetting "pump.authority" = "direct" → a conviction-≥78 nomination
-// deploys through deploySignal with authorityBypass — the radar's own
-// evidence stack (velocity + volume burst + OI/CVD/taker/whale/liq layers)
-// IS the quality judgment; the generic engine gates no longer re-judge it.
-// "gated" → the pre-v9.1 behavior (nominate, engine disposes). Radar's own
-// risk rails (20min spacing, max 2 open radar signals) stay HARD either way.
+// ── v9.1 DIRECT AUTHORITY → RETIRED v10.18 (operator option A, 2026-09-24:
+// «کل سیستم بر پایه MARKET MATRIX و PUMP/DUMP RADAR، اما مهارشده») — the
+// radar is the PRIMARY detection source of the consolidated system, but the
+// unfiltered DIRECT emission mode (authorityBypass, live 2026-09-13 →
+// 2026-09-24) is retired: clean-cohort evidence showed unfiltered pump
+// emission UNDERPERFORMING the gated book (WR 10.8% vs 24.3%, avg −13.82%
+// vs +8.66% over the last 7d). Every radar nomination now passes the FULL
+// gate stack; the EngineSetting key below stays only as historical audit.
 const AUTHORITY_KEY = "pump.authority";
 
 export async function getPumpAuthority(): Promise<"direct" | "gated"> {
-  try {
-    const row = await db.engineSetting.findUnique({ where: { key: AUTHORITY_KEY } });
-    return row?.value === "direct" ? "direct" : "gated";
-  } catch {
-    return "gated";
-  }
+  // v10.18 honesty-by-construction: reports "gated" unconditionally so no
+  // dashboard badge can ever narrate a mode that no longer exists in code.
+  return "gated";
 }
 
 export async function setPumpAuthority(mode: "direct" | "gated"): Promise<void> {
@@ -568,9 +564,21 @@ export async function setPumpAuthority(mode: "direct" | "gated"): Promise<void> 
 }
 
 async function maybeSpawnSignal(kind: "PUMP" | "DUMP", symbol: string, score: number, trackId: string, now: number, anchorPrice: number): Promise<void> {
-  const authority = await getPumpAuthority();
   const engine = await import("./engine");
-  if (authority !== "direct") {
+  // ── v10.18 PHASE-2 CONSOLIDATION (operator option A, 2026-09-24) ──
+  // The DIRECT-AUTHORITY bypass is RETIRED. The PUMP/DUMP RADAR is the
+  // PRIMARY detection source of the consolidated system, but every emission
+  // now passes the SAME gate stack as the rest of the book: learning gate +
+  // 78 deploy floor + 20min spacing + max-open + the engine's full quality
+  // gates (score/min_score, regime, dislocation, chase, DEGEN-STOP birth
+  // guard). `authorityBypass` remains engine-internal for operator-forced
+  // deploys and RAW-CAL capture only — the radar can no longer reach it.
+  // Evidence basis: clean-cohort 7d ledger (post DEGEN/INVERTED exclusion)
+  // pump WR 10.8% / avg −13.82% vs non-pump 24.3% / +8.66% — unfiltered
+  // emission measurably UNDERPERFORMS the gated book. Acceptance gate for
+  // the radar-primary era: GET /api/analytics/radar-probation (n≥30 settled
+  // inside 14d, WR ≥ non-radar clean baseline, avgPnl > 0).
+  {
     // v9.0 gated path — learning gate + 78 deploy floor + spacing + max-open
     const gate = await pumpGateAllows();
     if (!gate.unlocked) {
@@ -584,9 +592,7 @@ async function maybeSpawnSignal(kind: "PUMP" | "DUMP", symbol: string, score: nu
     if (openRadar >= PUMP_RULES.signalMaxActive) return;
     lastSignalAt.v = now_;
   }
-  // v9.2 DIRECT — unfiltered: every declared track emits its card 1:1, no
-  // learning gate, no 78 floor, no spacing, no max-open (operator mandate).
-  // deploySignal's honesty rails (feed-fresh, sim-price ban) stay HARD.
+  // v9.2 comment RETIRED with the direct path (v10.18, see block above).
   // v9.3 R6-INFORMATIVE PACKAGE (operator mandate الف + anti-late-entry):
   //   · ttlMinutes 60–75 (vs the 180–300 AI-SWING default these cards inherit)
   //     → cards RESOLVE fast: fewer EXPIRED-no-touch censors, higher R6
@@ -613,7 +619,7 @@ async function maybeSpawnSignal(kind: "PUMP" | "DUMP", symbol: string, score: nu
   const res = await engine.deploySignal(symbol, kind === "PUMP" ? "LONG" : "SHORT", {
     triggerTag: "PUMP-RADAR",
     extraTags: [kind],
-    ...(authority === "direct" ? { authorityBypass: true } : {}),
+    // v10.18: NO authorityBypass — radar emissions ride the full gate stack.
     focusSymbol: symbol,
     ttlMinutes: 60 + Math.round(Math.random() * 15),
     ttlNoExtend: true,
@@ -622,9 +628,9 @@ async function maybeSpawnSignal(kind: "PUMP" | "DUMP", symbol: string, score: nu
   });
   if (res.signal) {
     await db.pumpTrack.update({ where: { id: trackId }, data: { signalId: res.signal.id } }).catch(() => undefined);
-    await engine.fireEvent(null, symbol, "PUMP_RADAR", "success", `${kind} RADAR DEPLOY — ${symbol} declared at conviction ${score}/100 → NX-${String(res.signal.serial).padStart(4, "0")} deployed ${authority === "direct" ? "under DIRECT AUTHORITY (unfiltered emission — operator mandate; honesty rails only)" : "through the full gate stack"} with the dedicated ${kind} card`);
+    await engine.fireEvent(null, symbol, "PUMP_RADAR", "success", `${kind} RADAR DEPLOY — ${symbol} declared at conviction ${score}/100 → NX-${String(res.signal.serial).padStart(4, "0")} deployed THROUGH THE FULL GATE STACK (v10.18 radar-primary gated emission) with the dedicated ${kind} card`);
   } else if (res.error) {
-    await engine.fireEvent(null, symbol, "ENGINE", "info", `PUMP/DUMP RADAR: ${kind} ${symbol} nomination VETOED${authority === "direct" ? " (rails only — feed/sim/risk-cluster)" : " by the engine gates"} — ${res.error.slice(0, 160)}`);
+    await engine.fireEvent(null, symbol, "ENGINE", "info", `PUMP/DUMP RADAR: ${kind} ${symbol} nomination VETOED by the engine gates — ${res.error.slice(0, 160)}`);
   }
 }
 

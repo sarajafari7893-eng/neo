@@ -478,6 +478,13 @@ export interface PlatformStats {
   peakEquity: number;
   account: PaperAccount;
   afterlife: AfterlifeStats;
+  /** v10.18 clean-ledger transparency — flagged rows excluded from headline analytics */
+  dataQuality: {
+    excludedTotal: number;
+    degenStop: number;
+    invertedStop: number;
+    restoreCatchup: number;
+  };
   lifecycle: LifecycleStats;
   tpFunnel: TpFunnel;
   pnlLedger: PnlLedger;

@@ -7,6 +7,7 @@ import { getFlowStatus } from "@/lib/flow";
 import { getLiquidationStatus } from "@/lib/liquidations";
 import { getRegimeSummary } from "@/lib/regime";
 import { captureTopVolCauses } from "@/lib/volCause";
+import { engineFlags } from "@/lib/engine-flags"; // v10.18 phased-consolidation flags
 import { ensureP0Watchdog } from "@/lib/watchdog-arm";
 import { ensureBridgeLoopAlive } from "@/lib/telegram-bridge";
 import { getPumpEngineStatus } from "@/lib/pump-dump"; // v9.0 PUMP/DUMP RADAR
@@ -32,7 +33,11 @@ export async function GET() {
 
     // v6.4 VOL-CAUSE capture rides the heartbeat — throttled to one run/3min
     // inside the lib; never blocks or breaks the pulse.
-    void captureTopVolCauses();
+    // v10.18 PHASE-1 CONSOLIDATION: the peripheral sensor bus is DORMANT
+    // (engine-flags.sensorBusDormant) — vol-cause capture (display + learned
+    // telemetry) is suspended. The gate-critical inputs (vol-forecast, flow
+    // gating, klines, liq stream) stay LIVE; one flag restores capture.
+    if (!engineFlags().sensorBusDormant) void captureTopVolCauses();
 
     // P0 WATCHDOG self-arm (2026-09-09 ops mandate) — keeps the bun
     // p0-watchdog service (:3020) dormant-proof: if its lock pid is dead,

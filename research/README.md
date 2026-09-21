@@ -115,3 +115,31 @@ ledger (read-only)
 
 Anything that skips a door is an incident, not a shortcut.
 هر مسیری که از این درها عبور نکند «حادثه» است، نه میان‌بر.
+
+---
+
+## §5 · v10.18 PHASED CONSOLIDATION RECORD (operator option A — 2026-09-24)
+
+Operator mandate: «کل سیستم بر پایه MARKET MATRIX و PUMP/DUMP RADAR اجرا شود —
+سبک‌تر و دقیق‌تر» → executed as PHASED CONSOLIDATION, not amputation:
+
+- **Phase 0 — ledger integrity**: DEGEN-STOP birth guard + settlement integrity
+  guard (engine.ts) + `qualityFlag` column + clean-ledger stats filter.
+  Forensic outcome: ZERO historical rows qualified (the 200 entry==SL rows are
+  legit BE-trail exits; the +pnl "SL" rows are legit TP1-trails) — guards are
+  permanent anti-regression rails, history untouched.
+- **Phase 1 — sensor-bus dormancy**: flow-matrix / whale-tape / vol-onset /
+  vol-cause demoted (display + capture off, code alive). Gate inputs stay live.
+- **Phase 2 — radar-primary WITH gates**: DIRECT-authority bypass RETIRED
+  (evidence: 7d clean cohorts pump WR 17.7% / avg −1.67% vs other 23.2% /
+  +3.04%, TP-proven definition); legacy random auto-spawn RETIRED (flag);
+  acceptance gate = GET /api/analytics/radar-probation (≥30 settles, ≥14d,
+  WR ≥ baseline AND avgPnl > 0 — else FAIL → operator decides).
+- **Phase 3 — archive doctrine**: physical relocation of research modules
+  (backtest / research-factors / tp3-lab / near-miss) was EVALUATED AND
+  REJECTED — all four sit inside the engine's import graph (research-ladder,
+  near-miss capture, tp3 telemetry). Retirement is therefore flag-based +
+  documented; physical archive may only proceed through the Overfit-Auditor
+  door (§3) once the live book no longer references them.
+
+Flags: `src/config/engine-flags.json` (single flip-point, all reversible).

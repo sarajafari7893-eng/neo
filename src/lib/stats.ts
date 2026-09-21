@@ -164,8 +164,16 @@ function buildLedger(closedAll: Signal[]): PnlLedger {
 
 export async function buildStats(): Promise<PlatformStats> {
   const weekAgo = new Date(Date.now() - 7 * 24 * 3600_000);
+  // v10.18 CLEAN-LEDGER DOCTRINE (operator option A, 2026-09-24) — headline
+  // analytics exclude qualityFlag rows (DEGEN_STOP / INVERTED_STOP /
+  // RESTORE_CATCHUP — reserved classes for genuine ledger-integrity events).
+  // Forensic note: the v10.18 audit found ZERO historical rows qualifying
+  // (the 200 entry==SL rows are legit BE-trail exits; the +pnl "SL" rows are
+  // legit TP1-trails) — the filter is a permanent anti-poisoning rail. The
+  // paper ACCOUNT keeps full history (balance continuity); ANALYTICS stay
+  // clean and the dataQuality counters surface what was excluded.
   const signals = await db.signal.findMany({
-    where: { createdAt: { gte: weekAgo } },
+    where: { createdAt: { gte: weekAgo }, qualityFlag: null },
     orderBy: { createdAt: "asc" },
   });
 
@@ -387,6 +395,16 @@ export async function buildStats(): Promise<PlatformStats> {
     pnlLedger.totals.ttlExtended = ttlTel.extended;
   }
 
+  // ── v10.18 DATA-QUALITY TRANSPARENCY — what the clean ledger excludes ──
+  const flagGroups = await db.signal.groupBy({ by: ["qualityFlag"], where: { qualityFlag: { not: null } }, _count: { _all: true } });
+  const flagCount = (f: string) => flagGroups.find((g) => g.qualityFlag === f)?._count._all ?? 0;
+  const dataQuality = {
+    excludedTotal: flagGroups.reduce((a, g) => a + g._count._all, 0),
+    degenStop: flagCount("DEGEN_STOP"),
+    invertedStop: flagCount("INVERTED_STOP"),
+    restoreCatchup: flagCount("RESTORE_CATCHUP"),
+  };
+
   return {
     totalSignals: signals.length,
     activeCount: active.length,
@@ -412,6 +430,7 @@ export async function buildStats(): Promise<PlatformStats> {
     peakEquity: Number(peakEquity.toFixed(2)),
     account,
     afterlife,
+    dataQuality,
     lifecycle,
     tpFunnel,
     pnlLedger,

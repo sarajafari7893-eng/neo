@@ -46,6 +46,7 @@ model Signal {
   mtfJson       String? // JSON MtfRollup — v8.0 multi-TF flow board at deploy (per-TF scores + netBias)
   afterlife     String? // EXPIRED follow-up state: TRACKING | TP1_HIT | TP2_HIT | TP3_HIT | SL_HIT | FLAT
   afterlifeAt   DateTime? // when the afterlife outcome was confirmed
+  qualityFlag   String? // v10.18 ledger integrity — DEGEN_STOP | INVERTED_STOP | RESTORE_CATCHUP; non-null rows are EXCLUDED from headline analytics (clean-ledger doctrine)
   maxPostPnlPercent Float @default(0) // best levered NET pnl AFTER expiry (post-expiry MFE)
   ttlMinutes    Int
   ttlExtensions Int       @default(0) // dynamic expiry gate — how many TTL extensions were granted (v6.1)
