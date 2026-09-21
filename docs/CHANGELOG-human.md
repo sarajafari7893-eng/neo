@@ -33,3 +33,9 @@
 - `2026-09-21T22:2xZ` FIX orphan sweep + شمارش صادقانه نشتی: کاووش retro-link حالا verdict‌هایی که پنجره‌ی fence‌شان بسته شده و هیچ deployای برای bind نداشتند را «یتیمِ ساختاری» مهر می‌زند (sweptAt). کاووش جنایی 2026-09-24: ۸۴٪ بدهی link (۲۳۵ از ۲۷۹) یتیم ساختاری بود — نامزدی که گیت‌های پایین‌دستی (max-open/spacing/governor/risk) deploy نکرده بودند؛ شمردنشان به‌عنوان نشتی، دروازه‌ی promotion را برای همیشه قفل کرده بود (۲۰۱ stale → هیچ‌وقت پاک نمی‌شد). حالا: `unlinkedPassStale` فقط نشتی فعال را می‌شمارد (۱۷)، یتیم‌ها (۱۳۹) و کهنه‌شدگان از reach جدا شمرده می‌شوند.
 - `2026-09-21T22:3xZ` تله‌متری و UI همگام شدند: wiring.realLink اکنون «نشتی فعال» را گزارش می‌کند (leak 17 · orphans swept 139)، کارت TERMINAL همان عدد را نشان می‌دهد؛ sentinel از API زنده mode=veto را دریافت کرد (verdict GREEN).
 - شاهد زنده: telemetry snapshot mode=veto · arms real-keep 27/30 (+$0.33) · real-veto 12/30 (+$0.68) · paper-keep 30/30 (+$7.69) · paper-veto 0/30 (شروع به پرشدن با اولین block واقعی می‌کند) · LLM grounded 100% · 0 audit violation.
+
+- `2026-09-22T06:25:23.320Z` ENV-GUARD: .env auto-restored from local snapshot ring (nexus-snapshot-20260922-000039.zip) — 5/5 keys, bridge re-arm issued. Erasure forensics: .env-erased/erased-1790058323053.txt
+
+- `2026-09-22T07:53:05.043Z` ENV-GUARD: .env auto-restored from local snapshot ring (nexus-snapshot-20260922-062650.zip) — 5/5 keys, bridge re-arm issued. Erasure forensics: .env-erased/erased-1790063584368.txt
+
+- `2026-09-22T13:16:31.287Z` ENV-GUARD: .env auto-restored from local snapshot ring (nexus-snapshot-20260922-094202.zip) — 5/5 keys, bridge re-arm issued. Erasure forensics: .env-erased/erased-1790082991062.txt

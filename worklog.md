@@ -29171,3 +29171,16 @@ Work Log:
 Stage Summary:
 - v10.20 اعمال شد: RAWCAL E-20260921 مسلح (632/672)، صدور RAW-CAL مسیرِ آشکارِ پایان خشکسالی است؛ heartbeat run سنتینل دیگر هرگز «مرده» به‌نظر نمی‌رسد؛ دو لَوِرِ وسوسه‌انگیزِ بی‌شواهد (تمدید TTL رادار، شل‌کردن گیت‌ها) با داده **رد مستند** شدند — بازگشت‌پذیری کامل (disarm = POST {action:"disarm"})، هیچ ردیف تاریخی بازنویسی نشد.
 - Watch: اولین ISSUE (نباید از mean spacing 57.6m+ فاصله‌ی نامتعارف بگیرد)، نرخ informative ردیف‌های جدید (مسیر 50%)، probation radar 0/30.
+---
+Task ID: 13 (RAWCAL-DROUGHT WATCHDOG — operator order)
+Agent: Z.ai Code (lead)
+Task: استقرار ایجنت ناظر ۳ساعته — اگر تا ددلاین حتی یک RAW-CAL صادر نشود هشدار تلگرامی «بررسی اسکنر» + گزارش استقرار به تلگرام.
+
+Work Log:
+- scripts/rawcal-watchdog.ts (one-shot، خودپایان، ≤3h10m): پایش هر 10 دقیقه GET /api/rawcal (route سبک force-dynamic)؛ پنجره = armedAt (2026-09-21T22:55:45Z) + 3h → ددلاین 2026-09-22T01:55:45Z (~05:25 تهران).
+- SUCCESS condition: issued ≥ 1 در این run یا lastIssueAt > armedAt → گزارش ✅ تلگرام + verdict file → exit 0. DEADLINE: issued=0 → گزارش 🚨 با آخرین بلاک حلقه اسکنر + دستور «به ایجنت بگویید سراغ اسکنر برود» → exit 2. سه miss متوالی API هم در گزارش ددلاین صادقانه ذکر می‌شود.
+- تک‌نمونه‌ای (pid file .data/rawcal-watchdog.pid)؛ هرگز مقدار secret را لاگ نمی‌کند (فقط ok/msg_id)؛ verdict file: .data/rawcal-watchdog-last.json (وضعیت نهایی برای هر session بعدی)؛ لاگ: logs/rawcal-watchdog.log.
+- DEPLOY: setsid nohup bun در پس‌زمینه → pid 25876 زنده؛ گزارش استقرار به تلگرام تحویل شد (ok=true msg=5163): پنجره، معیار موفقیت، وضعیت ARMED، open raw 0/8، آخرین بلاک اسکنر.
+
+Stage Summary:
+- ناظر مستقر است: تا 01:55Z هر ۱۰ دقیقه وضعیت صدور را می‌خواند؛ اولین ISSUE → گزارش موفقیت تلگرامی و خروج؛ خشکسالی کامل → هشدار تلگرامی بررسی-اسکنر. Verdict نهایی همیشه در .data/rawcal-watchdog-last.json قابل خواندن است. هیچ ردیف دامنه‌ی معاملاتی نوشته نمی‌شود (فقط فایل‌های خودش).
