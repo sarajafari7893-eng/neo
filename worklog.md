@@ -29010,3 +29010,26 @@ Work Log:
 Stage Summary:
 - BROWSER-VERIFIED: page renders, core data flows live, engine ticking, all APIs green — mandate "بندهای 1-8 + P0/P1 کامل" COMPLETE at v10.16
 - Operator-side items (dormant, documented): Caddy reload for allowlist activation, S3_BACKUP_URL/TOKEN provisioning, rotate-backup-pass.sh --apply, platform cron registry, standalone build (P0-3) blocked by sandbox no-build rule — runbook documented
+
+---
+Task ID: SENTINEL-20260921 (operator order #4 + system status sweep)
+Agent: Z.ai Code (lead senior engineer)
+Task: (1) Answer operator status questions (next-phase necessity, shadow arms fill, system/backup/bridge/warmth status); (2) Build the engineered NEXUS-SENTINEL monitoring agent + skill
+
+Work Log:
+- Status sweep found 3 degradations post-restore: trade-service :3011 DOWN + unmonitored, backup automation NOT running (ring empty since 20260919 snapshot, platform-cron dependent), watchdog covering only 3/5 services
+- Started trade-service :3011 (health OK, WS connected, dual-ingest REST fallback intact)
+- Built mini-services/sentinel-service v1.0.0 (:3030): 60s telemetry (6 service probes + latency), verdict engine GREEN/AMBER/RED with anomaly radar, deep report/30min (reports kept 48), telemetry.jsonl rotation, DB vitals via bun:sqlite STRICT readonly (busy_timeout 2500), backup-ring freshness judge, shadow-arms fill + fence-24h floor, RAWCAL armed + heartbeat age, dev.log forensics (OOM/ENOSPC/500/SETTLEMENT STALLED), p0-watchdog state cross-read, AUTONOMOUS backup scheduler (3h cycle + 10m grace, pid-liveness lock, Telegram alert on fail — P1-8 in-repo IaC: cold start no longer depends on platform cron), verdict-edge Telegram alerts (30min rate-limit), x-nexus-key fail-closed control gate on POST /run-now + /backup-now, staleness guard on /report
+- p0-watchdog v1.1.0 → v1.2.0: probe surface extended app+liq+ws → +bridge :3005 +trade :3011 +sentinel :3030 (6 services); restarted WITHOUT --hot after a hot-reload race killed the tick loop (lesson recorded: guardians don't hot-reload)
+- First autonomous backup verified END-TO-END: nexus-snapshot-20260921-010003.zip.enc 35MB, wal:VACUUM-COPY-CONSISTENT+CHECKPOINTED, cal:OK, enc:ENCRYPTED, off-site UPLOADED (2 parts + full + kit + index), env:VERSIONED+UPLOADED, exit 0
+- GET /api/sentinel Next proxy route (read-only; sentinel-down → clean degraded JSON)
+- Dashboard: src/components/dashboard/SentinelPanel.tsx — [06] SYSTEM SENTINEL bento (violet, hud-corners): verdict badge + LiveDot, 6 vitals minis (services map, mem, dual-disk, engine events 1h + db MB, backup age + ring count, shadow fill + fence floor), 4 arm progress bars (starved highlight), anomaly radar log (max-h scroll), hydration-safe timeAgo, 60s polling; wired into DashboardSection above Telegram row
+- Skill created: skills/nexus-sentinel/ — SKILL.md (frontmatter pushy description EN+FA triggers; ground-truth map; quick pulse; deep sweep; deep-search protocol with grep recipes + readonly DB patterns; mission catalog M0-M5: quick-pulse/performance-warmth/bug-hunt/reliability-recovery/intelligence-integrity/commercial-growth; report contract template; read-only + secrets + worklog guardrails; escalation) + scripts/sentinel-deep.sh (9-section deterministic sweep, tested live) + references/bug-taxonomy.md (audit P0/P1 lineage with regression tripwires) + references/commercial-readiness.md (8-axis M5 rubric + growth ladder)
+- Deep sweep first-run findings triaged: engine.ts:492 Math.random verified NOT a P0-2 regression (display-only sim drift with liveNow stamp + settlement gate intact); dev.log "Ecmascript file had an error" (market-feed.ts:129-131) verified TRANSIENT mid-edit artifact from pre-restore tree — current file clean, no double declarations, pulse 74ms; 9 fetch-without-timeout sites in src/lib logged as P2 candidates
+- Browser-verified: / renders, sentinel panel shows GREEN + 6/6 UP + live data (events 2,324/1h, backup 14m ago, arms 5/120 bars), no console/page errors; mobile 390px responsive; lint: src/ CLEAN (18 pre-existing scripts/ operator-debris errors documented, untouched)
+
+Stage Summary:
+- Verdict at handover: GREEN · 0 anomalies · 6/6 services · watchdog v1.2.0 covers all six · backup chain autonomous + proven (3h cycle) · bridge ARMED errors=0 · engine events 2,324/h
+- Shadow arms: fill 5/120 (real-keep 1/30, real-veto 1/30, paper-keep 3/30, paper-veto 0/30) — NOT filling toward targets because RAWCAL is DISARMED (EPOCH-2 target 576 reached 2026-09-19; re-arm is operator decision per runbook §6); fence journal still logging REJECT-side continuously (24h floor ~23-30 entries)
+- Remaining operator-side dormant items (unchanged): Caddy reload for allowlist activation (sandbox forbids caddy exec), S3/R2 second offsite provisioning, rotate-backup-pass.sh --apply, P0-3 standalone build (sandbox no-build rule)
+- New surfaces: :3030 sentinel (health/report/history/run-now/backup-now), /api/sentinel, SENTINEL bento card, skills/nexus-sentinel agent skill

@@ -29,7 +29,7 @@
 import { Database } from "bun:sqlite";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 
-const VER = "p0-watchdog 1.1.0";
+const VER = "p0-watchdog 1.2.0";
 const ROOT = "/home/z/my-project";
 const DIR = `${ROOT}/.data/p0-watchdog`;
 const LOCK = `${DIR}/lock.json`;
@@ -50,7 +50,11 @@ const ESCALATE_AFTER = 5; // consecutive heal attempts while still down
 const MEM_WARN_MB = 350;
 const MEM_CRIT_MB = 250;
 
-type SvcKey = "app" | "liq" | "ws";
+// v1.2.0 (operator order 2026-09-21): probe surface extended app+liq+ws → 6 services.
+// The 2026-09-20 restore resurrected bridge :3005 / trade :3011 / sentinel :3030
+// WITHOUT guardians — trade ran down for hours unnoticed. All six are now
+// probe+heal covered; heal commands mirror each service's battle-tested start.
+type SvcKey = "app" | "liq" | "ws" | "bridge" | "trade" | "sentinel";
 type Mode = "init" | "ok" | "degraded" | "healing" | "escalated";
 
 interface SvcCfg {
@@ -84,6 +88,27 @@ const SVCS: Record<SvcKey, SvcCfg> = {
     expectNote: "<500 (400=socket.io)",
     healCmd: `cd ${ROOT}/mini-services/price-ws && nohup bun --hot index.ts >> ${ROOT}/logs/price-ws.log 2>&1 &`,
   },
+  bridge: {
+    label: "bridge :3005",
+    url: "http://127.0.0.1:3005/health",
+    expect: (s) => s === 200,
+    expectNote: "200",
+    healCmd: `cd ${ROOT}/mini-services/telegram-bridge && nohup bun --hot index.ts >> ${ROOT}/logs/telegram-bridge.log 2>&1 &`,
+  },
+  trade: {
+    label: "trade :3011",
+    url: "http://127.0.0.1:3011/health",
+    expect: (s) => s === 200,
+    expectNote: "200",
+    healCmd: `cd ${ROOT} && nohup bun run mini-services/trade-service/index.ts >> ${ROOT}/logs/trade-service.log 2>&1 &`,
+  },
+  sentinel: {
+    label: "sentinel :3030",
+    url: "http://127.0.0.1:3030/health",
+    expect: (s) => s === 200,
+    expectNote: "200",
+    healCmd: `cd ${ROOT}/mini-services/sentinel-service && nohup bun --hot index.ts >> ${ROOT}/logs/sentinel-service.log 2>&1 &`,
+  },
 };
 
 interface SvcState {
@@ -105,6 +130,7 @@ interface SvcState {
 const BOOT = Date.now();
 const state: Record<SvcKey, SvcState> = {
   app: freshSvc(), liq: freshSvc(), ws: freshSvc(),
+  bridge: freshSvc(), trade: freshSvc(), sentinel: freshSvc(),
 };
 function freshSvc(): SvcState {
   return { mode: "init", fails: 0, heals: 0, lastProbeAt: null, lastOkAt: null, lastStatus: null, lastLatencyMs: null, lastDownAt: null, lastHealAt: null, healingUntil: null, nextHealAllowedAt: null, recoveries: 0 };
@@ -424,7 +450,7 @@ try {
   process.exit(0);
 }
 log("info", "boot", { ver: VER, pid: process.pid, port: PORT });
-console.log(`[${tehran()}] ${VER} armed on :${PORT} — app:3000 liq:3010 ws:3003`);
+console.log(`[${tehran()}] ${VER} armed on :${PORT} — app:3000 ws:3003 bridge:3005 liq:3010 trade:3011 sentinel:3030`);
 persistState();
 
 process.on("SIGTERM", () => { log("info", "shutdown", { sig: "SIGTERM" }); releaseLock(); process.exit(0); });

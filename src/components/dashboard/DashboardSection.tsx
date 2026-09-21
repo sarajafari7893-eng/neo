@@ -25,6 +25,7 @@ import type { EquityPoint, EventLevel, SignalEventDTO } from "@/lib/api-types";
 import { fmtUsd, timeAgo } from "@/lib/format";
 import { useUi } from "@/store/ui";
 import { useNeon } from "@/components/analytics/chart-theme";
+import SentinelPanel from "@/components/dashboard/SentinelPanel";
 
 /* ── Equity curve (recharts, client-side) ─────────────────── */
 
@@ -227,6 +228,8 @@ export default function DashboardSection() {
         <EquityMini curve={data.stats.equityCurve} total={data.stats.totalPnlUsd} className="lg:col-span-7" />
         <TerminalFeedPreview events={data.events} className="lg:col-span-5" />
       </div>
+      {/* 2026-09-21 operator order: NEXUS-SENTINEL deep-monitor panel (:3030) */}
+      <SentinelPanel />
       {/* 2026-09-11 operator round: two-way Telegram bridge (inbox + reply) */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
         <div className="lg:col-span-7">
