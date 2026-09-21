@@ -30,7 +30,7 @@
 import { Database } from "bun:sqlite";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, statfsSync, unlinkSync, writeFileSync } from "node:fs";
 
-const VER = "nexus-sentinel 1.0.0";
+const VER = "nexus-sentinel 1.1.1";
 const ROOT = "/home/z/my-project";
 const DIR = `${ROOT}/.data/sentinel`;
 const RING = "/tmp/my-project/backups"; // backup.sh v3.4 canonical ring (PolarFS)
@@ -181,6 +181,39 @@ function backupRing() {
 
 // ── shadow arms (audit P1-7 visibility) ──────────────────────────────────────
 async function shadowArms() {
+  // v1.1.1 LIVE-FIRST (fix of the 2026-09-21 false-narrative bug): the legacy
+  // .data/shadow-veto-latest.json is a mirror nobody in this vintage writes,
+  // so a frozen mtime once read as "arms stalled 160h" while the live pipeline
+  // was healthy. Primary source is now the LIVE telemetry API (4s budget);
+  // the file is only a fallback that must self-declare as degraded, and a
+  // successful live read atomically re-publishes the mirror for backups.
+  try {
+    const res = await fetch("http://127.0.0.1:3000/api/ai/shadow-veto/telemetry", { signal: AbortSignal.timeout(4_000) });
+    if (res.ok) {
+      const live = (await res.json()) as Record<string, unknown>;
+      const liveArms = (live.arms ?? []) as { id: string; label?: string; n?: number; target?: number; reachable?: boolean; modeConditional?: boolean; fed?: number; lastFedAgeH?: number | null }[];
+      const arms = liveArms.map((a) => ({ id: a.id, n: a.n ?? 0, target: a.target ?? 30, pct: a.target ? Math.round(((a.n ?? 0) / a.target) * 100) : null, starved: false, reachable: a.reachable ?? !a.modeConditional, fed: a.fed ?? null, lastFedAgeH: a.lastFedAgeH ?? null }));
+      const nSum = arms.reduce((s, a) => s + a.n, 0), tSum = arms.reduce((s, a) => s + a.target, 0);
+      const nReach = arms.filter((a) => a.reachable !== false).reduce((s, a) => s + a.n, 0);
+      const tReach = arms.filter((a) => a.reachable !== false).reduce((s, a) => s + a.target, 0);
+      const snapshot = { generatedAt: new Date().toISOString(), source: "sentinel-live-mirror", mode: (live.config as { mode?: string } | undefined)?.mode ?? null, stats: live.stats ?? null, arms: liveArms };
+      try {
+        const tmp = `${ROOT}/.data/shadow-veto-latest.json.tmp`;
+        writeFileSync(tmp, JSON.stringify(snapshot));
+        renameSync(tmp, `${ROOT}/.data/shadow-veto-latest.json`);
+      } catch { /* mirror best-effort */ }
+      let fence24h = -1;
+      try {
+        const tail = await tailFile(`${ROOT}/.data/shadow-veto.jsonl`, 262_144);
+        const cutoff = nowMs() - 24 * 3600_000;
+        fence24h = tail.split("\n").filter((l) => {
+          if (!l.trim()) return false;
+          try { const v = JSON.parse(l); return (v?.v?.at ?? 0) > cutoff; } catch { return false; }
+        }).length;
+      } catch { /* absent */ }
+      return { ok: true, source: "live-api", mode: snapshot.mode, generatedAt: snapshot.generatedAt, stats: live.stats ?? null, arms, fillPct: tSum ? Math.round((nSum / tSum) * 100) : null, fillPctReach: tReach ? Math.round((nReach / tReach) * 100) : null, nSum, tSum, nSumReach: nReach, tSumReach: tReach, fenceEntries24hFloor: fence24h };
+    }
+  } catch { /* live unavailable → legacy file below */ }
   try {
     const j = JSON.parse(readFileSync(`${ROOT}/.data/shadow-veto-latest.json`, "utf8")) as {
       generatedAt?: string; mode?: string;
@@ -199,7 +232,8 @@ async function shadowArms() {
         try { const v = JSON.parse(l); return (v?.v?.at ?? 0) > cutoff; } catch { return false; }
       }).length; // counts only within tailed window — floor estimate, honest label
     } catch { /* absent */ }
-    return { ok: true, mode: j.mode ?? null, generatedAt: j.generatedAt ?? null, stats: j.stats ?? null, arms, fillPct: tSum ? Math.round((nSum / tSum) * 100) : null, nSum, tSum, fenceEntries24hFloor: fence24h };
+    const fileAgeH = j.generatedAt ? Math.round((nowMs() - Date.parse(j.generatedAt)) / 3600_000) : null;
+    return { ok: true, source: "legacy-file", degraded: true, fileAgeH, mode: j.mode ?? null, generatedAt: j.generatedAt ?? null, stats: j.stats ?? null, arms, fillPct: tSum ? Math.round((nSum / tSum) * 100) : null, nSum, tSum, fenceEntries24hFloor: fence24h, note: fileAgeH !== null && fileAgeH > 6 ? `legacy mirror is ${fileAgeH}h stale — live API unavailable; numbers below are NOT current` : undefined };
   } catch (e) {
     return { ok: false, error: String(e).slice(0, 120) } as Record<string, unknown>;
   }

@@ -10,6 +10,8 @@ import { captureTopVolCauses } from "@/lib/volCause";
 import { ensureP0Watchdog } from "@/lib/watchdog-arm";
 import { ensureBridgeLoopAlive } from "@/lib/telegram-bridge";
 import { getPumpEngineStatus } from "@/lib/pump-dump"; // v9.0 PUMP/DUMP RADAR
+import { maybeEnsureEnv } from "@/lib/env-guard"; // 2026-09-21 incident class: self-healing .env
+import { maybeRunScheduledReports } from "@/lib/daily-scheduler"; // self-driving Tehran-day reports
 import type { PulseSnapshot } from "@/lib/api-types";
 
 export const dynamic = "force-dynamic";
@@ -46,6 +48,15 @@ export async function GET() {
     } catch {
       /* never break the pulse */
     }
+
+    // ENV-GUARD (2026-09-21, incident ×3) — heals .env from the local plain
+    // snapshot ring within ~1 probe minute of a platform erasure; internally
+    // throttled to 60s, fail-soft, values never logged.
+    void maybeEnsureEnv().catch(() => undefined);
+
+    // DAILY-SCHEDULER (2026-09-21) — self-driving Tehran-day DAILY + SRE
+    // reports; removes the external platform-cron dependency for good.
+    void maybeRunScheduledReports().catch(() => undefined);
 
     const [assets, signals, events, stats, liqStatus] = await Promise.all([
       db.marketAsset.findMany({ orderBy: { volume24h: "desc" } }),
