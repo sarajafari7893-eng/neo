@@ -1,0 +1,15 @@
+const { Database } = require("bun:sqlite");
+const db = new Database("/home/z/my-project/db/custom.db", { readonly: true });
+console.log("=== signals per day (Tehran) last 5d ===");
+for (const r of db.prepare("SELECT date(createdAt/1000,'unixepoch','+210 minutes') d, COUNT(*) n FROM Signal WHERE createdAt > (strftime('%s','now')-5*86400)*1000 GROUP BY d ORDER BY d").all() as any[]) console.log(JSON.stringify(r));
+console.log("=== ACTIVE/OPEN signals now ===");
+for (const r of db.prepare("SELECT serial, symbol, direction, status, substr(createdAt/1000,'unixepoch') c FROM Signal WHERE status NOT IN ('TP1','TP2','TP3','SL','EXPIRED','CLOSED') ORDER BY createdAt DESC LIMIT 10").all() as any[]) console.log(JSON.stringify(r));
+console.log("=== status of last signal 190 / time diff ===");
+const last = db.prepare("SELECT serial, symbol, status, createdAt FROM Signal ORDER BY createdAt DESC LIMIT 1").all() as any[];
+const nowMs = Date.now();
+console.log("last signal:", JSON.stringify(last), "minutes ago:", Math.round((nowMs - Number(last[0].createdAt))/60000));
+console.log("=== SignalEvent rejection types (48h) ===");
+for (const r of db.prepare("SELECT type, COUNT(*) n FROM SignalEvent WHERE createdAt > (strftime('%s','now')-48*3600)*1000 AND (type LIKE '%REJECT%' OR type LIKE '%GUARD%' OR type LIKE '%GOVERNOR%' OR message LIKE '%RETEST%' OR message LIKE '%409%') GROUP BY type").all() as any[]) console.log(JSON.stringify(r));
+console.log("=== events mentioning RETEST/CHASE/RISK-CAP (48h) ===");
+for (const r of db.prepare("SELECT type, substr(message,1,100) m, substr(createdAt/1000,'unixepoch') c FROM SignalEvent WHERE createdAt > (strftime('%s','now')-48*3600)*1000 AND (message LIKE '%RETEST%' OR message LIKE '%CHASE%' OR message LIKE '%RISK-CAP%' OR message LIKE '%REJECT%') ORDER BY createdAt DESC LIMIT 12").all() as any[]) console.log(JSON.stringify(r));
+db.close();

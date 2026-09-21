@@ -1,0 +1,10 @@
+import { PrismaClient } from "@prisma/client";
+const p = new PrismaClient();
+const gate = await p.engineSetting.findUnique({ where: { key: "gate" } });
+console.log("GATE:", gate?.value ?? "none");
+const cal = await p.engineSetting.findUnique({ where: { key: "calibration" } });
+console.log("CALIB-HEAD:", (cal?.value ?? "none").slice(0, 300));
+const settled = await p.signal.count({ where: { status: { in: ["TP1","TP2","TP3","SL","EXPIRED","CLOSED"] }, tags: { contains: "EPOCH-2" } } });
+const settledAll = await p.signal.count({ where: { status: { in: ["TP1","TP2","TP3","SL","EXPIRED","CLOSED"] } } });
+console.log("SETTLED epoch2:", settled, "· all:", settledAll);
+await p.$disconnect();

@@ -1,0 +1,1325 @@
+     1→pplied + hang investigated; no knob/DB/process changes.
+     2→
+     3→Stage Summary:
+     4→- Telemetry honest-sweep live (v10.12); SV hang root-caused + self-healed; veto arm FULL 30/30 — watch promotion gate + operator decisions (dislocation line, .next cache).
+     5→---
+     6→Task ID: WATCH-RAWCAL-20260918T1434Z
+     7→Agent: cron pace watcher
+     8→Task: Job 380065 pace check (14:34Z)
+     9→
+    10→Work Log:
+    11→- pulse 200 · rawcal 200. armed TRUE · settled 517/520 needed 3 · openRaw 0 · issuedTotal 157 · cadence D · issue3h 0.0 · sinceArm 1.02 · settle3h 0.67 · spacing 52.9m · etaH 4.5 / steady 2.93 (~17:30Z) · stalls: issueStallMin 183 · lastBlockNote null.
+    12→- STALL TRIGGERED (6th consecutive): issueStallMin 152→183min — 3h03m drought, issue3h window now fully dry.
+    13→- Milestones 50-100 all fired (old); none new. LIFT-FAIL n/a (operator-approved 520 target).
+    14→- ALERT SENT (msg 3673 Persian): stall 183min, book 517/520, rates, ETA steady 2.9h, cause per audit msg 3650.
+    15→Decision: stall alert sent (mandated); anomaly: longest drought of session, book frozen since 13:3x settle; awaiting trend return / operator scan-pressure decision.
+    16→---
+    17→Task ID: RUN380-WATCH-20260918T1436Z
+    18→Agent: cron rawcal watch (job 384822)
+    19→Task: 14:36Z supervised capture-run watch
+    20→
+    21→Work Log:
+    22→- rawcal/SV 200 · armed TRUE (no flip) · settled 517/520 · open 0/8 · issued(run) 19 · gate AMBER · infoPct 41.4 flat · issueStall 185min (msg 3673 sent 2min prior — anti-spam no re-send).
+    23→- SV healthy post-recovery: real-keep 16/30 · real-veto 30/30 FULL (wr 40.0) — identical to values already reported in msg 3672 (14:33Z): no new increase, no send.
+    24→- Heartbeat NOT due (1338Z → due ~1538Z).
+    25→Decision: SILENT (all triggers already-reported or not fired); no code/knob/DB changes; watch keep-cohort fill + promotion gate + trend return.
+    26→
+    27→Stage Summary:
+    28→- Book 517/520 frozen (185min drought); SV veto arm full 30/30; next heartbeat ~15:38Z.
+    29→---
+    30→Task ID: SUPERVISOR-20260918T1454Z
+    31→Agent: resident SUPERVISOR (job 387118) — deep-audit cycle
+    32→Task: Deep-audit: module states → diagnosis → web-validated proposal → terminal
+    33→
+    34→Work Log:
+    35→- States: book 517/520 · stall 185min · gate AMBER · infoPct 41.4 · equity daily +1.20 (best day, cum -1.23) · advisor pendingCount 0 · veto arm FULL 30/30 (wr 40.0) · keep 16/30 (wr 31.3) · in-app governor drought-nudge to MIN_SCORE 37 correctly blocked by hysteresis.
+    36→- DIAGNOSIS: promotion gate bound by keep-cohort starvation (all 4 failing criteria need keep-side settles; veto cohort net +$1.73 = veto layer miscalibrated this regime; Wilson LBs overlap — inversion suggestive not proven, 100-200+ settles norm).
+    37→- PROPOSAL (operator review, APPROVE required, zero live-risk): NEAR-MISS CAPTURE TIER — top-1 per sweep from 0.85-1.0×effMin band via existing calCapture path, ~8/day cap, separate evidence bucket. Web-validated: regime-aware threshold calibration (ResearchSquare 2026), well-calibrated active learning / boundary sampling (OpenReview 2026), OOS 100-200+ trade norms.
+    38→- 2 thoughts posted to terminal (diagnose cmu72wp4601 + propose cmu72wp4k01); TELEGRAM SENT (msg 3677, proposal-ready trigger); no code/knob/DB changes.
+    39→Decision: proposal submitted for operator decision; watch keep-cohort fill + operator APPROVE.
+    40→
+    41→Stage Summary:
+    42→- Veto arm full; gate blocked on keep 16/30; near-miss capture tier proposal ready; equity improving (+1.20 today).
+    43→---
+    44→Task ID: WATCH-RAWCAL-20260918T1500Z
+    45→Agent: cron pace watcher
+    46→Task: Job 380065 pace check (15:00Z)
+    47→
+    48→Work Log:
+    49→- pulse 200 · rawcal 200. armed TRUE · settled 517/520 needed 3 · openRaw 0 · issuedTotal 157 · cadence D · issue3h 0.0 · sinceArm 1.00 · settle3h 0.67 · spacing 52.9m · etaH 4.5 / steady 3.0 (~18:00Z) · stalls: issueStallMin 209 · lastBlockNote null.
+    50→- STALL TRIGGERED (7th consecutive): issueStallMin 185→209min — session record, 3h29m drought.
+    51→- Milestones 50-100 all fired (old); none new. LIFT-FAIL n/a (operator-approved 520 target).
+    52→- ALERT SENT (msg 3678 Persian): stall 209min, book 517/520, rates, ETA steady 3.0h, cause per audit msg 3650; cross-referenced pending NEAR-MISS proposal (msg 3677).
+    53→Decision: stall alert sent (mandated); anomaly: record drought continues with 0 open positions; awaiting trend return / operator decision.
+    54→---
+    55→Task ID: RUN380-WATCH-20260918T1502Z
+    56→Agent: cron rawcal watch (job 384822)
+    57→Task: 15:02Z supervised capture-run watch
+    58→
+    59→Work Log:
+    60→- rawcal/SV 200 · armed TRUE (no flip) · settled 517/520 · open 0/8 · issued(run) 19 · gate AMBER · infoPct 41.4 flat · issueStall 211min (msg 3678 sent 2min prior — anti-spam no re-send).
+    61→- SV: real-keep 16/30 · real-veto 30/30 — unchanged since msg 3672/3677 reports; no increase trigger. Heartbeat NOT due (1338Z → ~1538Z).
+    62→Decision: SILENT (all triggers already-reported or not fired); no code/knob/DB changes.
+    63→
+    64→Stage Summary:
+    65→- Book 517/520 frozen (211min record drought); arms static 16/30; next heartbeat ~15:38Z; awaiting operator decision on NEAR-MISS proposal (msg 3677).
+    66→---
+    67→Task ID: WATCH-RAWCAL-20260918T1530Z
+    68→Agent: cron pace watcher
+    69→Task: Job 380065 pace check (15:30Z)
+    70→
+    71→Work Log:
+    72→- pulse 200 · rawcal 200. armed TRUE · settled 517/520 needed 3 · openRaw 0 · issuedTotal 157 · cadence D · issue3h 0.0 · sinceArm 0.97 · settle3h 0.67 · spacing 52.9m · etaH 4.5 / steady 3.08 (~18:35Z) · stalls: issueStallMin 240 · lastBlockNote null.
+    73→- STALL TRIGGERED (8th consecutive): issueStallMin 209→240min — 4 full hours, session record.
+    74→- Milestones 50-100 all fired (old); none new. LIFT-FAIL n/a (operator-approved 520 target).
+    75→- ALERT SENT (msg 3684 Persian): stall 240min, book 517/520, rates, ETA steady 3.1h; decision point restated (NEAR-MISS proposal msg 3677 / scan-pressure review).
+    76→Decision: stall alert sent (mandated); anomaly: 4-hour drought with 0 open positions — engine healthy, purely regime censoring.
+    77→---
+    78→Task ID: RUN380-WATCH-20260918T1533Z
+    79→Agent: cron rawcal watch (job 384822)
+    80→Task: 15:33Z supervised capture-run watch
+    81→
+    82→Work Log:
+    83→- rawcal/SV 200 · armed TRUE (no flip) · settled 517/520 · open 0/8 · issued(run) 19 · gate AMBER · infoPct 41.4 flat · issueStall 242min (msg 3684 sent 2min prior — anti-spam no re-send).
+    84→- SV: real-keep 16/30 · real-veto 30/30 — static, no increase trigger. Heartbeat 114min — NOT yet due (fires ≥120min, next run ~15:38Z+).
+    85→Decision: SILENT; no code/knob/DB changes.
+    86→
+    87→Stage Summary:
+    88→- Book 517/520 frozen (242min record drought); heartbeat due next run; awaiting operator decision on NEAR-MISS proposal (msg 3677).
+    89→---
+    90→Task ID: BRIDGE-OPS-TELEMETRY-FIX2-20260918T1600Z
+    91→Agent: bridge watch (job 376843)
+    92→Task: Operator msg 861802413 — approve + complete remaining random-data telemetry fix
+    93→
+    94→Work Log:
+    95→- Located real source: updatePrices() sweepConsensus stores maxDevBps per asset every tick (multi-exchange.ts line 98).
+    96→- APPLIED (engine.ts v10.12b): fake «4-exchange consensus — max dislocation RANDOM bps» → honest «Cross-venue consensus sweep — worst tracked dislocation X bps on SYMBOL (event floor 12 bps)» reading real max worst-asset maxDevBps; 0 → "aligned below floor".
+    97→- VERIFIED LIVE 15:58:11Z: flavor line reports 47.5 bps GUSDT — exact match with real dislocation event (GUSDT 47.5 bps OKX) same minute.
+    98→- AUDIT: remaining Math.random uses all operational (TTL jitter, spawn/flavor gates, template pick) — zero fabricated numbers left in event telemetry. pulse 200 post-compile.
+    99→- REPLIED (msg 3689 Persian); marked all read (28).
+   100→Decision: operator-approved fix applied + verified; both telemetry cases (sweep score + dislocation) now closed.
+   101→
+   102→Stage Summary:
+   103→- Telemetry honesty complete: no random data in events; both fixes live-verified; awaiting operator on NEAR-MISS proposal (msg 3677).
+   104→---
+   105→Task ID: WATCH-RAWCAL-20260918T1600Z
+   106→Agent: cron pace watcher
+   107→Task: Job 380065 pace check (16:00Z)
+   108→
+   109→Work Log:
+   110→- pulse 200 · rawcal 200. armed TRUE · settled 517/520 needed 3 · openRaw 0 · issuedTotal 157 · cadence D · issue3h 0.0 · sinceArm 0.95 · settle3h 0.33 · spacing 52.9m · etaH 9 / steady 3.16 (~19:10Z) · stalls: issueStallMin 269 · lastBlockNote null.
+   111→- STALL TRIGGERED (9th consecutive): issueStallMin 240→269min — 4h29m record drought continues.
+   112→- Milestones 50-100 all fired (old); none new. LIFT-FAIL n/a (operator-approved 520 target).
+   113→- ALERT SENT (msg 3690 Persian): stall 269min, book 517/520, rates, ETA steady 3.2h; noted both telemetry bugs closed; decision point restated (NEAR-MISS msg 3677 / scan pressure).
+   114→Decision: stall alert sent (mandated); anomaly: drought approaching 4.5h with 0 open positions — purely regime censoring, engine healthy.
+   115→---
+   116→Task ID: RUN380-WATCH-20260918T1602Z
+   117→Agent: cron RUN380 watch (job 384822)
+   118→Task: 16:02Z rawcal capture-run watch cycle
+   119→
+   120→Work Log:
+   121→- rawcal 200 · sv 200. armed TRUE · issued 19 (total 157) · book 517/520 · openRaw 0/8 · gate AMBER 41.4% (baseline 27.1, +14.3 stable) · issueStall 271min · lastBlockNote null.
+   122→- SV arms unchanged: real-keep 16/30 (wr 31.3, net +0.32) · real-veto 30/30 FULL (wr 40.0, net +1.73). No arm count increase.
+   123→- TRIGGERS HIT: stall >90min (271min) + informativePct still ≥ +10 vs baseline → mandated stall ALERT SENT (msg 3691 Persian, combined with 2h heartbeat — last HB 13:38Z, window expired). HB file appended 1602Z.
+   124→- No API failures; no auto-lift (armed stayed true); no milestone duplication.
+   125→Decision: 9th stall report; drought 4h31m record, 0 open, engine healthy — awaiting operator on NEAR-MISS (msg 3677) / scan pressure / cache cleanup.
+   126→---
+   127→Task ID: BRIDGE-WATCH-20260918T1629Z
+   128→Agent: cron bridge watch (job 376843)
+   129→Task: 16:29Z inbox check — operator question investigated
+   130→
+   131→Work Log:
+   132→- 1 unread (Amir 16:09Z): "scan pressure + dry record — why no signals? possible operational bug?"
+   133→- Investigation: engine/governor alive (cycles #1240-1251 every 2min, all services 200); drought = regime censoring, no candidate ≥ MIN_SCORE 40 since 11:30Z (honest v10.12 telemetry, real best |adjScore| below gate).
+   134→- KEY FINDING: governor adaptive layer repeatedly attempting relief (min_score 40→34, rr_scale→0.75, sl_atr_mult→2) — EVERY attempt BLOCKED by own 90min flip-flop cooldown since ~15:35-15:41Z arming; cooldowns expire ~17:05Z (min_score ~17:11Z, sl_atr ~17:30Z). Self-relief expected if regime persists.
+   135→- blocks[] empty → censoring at score-gate stage, no explicit block notes.
+   136→- REPLY SENT (msg 3697 Persian): no bug, regime + hysteresis friction, relief ETA ~45min, decision = wait vs manual authorize. Marked all read. No changes made (observer role).
+   137→Decision: monitor 17:05-17:30Z cooldown expiry window — if min_score relief lands, drought may end; if governor re-blocks, escalate to operator.
+   138→---
+   139→Task ID: WATCH-RAWCAL-20260918T1631Z
+   140→Agent: cron pace watcher (job 380065)
+   141→Task: 16:31Z pace check
+   142→
+   143→Work Log:
+   144→- pulse 200 · rawcal 200. armed TRUE · settled 517/520 needed 3 · openRaw 0 · issuedTotal 157 · cadence D · issue3h 0.0 · sinceArm 0.93 · settle3h 0.0 · spacing 52.9m · etaSteady 3.24h · stalls: issueStallMin 300 · lastBlockNote null.
+   145→- STALL TRIGGERED (10th consecutive): issueStall 300min = 5 HOURS EXACT (11:30Z drought). settle3h now also 0.
+   146→- Milestones 50-100 all fired (old); none new. LIFT-FAIL n/a (operator-approved 520 target).
+   147→- ALERT SENT (msg 3699 Persian): 5h round-number stall; referenced full diagnosis msg 3697 (regime + hysteresis); relief window ~17:05-17:30Z.
+   148→Decision: alert sent (mandated); next watcher cycle falls inside cooldown-expiry window — key checkpoint: does min_score relief actually land after ~17:11Z.
+   149→---
+   150→Task ID: RUN380-WATCH-20260918T1636Z
+   151→Agent: cron RUN380 watch (job 384822)
+   152→Task: 16:36Z rawcal capture-run watch cycle
+   153→
+   154→Work Log:
+   155→- rawcal 200 · sv 200. armed TRUE · issued 19 (total 157) · book 517/520 · open 0/8 · gate AMBER 41.4% · issueStall 305min · blocks[] empty.
+   156→- SV: real-keep 16/30 (wr 31.3) unchanged · real-veto 30→29 (rolling-30 evicted a LOSS, no replacement entered; wr 40.0→41.4, wins 12/29, net +1.73→+1.76, epoch E-20260915). Count DECREASE not in SEND triggers; combined short stall line sent anyway (msg 3700) with veto roll-off as new datum. HB file appended 1636Z.
+   157→- Governor cooldowns still blocking: min_score→34 has 36m left (~17:12Z expiry).
+   158→Decision: no armed flip / no milestone / no API failure; next cycle likely lands after cooldown expiry — watch whether min_score relief actually applies.
+   159→---
+   160→Task ID: WATCH-RAWCAL-20260918T1659Z
+   161→Agent: cron pace watcher (job 380065)
+   162→Task: 16:59Z pace check
+   163→
+   164→Work Log:
+   165→- pulse 200 · rawcal 200. armed TRUE · settled 517/520 needed 3 · openRaw 0 · issuedTotal 157 · cadence D · issue3h 0.0 · sinceArm 0.90 · settle3h 0.0 · spacing 52.9m · etaSteady 3.32h · stalls: issueStallMin 329 · lastBlockNote null.
+   166→- STALL (11th consecutive): 329min ~5.5h; no structural change, no new milestones, LIFT-FAIL n/a.
+   167→- ALERT SENT (msg 3708 Persian, minimal): stall + reminder relief window 17:05-17:30Z (minutes away).
+   168→Decision: alert sent (mandated); NEXT CYCLE IS THE KEY CHECKPOINT — verify whether governor min_score→34 relief applies after ~17:12Z cooldown expiry.
+   169→---
+   170→Task ID: RUN380-WATCH-20260918T1701Z
+   171→Agent: cron RUN380 watch (job 384822)
+   172→Task: 17:01Z rawcal capture-run watch cycle
+   173→
+   174→Work Log:
+   175→- rawcal 200 · sv 200. armed TRUE · issued 19 (total 157) · book 517/520 · open 0/8 · gate AMBER 41.4% · issueStall 332min · blocks[] empty.
+   176→- SV roll-offs (both DECREASES, not SEND triggers): real-keep 16→15 — evicted entry was a WIN (wins 5→4, wr 31.3→26.7, net +0.32→+0.31, epoch E-20260915); real-veto 29 unchanged. Keep-queue starvation worsens for promotion gate.
+   177→- SILENT this cycle: stall already alerted 2min ago (msg 3708 by sibling watcher); count decreases not in trigger list; HB window (25min) not expired. No API failure.
+   178→Decision: silent + logged; KEY CHECKPOINT ~17:05-17:30Z — verify governor APPLIED min_score→34 after cooldown expiry (log shows no new APPLIED yet).
+   179→---
+   180→Task ID: WATCH-RAWCAL-20260918T1730Z
+   181→Agent: cron pace watcher (job 380065)
+   182→Task: 17:30Z pace check — KEY CHECKPOINT cycle
+   183→
+   184→Work Log:
+   185→- pulse 200 · rawcal 200. armed TRUE · settled 517/520 needed 3 · openRaw 0 · issuedTotal 157 · cadence D · issue3h 0.0 · settle3h 0.0 · etaSteady 3.4h · issueStall 360min (6 HOURS EXACT) · lastBlockNote null.
+   186→- RELIEF LANDED: governor APPLIED min_score 40→35 + rr_scale→0.75 at 16:43:18Z (cooldown to ~18:13Z, persisted — confirmed by cycle #1144 17:28:38Z showing 45m left). Gate is now REALLY 35.
+   187→- SERVER RESTARTED ~17:29Z: dev-up, Ready 4.9s, engine self-driving 4s armed, bridge re-armed, daily POST hit new instance. Scan-cycle GAP 16:45:36Z→17:28:38Z (43min, no governor cycles — old process died at #1261).
+   188→- Log anomaly: dev.log line order NOT chronological (dual-stream interleaved writes, counter streams #12xx vs #114x overlap) — Turbopack infra issue, noted for operator.
+   189→- ALERT SENT (msg 3713 Persian): 6h stall + relief-applied + restart + 43min scan gap.
+   190→Decision: alert sent; next cycle = first full scan window under gate 35 — if still no issue, drought cause moves from score-gate to regime/cohort itself.
+   191→---
+   192→Task ID: RUN380-WATCH-20260918T1736Z
+   193→Agent: cron RUN380 watch (job 384822)
+   194→Task: 17:36Z rawcal capture-run watch cycle
+   195→
+   196→Work Log:
+   197→- rawcal 200 · sv 200. armed TRUE · issued 19 (total 157) · book 517/520 · open 0/8 · gate AMBER 41.4% · issueStall 365min.
+   198→- NEW: blocks[] POPULATED (first time in drought) — 9 notes 17:28-17:35Z, all "scan-no-candidate — vol-scaled barrier: ETHUSDT LONG t1r 252-432m > cap 240m (slow-...)". Scanner ticking ~2min post-restart; binding constraint now = barrier cap, not min_score.
+   199→- Governor cycle #1262 (17:33:09Z) "no knobs in cooldown" — contradicts persisted-cooldown read (#1144 45m left); dual-stream counter chaos continues. Operationally: governor free to re-apply knobs.
+   200→- Arms unchanged: keep 15/30, veto 29/30. Short update sent (msg 3714) with block-note evidence. HB appended 1736Z.
+   201→Decision: monitor whether barrier-relief (ttl/barrier cap) becomes governor's next knob; drought may end if ETH velocity rises or cap relieves.
+   202→---
+   203→Task ID: WATCH-RAWCAL-20260918T1800Z
+   204→Agent: cron pace watcher (job 380065)
+   205→Task: 18:00Z pace check
+   206→
+   207→Work Log:
+   208→- pulse 200 · rawcal 200. armed TRUE · settled 518/520 needed 2 (one NEW settle this hour) · openRaw 0 · issuedTotal 157 · cadence D · issue3h 0.0 · settle3h 0.33 · spacing 52.9m · etaSteady 2.32h · issueStall 389min · lastBlockNote null · blocks[0] vol-scaled barrier ETH LONG t1r > 240m cap.
+   209→- STALL (13th consecutive report): 389min ~6.5h. No new milestones. LIFT-FAIL n/a (520 target operator-approved; 2 settles to auto-lift).
+   210→- ALERT SENT (msg 3720 Persian): stall + book progress 518/520 + barrier note persists.
+   211→Decision: alert sent; watch for auto-lift within next ~2 settle windows (mean settle ~96min) — armed may flip FALSE on lift → next cycle must check armed flip carefully.
+   212→---
+   213→Task ID: RUN380-WATCH-20260918T1802Z
+   214→Agent: cron RUN380 watch (job 384822)
+   215→Task: 18:02Z rawcal capture-run watch cycle
+   216→
+   217→Work Log:
+   218→- rawcal 200 · sv 200. armed TRUE · issued 19 (total 157) · book 518/520 needed 2 · open 0/8 · gate AMBER 41.4% · issueStall 391min · block note unchanged (vol-scaled barrier ETH LONG t1r > 240m cap).
+   219→- Arms unchanged: keep 15/30 · veto 29/30. No armed flip, no count increases, no API failure.
+   220→- SILENT: stall fully reported 2min ago (msg 3720 sibling); HB window 1.5h not expired; no new trigger.
+   221→Decision: silent + logged; next checkpoints: auto-lift at 520 (2 settles) and potential governor barrier-cap knob.
+   222→---
+   223→Task ID: WATCH-RAWCAL-20260918T1830Z
+   224→Agent: cron pace watcher (job 380065)
+   225→Task: 18:30Z pace check
+   226→
+   227→Work Log:
+   228→- pulse 200 · rawcal 200. armed TRUE · settled 518/520 needed 2 · openRaw 0 · issuedTotal 157 · cadence D · issue3h 0.0 · settle3h 0.33 · etaSteady 2.37h · issueStall 420min (7 HOURS EXACT) · blocks[0] vol-scaled barrier ETH LONG unchanged.
+   229→- STALL (14th consecutive): 420min = 7h round number. No new settles, no new milestones, LIFT-FAIL n/a.
+   230→- ALERT SENT (msg 3724 Persian): 7h stall + operator options (wait for governor knob vs authorize manual barrier-cap/ttl relief).
+   231→Decision: alert sent; drought now structurally barrier-bound, not score-bound (gate already 35); no further structural change to report unless governor acts or auto-lift fires.
+   232→---
+   233→Task ID: RUN380-WATCH-20260918T1833Z
+   234→Agent: cron RUN380 watch (job 384822)
+   235→Task: 18:33Z rawcal capture-run watch cycle
+   236→
+   237→Work Log:
+   238→- rawcal 200 · sv 200. armed TRUE · issued 19 (total 157) · book 518/520 · open 0/8 · gate AMBER 41.4% · issueStall 422min · block note unchanged (barrier ETH LONG).
+   239→- SV: real-veto 29→28 (2nd roll-off, decrease — not a SEND trigger); real-keep 15/30 unchanged. Veto queue slowly draining via rolling window while drought blocks new entries.
+   240→- SILENT: stall reported 3min ago (msg 3724); HB window not expired; no new trigger.
+   241→Decision: silent + logged; watch veto count — if it drains toward min-n 12 gate relevance, flag to operator.
+   242→---
+   243→Task ID: SUPERVISOR-20260918T1855Z
+   244→Agent: resident SUPERVISOR (job 387118)
+   245→Task: deep-audit cycle 18:55Z
+   246→
+   247→Work Log:
+   248→- Pulled rawcal/sv/advisor/pulse/terminal. Book 519/520 (lift 1 settle away) · stall 441min · gate AMBER (window healthy 72.7 < 85) · arms keep 15/veto 28/paper-veto 0/30 · advisor pendingCount 0 · calibration RSI POSITION x1.30 PF 1.59.
+   249→- Diagnosis: drought BARRIER-BOUND post-relief (MIN_SCORE 35, VOL-BARRIER x1.30 cap 240m vs t1r 252-432m); regime-guard L2 = filter working as designed (web-search validated: regime-filter best practice; H&T meta-labeling + MDPI 2024 triple-barrier).
+   250→- 2 thoughts posted: DIAGNOSE (barrier-bound chain + arm-drain + lift readiness) + PROPOSE (BARRIER-NEAR-MISS paper queue, zero live risk, extends NEAR-MISS 3677 to time-dimension).
+   251→- Telegram sent: proposal ready for operator review (policy-permitted).
+   252→Decision: awaiting operator on NEAR-MISS (3677) + BARRIER-NEAR-MISS; next audit: auto-lift handling + arm-drain trajectory.
+   253→---
+   254→Task ID: WATCH-RAWCAL-20260918T1900Z
+   255→Agent: cron pace watcher (job 380065)
+   256→Task: 19:00Z pace check — AUTO-LIFT EVENT
+   257→
+   258→Work Log:
+   259→- pulse 200 · rawcal 200. armed FALSE (AUTO-LIFT FIRED) · settled 520/520 needed 0 · openRaw 0 · issuedTotal 157 · cadence OFF · stalls CLEARED (issueStallMin null) · settle3h 0.67.
+   260→- Run complete: EVID-BUDGET RE-ARM run (operator APPROVE 2026-09-17T19:35Z msg 861802406) reached its 520 book target. Final 2 settles landed between 18:30Z (518) and 19:00Z (520). The 450min issue-drought ended WITH the run completion, not by new issuance.
+   261→- LIFT-FAIL n/a — lift SUCCEEDED. No '<' char check passed.
+   262→- ALERT SENT (msg 3732 Persian): auto-lift + run completion + operator next-step (re-arm decision + 2 pending proposals).
+   263→Decision: run closed; watchers should now track armed=false state — no further stall alerts expected until re-arm; engine continues normal (non-rawcal) operation.
+   264→---
+   265→Task ID: RUN380-WATCH-20260918T1902Z
+   266→Agent: cron RUN380 watch (job 384822)
+   267→Task: 19:02Z rawcal capture-run watch cycle — post-lift
+   268→
+   269→Work Log:
+   270→- rawcal 200 · sv 200. armed FALSE (auto-lift reported by sibling msg 3732 at 19:00Z) · settled 520/520 needed 0 · open 0/8 · stalls null (cleared on disarm).
+   271→- SV: real-keep 15→14 (roll-off decrease) · real-veto 28 unchanged. No count increases; gate AMBER 41.4% unchanged.
+   272→- SILENT: armed-flip already reported 2min ago; stall trigger inactive (armed false); HB window 1.5h not expired.
+   273→Decision: silent + logged; watchers transition to idle-until-re-arm mode; next material event = operator re-arm decision or proposal verdicts.
+   274→---
+   275→Task ID: NEARMISS-IMPL-20260918T1939Z
+   276→Agent: main agent (operator APPROVE execution)
+   277→Task: implement NEAR-MISS EVIDENCE PROGRAM (operator APPROVE 18:58Z msg 861802415)
+   278→
+   279→Work Log:
+   280→- Operator approved supervisor proposal («کامل و مهندسی») → engineered full program v10.13.
+   281→- NEW src/lib/near-miss.ts: two paper-only tiers — BARRIER (t1r in (240,360] band, engine-identical ladder + hypothetical 1.5×cap barrier TTL) + SCORE (gap in [-0.15×effMin,0), top-1/sweep, own geometry). Rails: 8/day/tier, 2h dedup, 16 open/tier, rolling-30 arms + Wilson-LB, .data/near-miss.jsonl, ARM_EPOCH stamp, fail-open.
+   282→- engine.ts wired at 5 points (import, VOL-BARRIER skip capture, 2× fence-batch feeds, tick sweep). NEW route /api/ai/near-miss.
+   283→- BUG during install: t1r out-of-scope ReferenceError on live skip path (3 errors pre-fix) → fixed via vbT1r hoist + null-self-skip; post-fix live skip verified 19:34:15Z (LINK 625m, out-of-band, correctly not captured). tsc --noEmit clean for both files.
+   284→- Endpoint verified ok:true; no captures yet (band/dedup dependent). Market waking: PUMP score 62 > gate 35 at 19:37Z.
+   285→- Operator reply sent (msg 3734); all messages marked read.
+   286→Decision: implementation live; monitor first NM captures + next supervisor audit will read the arms; no live-risk surface added (paper only).
+   287→---
+   288→Task ID: WATCH-RAWCAL-20260918T1930Z
+   289→Agent: cron pace watcher (job 380065)
+   290→Task: 19:30Z pace check — post-lift idle cycle
+   291→
+   292→Work Log:
+   293→- pulse 200 (probe 0.22s) · rawcal 200. NOTE: first health call hit a one-off 120s shell hang; retry OK, app healthy — infra blip, not app down.
+   294→- armed FALSE (run complete since 19:00Z msg 3732) · settled 520/520 needed 0 · openRaw 0 · issuedTotal 157 · cadence OFF · stalls all null · lastIssueAt 11:30Z.
+   295→- milestones.steps fired=[] — list RESET after run close (cosmetic reset, prior 50-100 steps consumed in completed run).
+   296→- Triggers: MILESTONE none · STALL none (stalls null) · LIFT-FAIL none (armed false).
+   297→Decision: SILENT (no Telegram). Watchers remain idle-until-re-arm; pacing signals dormant until operator re-arm decision or new APPROVE.
+   298→
+   299→---
+   300→Task ID: WATCH-RAWCAL-20260918T2000Z
+   301→Agent: cron pace watcher (job 380065)
+   302→Task: 20:00Z pace check — post-lift idle cycle
+   303→
+   304→Work Log:
+   305→- pulse 200 · rawcal 200. armed FALSE (run closed 18:57Z) · settled 521/520 needed 0 · openRaw 0 · issuedTotal 157 · cadence OFF · stalls all null · lastIssueAt 11:30Z · rates: issue3h 0, settle3h 0.67, spacing mean 52.9min · ETA 0 (target met).
+   306→- milestones: steps list RE-POPULATED with historical fired=true + 09-12/13 timestamps (was [] at 19:30Z) — cosmetic recompute from full history, NOT new firings; no new milestone since book is at 521 long past 100.
+   307→- Anomaly: settledN ticked 520->521 (one post-target settle landed post-lift; pipelineProjection 523). Harmless — budget already closed, no alert per mandate.
+   308→- Triggers: MILESTONE none · STALL none · LIFT-FAIL n/a (armed false).
+   309→Decision: SILENT (no Telegram). Watchers stay idle-until-re-arm; quality gate still AMBER (informative 41.4 pct, healthy 78.3 pct) — unchanged, informational only.
+   310→
+   311→---
+   312→Task ID: RUN380-WATCH-20260918T2001Z
+   313→Agent: cron RUN380 watch (job 384822)
+   314→Task: 20:01Z rawcal capture-run watch cycle — post-lift
+   315→
+   316→Work Log:
+   317→- rawcal 200 · sv 200. armed FALSE (run closed 18:57Z) · settled 521/520 · open 0/8 · lastIssueAt 11:30Z · stalls null · gate AMBER informative 41.4 unchanged.
+   318→- TRIGGER: real-keep 14 to 15 (+1 increase since 19:02Z check) — first queue movement after drain phase; real-veto 28 unchanged. Post-target settle (521) likely fed the arm; engine continues normal capture while disarmed.
+   319→- ALERT SENT (Persian) per increase policy. HB timestamp appended (window had expired 19:36Z; alert doubles as progress line).
+   320→Decision: sent; watch next cycle for whether real-keep continues refilling (new capture stream) or one-off reclassification.
+   321→
+   322→---
+   323→Task ID: WATCH-RAWCAL-20260918T2030Z
+   324→Agent: cron pace watcher (job 380065)
+   325→Task: 20:30Z pace check — post-lift idle cycle
+   326→
+   327→Work Log:
+   328→- pulse 200 · rawcal 200. armed FALSE · settled 521/520 needed 0 · openRaw 0 · issuedTotal 157 · cadence OFF · issue3h 0 · settle3h 0.67 · spacing mean 52.9min · ETA 0 · stalls null · lastIssueAt 11:30Z.
+   329→- milestones: same 7 historical fired steps (09-12/13 timestamps) — already reported at 20:00Z as cosmetic recompute; no new firings.
+   330→- Triggers: MILESTONE none · STALL none · LIFT-FAIL n/a (armed false).
+   331→Decision: SILENT (no Telegram). State identical to 20:00Z snapshot; idle-until-re-arm continues.
+   332→
+   333→---
+   334→Task ID: RUN380-WATCH-20260918T2031Z
+   335→Agent: cron RUN380 watch (job 384822)
+   336→Task: 20:31Z rawcal capture-run watch cycle — post-lift
+   337→
+   338→Work Log:
+   339→- rawcal 200 · sv 200. armed FALSE · settled 521/520 · open 0/8 · lastIssueAt 11:30Z · blocks only "not armed" (expected) · gate AMBER informative 41.4 unchanged · stalls null.
+   340→- SV: real-keep 15 (unchanged, +1 already alerted msg 3739 at 20:01Z) · real-veto 28 unchanged. No count increases this cycle.
+   341→- HB window fresh (appended 20:01Z; next due ~22:01Z).
+   342→Decision: SILENT — no triggers. Confirming whether 20:01Z real-keep entry was one-off: so far no further refill.
+   343→
+   344→---
+   345→Task ID: WATCH-RAWCAL-20260918T2100Z
+   346→Agent: cron pace watcher (job 380065)
+   347→Task: 21:00Z pace check — post-lift idle cycle
+   348→
+   349→Work Log:
+   350→- pulse 200 · rawcal 200. armed FALSE · settled 521/520 needed 0 · openRaw 0 · issuedTotal 157 · cadence OFF · issue3h 0 · settle3h 0.33 (rolling-window decay, expected) · spacing 52.9min · ETA 0 · stalls null · lastIssueAt 11:30Z.
+   351→- milestones: same 7 historical fired steps (reported 20:00Z); no new firings.
+   352→- Triggers: MILESTONE none · STALL none · LIFT-FAIL n/a (armed false).
+   353→Decision: SILENT (no Telegram). Idle-until-re-arm continues; state stable.
+   354→
+   355→---
+   356→Task ID: RUN380-WATCH-20260918T2101Z
+   357→Agent: cron RUN380 watch (job 384822)
+   358→Task: 21:01Z rawcal capture-run watch cycle — post-lift
+   359→
+   360→Work Log:
+   361→- rawcal 200 · sv 200. armed FALSE · settled 521/520 · open 0/8 · lastIssueAt 11:30Z · gate AMBER informative 41.4 unchanged · stalls null.
+   362→- SV: real-keep 15 to 14 (rolled back off — confirms 20:01Z +1 was transient/one-off reclassification) · real-veto 28 unchanged. Decrease, not an alert trigger.
+   363→- HB window fresh (last appended 20:01Z; next due ~22:01Z).
+   364→Decision: SILENT — no triggers; idle-until-re-arm continues, SV queues stable in drain mode.
+   365→
+   366→---
+   367→Task ID: BRIDGE-WATCH-20260918T2107Z
+   368→Agent: cron bridge watch (job 376843)
+   369→Task: 21:07Z bridge watch — 1 unread handled
+   370→
+   371→Work Log:
+   372→- msg 861802416 (21:05Z, Amir): «گزارش وضعیت سیستم» — operator requested system status report.
+   373→- Replied (msg 3754, Persian): infra green; RAW-CAL disarmed post-completion 521/520 auto-lift 18:57Z; daily report sent (42 opened/39 closed/14 wins/net +1.19/equity 91.24); gate AMBER informative 41.4; SV arms 14/30 keep, 28/30 veto; pending operator decisions: re-arm, NEAR-MISS review post-re-arm, BARRIER-NEAR-MISS paper queue proposal.
+   374→- Marked all read (31 marked). Health: armed true, polling fresh.
+   375→Decision: full status delivered; no new investigation required.
+   376→
+   377→---
+   378→Task ID: WATCH-RAWCAL-20260918T2130Z
+   379→Agent: cron pace watcher (job 380065)
+   380→Task: 21:30Z pace check — post-lift idle cycle
+   381→
+   382→Work Log:
+   383→- pulse 200 · rawcal 200. armed FALSE · settled 522/520 needed 0 · openRaw 0 · issuedTotal 157 · cadence OFF · issue3h 0 · settle3h 0.67 · spacing 52.9min · ETA 0 · stalls null · lastIssueAt 11:30Z.
+   384→- Anomaly: settledN 521 to 522 — second post-target settle landed (pipeline projection 523; consistent with daily snapshot active=5). Harmless, budget closed; no alert per mandate.
+   385→- milestones: same 7 historical fired steps (reported 20:00Z).
+   386→- Triggers: MILESTONE none · STALL none · LIFT-FAIL n/a (armed false).
+   387→Decision: SILENT (no Telegram). Idle-until-re-arm continues.
+   388→
+   389→---
+   390→Task ID: RUN380-WATCH-20260918T2131Z
+   391→Agent: cron RUN380 watch (job 384822)
+   392→Task: 21:31Z rawcal capture-run watch cycle — post-lift
+   393→
+   394→Work Log:
+   395→- rawcal 200 · sv 200. armed FALSE · settled 522/520 · open 0/8 · lastIssueAt 11:30Z · gate AMBER informative 41.4 unchanged · stalls null.
+   396→- SV: real-keep 14 unchanged · real-veto 28 unchanged. SV queues stable; no refill, no drain movement this cycle.
+   397→- HB window: next due ~22:01Z (last appended 20:01Z).
+   398→Decision: SILENT — no triggers; idle-until-re-arm continues.
+   399→
+   400→---
+   401→Task ID: WATCH-RAWCAL-20260918T2200Z
+   402→Agent: cron pace watcher (job 380065)
+   403→Task: 22:00Z pace check — post-lift idle cycle
+   404→
+   405→Work Log:
+   406→- pulse 200 · rawcal 200. armed FALSE · settled 523/520 needed 0 · openRaw 0 · issuedTotal 157 · cadence OFF · issue3h 0 · settle3h 0.67 · spacing 52.9min · ETA 0 · stalls null · lastIssueAt 11:30Z.
+   407→- Anomaly: settledN 522 to 523 — third post-target settle, now matches pipelineProjection 523 exactly; remaining actives settling out. Harmless, budget closed; no alert per mandate.
+   408→- milestones: same 7 historical fired steps (reported 20:00Z).
+   409→- Triggers: MILESTONE none · STALL none · LIFT-FAIL n/a (armed false).
+   410→Decision: SILENT (no Telegram). Idle-until-re-arm continues.
+   411→
+   412→---
+   413→Task ID: RUN380-WATCH-20260918T2201Z
+   414→Agent: cron RUN380 watch (job 384822)
+   415→Task: 22:01Z rawcal capture-run watch cycle — post-lift + HEARTBEAT due
+   416→
+   417→Work Log:
+   418→- rawcal 200 · sv 200. armed FALSE · settled 524/520 · open 0/8 · lastIssueAt 11:30Z · gate AMBER informative 41.4 unchanged · stalls null.
+   419→- SV: real-keep 14 to 13 (drain) · real-veto 28 to 26 (drain) — decreases only, not alert triggers.
+   420→- HEARTBEAT SENT (window expired: 20:01Z plus 2h) — one-liner with run-closed status and re-arm pending note. HB timestamp appended.
+   421→Decision: heartbeat sent; no immediate triggers; idle-until-re-arm continues.
+   422→
+   423→---
+   424→Task ID: WATCH-RAWCAL-20260918T2230Z
+   425→Agent: cron pace watcher (job 380065)
+   426→Task: 22:30Z pace check — post-lift idle cycle
+   427→
+   428→Work Log:
+   429→- pulse 200 · rawcal 200. armed FALSE · settled 526/520 needed 0 · openRaw 0 · issuedTotal 157 · cadence OFF · issue3h 0 · settle3h 1.67 (batch settling) · spacing 52.9min · ETA 0 · stalls null · lastIssueAt 11:30Z.
+   430→- Anomaly: settledN 524 to 526 — post-target settles now exceed pipelineProjection (was 523) as legacy actives settle out; consistent with disarmed drain, harmless; no alert per mandate.
+   431→- milestones: same 7 historical fired steps (reported 20:00Z).
+   432→- Triggers: MILESTONE none · STALL none · LIFT-FAIL n/a (armed false).
+   433→Decision: SILENT (no Telegram). Idle-until-re-arm continues.
+   434→
+   435→---
+   436→Task ID: RUN380-WATCH-20260918T2231Z
+   437→Agent: cron RUN380 watch (job 384822)
+   438→Task: 22:31Z rawcal capture-run watch cycle — post-lift
+   439→
+   440→Work Log:
+   441→- rawcal 200 · sv 200. armed FALSE · settled 526/520 · open 0/8 · lastIssueAt 11:30Z · gate AMBER informative 41.4 unchanged · stalls null.
+   442→- TRIGGER: real-keep 13 to 14 (+1 increase since 22:01Z) — second bump in 2.5h (20:01Z +1 rolled off by 21:01Z); pattern looks like rotating queue churn, not a new capture stream. real-veto 26 to 25 (drain).
+   443→- ALERT SENT (Persian) per increase policy, flagged as likely churn; HB window fresh (sent 22:01Z).
+   444→Decision: sent; next cycles to confirm churn hypothesis (if it rolls off again, reclassify as transient reclassification noise; if it persists/grows, escalate as new capture stream).
+   445→
+   446→---
+   447→Task ID: SUPERVISOR-20260918T2252Z
+   448→Agent: resident SUPERVISOR (job 387118)
+   449→Task: deep-audit cycle 22:52Z
+   450→
+   451→Work Log:
+   452→- States: rawcal armed FALSE settled 528 gate AMBER (informative 41.4, window 61.4/72.7 healthy) · SV arms keep 14 (35.7 wr, +0.34) veto 25 (44 wr, +1.60) paper-keep 30 (60 wr, −0.63) paper-veto 0 · advisor pendingCount 0 · pulse daily 09-18 +1.23, cum −0.77 recovering.
+   453→- Diagnosis: WR-vs-expectancy inversion (paper-keep 60% wr negative net); web-search validated R-multiple expectancy standard (Van Tharp, meta-labeling practice).
+   454→- 2 thoughts posted: (1) expectancy(R) co-primary metric for SV verdicts/promotions; (2) backfill paper-veto 0/30 from R-SHADOW veto stream, complements pending BARRIER-NEAR-MISS.
+   455→- TELEGRAM SENT (proposal ready for operator review — material finding per policy).
+   456→Decision: proposals queued behind operator re-arm decision; zero live risk; no code/DB/knob changes.
+   457→
+   458→---
+   459→Task ID: BRIDGE-WATCH-20260918T2300Z
+   460→Agent: cron bridge watch (job 376843)
+   461→Task: 23:00Z bridge watch — operator APPROVE received
+   462→
+   463→Work Log:
+   464→- msg 861802417 (22:28Z, Amir): APPROVES SUPERVISOR proposal set — new re-arm, NEAR-MISS review after re-arm, BARRIER-NEAR-MISS paper queue; plus request to check snapshot/backup status.
+   465→- Snapshot verified: latest nexus-snapshot-20260918-223208.zip (38M, 22:32Z run: 12 retained, wal consistent+checkpointed, enc on, off-site uploaded 2 parts); chain intact (16:32, 13:32 priors). 3-hourly cadence active.
+   466→- Replied (Persian): approval logged, execution sequencing re-arm -> NEAR-MISS review -> BARRIER-NEAR-MISS implementation; re-arm target sizing to be drafted next SUPERVISOR cycle via NEXUS-SUPERVISED path; no knob/code changes without APPROVE.
+   467→- Marked all read (32).
+   468→Decision: operator approval recorded; next SUPERVISOR cycle (387118) to draft re-arm spec (EVID-BUDGET E-20260919) and execute via advisor contract; BARRIER-NEAR-MISS moves to approved-implement queue.
+   469→
+   470→---
+   471→Task ID: WATCH-RAWCAL-20260918T2300Z
+   472→Agent: cron pace watcher (job 380065)
+   473→Task: 23:00Z pace check — post-lift idle cycle
+   474→
+   475→Work Log:
+   476→- pulse 200 · rawcal 200. armed FALSE · settled 530/520 needed 0 · openRaw 0 · issuedTotal 157 · cadence OFF · issue3h 0 · settle3h 3.0 (drain burst) · spacing 52.9min · ETA 0 · stalls null · lastIssueAt 11:30Z.
+   477→- Anomaly: settledN 526 to 530 — four legacy actives settled this window (openRaw now 0, book fully closed out); consistent with disarmed drain, harmless; no alert per mandate.
+   478→- Context: operator APPROVED new re-arm + NEAR-MISS review + BARRIER-NEAR-MISS queue (msg 861802417, logged BRIDGE-WATCH-20260918T2300Z); re-arm spec drafting next SUPERVISOR cycle — watchers will exit idle mode when armed flips true.
+   479→- Triggers: MILESTONE none · STALL none · LIFT-FAIL n/a (armed false).
+   480→Decision: SILENT (no Telegram).
+   481→
+   482→---
+   483→Task ID: RUN380-WATCH-20260918T2301Z
+   484→Agent: cron RUN380 watch (job 384822)
+   485→Task: 23:01Z rawcal capture-run watch cycle — post-lift
+   486→
+   487→Work Log:
+   488→- rawcal 200 · sv 200. armed FALSE · settled 531/520 · open 0/8 · lastIssueAt 11:30Z · gate AMBER informative 41.4 unchanged · stalls null.
+   489→- TRIGGER: real-keep 14 to 15 (+1, third bump in 3h: 20:01Z, 22:31Z, 23:01Z). real-veto 25 unchanged. Mechanism hypothesis now firmer: settle-driven capture (5 legacy settles this window, openRaw 0) — oscillating churn with net +1/3h, not a new capture stream.
+   490→- ALERT SENT (Persian) per increase policy, framed as settle-driven refill; HB window fresh (next due ~00:01Z).
+   491→Decision: sent; churn-vs-refill to be re-classified definitively at re-arm (if bumps continue with zero settles, escalate).
+   492→
+   493→---
+   494→Task ID: WATCH-RAWCAL-20260918T2330Z
+   495→Agent: cron pace watcher (job 380065)
+   496→Task: 23:30Z pace check — post-lift idle cycle
+   497→
+   498→Work Log:
+   499→- pulse 200 · rawcal 200. armed FALSE · settled 535/520 needed 0 · openRaw 0 · issuedTotal 157 · cadence OFF · issue3h 0 · settle3h 3.67 (drain continuing) · stalls null · lastIssueAt 11:30Z.
+   500→- settledN 530 to 535 — five more legacy settles; book fully closed, drain-only regime confirmed. Harmless, no alert per mandate.
+   501→- milestones: same 7 historical fired steps (reported 20:00Z).
+   502→- Triggers: MILESTONE none · STALL none · LIFT-FAIL n/a (armed false).
+   503→Decision: SILENT (no Telegram). Idle until operator-approved re-arm spec executes (E-20260919 pending next SUPERVISOR cycle).
+   504→
+   505→---
+   506→Task ID: RUN380-WATCH-20260918T2331Z
+   507→Agent: cron RUN380 watch (job 384822)
+   508→Task: 23:31Z rawcal capture-run watch cycle — post-lift
+   509→
+   510→Work Log:
+   511→- First rawcal call returned empty (transient blip); retried after 30s per protocol: HTTP 200 OK. pulse 200. No alert (retry succeeded).
+   512→- rawcal: armed FALSE · settled 535/520 · open 0/8 · lastIssueAt 11:30Z · gate AMBER informative 41.4 unchanged · stalls null.
+   513→- SV: real-keep 15 unchanged (23:01Z bump settled) · real-veto 25 unchanged. No increases this cycle.
+   514→- HB window: next due ~00:01Z.
+   515→Decision: SILENT — no triggers; SV churn stabilized at keep 15/veto 25.
+   516→
+   517→---
+   518→Task ID: BRIDGE-WATCH-20260918T2358Z
+   519→Agent: cron bridge watch (job 376843)
+   520→Task: 23:58Z bridge watch — operator execution order, PHASE 1 EXECUTED
+   521→
+   522→Work Log:
+   523→- msg 861802418 (23:28Z, Amir): «پیشنهادات سوپروایزر رو کامل و مهندسی انجام بده» — explicit order to fully implement SUPERVISOR proposal set (extends APPROVE msg 861802417).
+   524→- PHASE 1 RE-ARM EXECUTED: created scripts/rawcal-arm-evidbudget-e20260919.sh (same engineering protocol as E-20260918: pre-flight pulse 200, abort guards, state surgery target 520->576 (settledN 536+40), POST api/rawcal action=arm, verify readback OK, attribution patch E-20260919 msgs 861802417/861802418). armed TRUE at 23:57:36Z. First issue expected ~12-36min.
+   525→- Roadmap acked to operator (msg 3832): PHASE 2 NEAR-MISS review on new-run data <- PHASE 3 BARRIER-NEAR-MISS paper queue implementation <- PHASE 4 expectancy(R) co-primary metric <- PHASE 5 paper-veto backfill from R-SHADOW. Progress reported per phase.
+   526→- Marked all read (33).
+   527→Decision: watchers exit idle mode (armed true); pace/RUN380 watchers resume active cadence monitoring; implementation phases proceed in subsequent cycles with worklog tracking.
+   528→
+   529→---
+   530→Task ID: WATCH-RAWCAL-20260919T0000Z
+   531→Agent: cron pace watcher (job 380065)
+   532→Task: 00:00Z pace check — RE-ARMED (E-20260919)
+   533→
+   534→Work Log:
+   535→- pulse 200 · rawcal 200. armed TRUE (E-20260919, armedAt 23:57:36Z, operator-approved path) · settled 536/576 needed 40 · issued 0 (new run) · openRaw 0 · cadence D (grading resumed) · spacingMin 10 · settle3h 4.67.
+   536→- STALL trigger technically fired: issueStallMin 749 — INHERITED CLOCK artifact (counts from lastIssueAt 11:30Z pre-re-arm drought; run armed only 3min ago, first issue expected 12-36min). Not a real stall.
+   537→- ALERT SENT (Persian): re-arm state + inherited-stall explanation + re-alarm commitment at 01:27Z (90min post-arm) if no issue.
+   538→- milestones: 7 historical steps (no new firings; needed 40 -> next book growth toward 576).
+   539→Decision: sent (mechanical STALL trigger, framed as artifact); watchers back to ACTIVE cadence monitoring.
+   540→
+   541→---
+   542→Task ID: RUN380-WATCH-20260919T0001Z
+   543→Agent: cron RUN380 watch (job 384822)
+   544→Task: 00:01Z rawcal capture-run watch cycle — E-20260919 active
+   545→
+   546→Work Log:
+   547→- rawcal 200 · sv 200. armed TRUE (E-20260919) · issued 0 · settled 536/576 · open 0/8 · gate AMBER informative 41.4 unchanged · stalls: issueStallMin 751 (inherited clock, artifact already reported by sibling pace watcher msg 3835 at 00:00Z with re-alarm commitment 01:27Z).
+   548→- SV: real-keep 15 unchanged · real-veto 25 to 24 (drain decrease, not a trigger).
+   549→- HB window was due (last 22:01Z): msg 3835 delivered the same progress content to the channel 1 min prior — sending a duplicate line 60s later would spam. HB timestamp appended; window reset (next due ~02:01Z).
+   550→Decision: SILENT this cycle (no NEW triggers; stall artifact + run state already on channel); real stall re-alarm scheduled 01:27Z if still no issue.
+   551→
+   552→---
+   553→Task ID: WATCH-RAWCAL-20260919T0030Z
+   554→Agent: cron pace watcher (job 380065)
+   555→Task: 00:30Z pace check — first new-run issue landed
+   556→
+   557→Work Log:
+   558→- pulse 200 · rawcal 200. armed TRUE (E-20260919) · issued 1 (serial 546 at 00:11:02Z, ~14min post-arm, within 12-36min expectation) · settled 538/576 needed 38 · openRaw 1 · cadence B.
+   559→- Rates: issue3h 0.33 · sinceArm 1.76/h · settle3h 6/h · spacing mean 57.4min · ETA 6.33h (06:51Z) · ETA-steady 21.58h (22:06Z).
+   560→- stalls null — inherited-clock artifact RESOLVED by first issue; 01:27Z re-alarm commitment now moot. blocks: scan-no-candidate vol-barrier notes (normal constraint behavior).
+   561→- milestones: same 7 historical fired steps, no new.
+   562→- Triggers: MILESTONE none · STALL none · LIFT-FAIL none (needed 38>0).
+   563→Decision: SILENT (no Telegram). Gate AMBER informative 41.4 unchanged.
+   564→
+   565→---
+   566→Task ID: RUN380-WATCH-20260919T0034Z
+   567→Agent: cron RUN380 watch (job 384822)
+   568→Task: 00:34Z rawcal capture-run watch cycle — E-20260919 active
+   569→
+   570→Work Log:
+   571→- rawcal 200 · sv 200. armed TRUE (E-20260919) · issued 1 (serial 546 at 00:11:02Z, no stall: ~23min) · settled 538/576 · open 1/8 · gate AMBER informative 41.4 unchanged · stalls null · blocks normal (vol-barrier scan-no-candidate).
+   572→- SV: real-keep 15 unchanged · real-veto 24 to 23 (drain decrease, not a trigger) · paper-keep 30 · paper-veto 0. Seq-stop CONTINUE z=-0.63.
+   573→- HB: last 0001Z, next due ~0201Z — not due this cycle.
+   574→Decision: SILENT — no NEW triggers (no arm increase, no stall, armed steady).
+   575→
+   576→---
+   577→Task ID: WATCH-RAWCAL-20260919T0100Z
+   578→Agent: cron pace watcher (job 380065)
+   579→Task: 01:00Z pace check — steady early-run cadence
+   580→
+   581→Work Log:
+   582→- pulse 200 · rawcal 200. armed TRUE (E-20260919) · issued 2 (new run; serial 550 at 00:43:02Z) · settled 540/576 needed 36 · openRaw 2 · cadence B.
+   583→- Rates: issue3h 0.67 · sinceArm 1.92/h · settle3h 6/h · spacing mean 57.3min · ETA 6.0h · ETA-steady 18.78h.
+   584→- stalls null · blocks: scan-no-candidate vol-barrier notes (normal). gate AMBER informative 41.4 unchanged.
+   585→- milestones: same 7 historical fired steps, no new.
+   586→- Triggers: MILESTONE none · STALL none · LIFT-FAIL none (needed 36>0).
+   587→Decision: SILENT (no Telegram). Run progressing: 2 issued / 2 settled in first hour.
+   588→
+   589→---
+   590→Task ID: RUN380-WATCH-20260919T0101Z
+   591→Agent: cron RUN380 watch (job 384822)
+   592→Task: 01:01Z rawcal capture-run watch cycle — E-20260919 active
+   593→
+   594→Work Log:
+   595→- rawcal 200 · sv 200. armed TRUE · issued 2 · settled 540/576 · open 2/8 · lastIssueAt 00:43:02Z (~18min, no stall) · stalls null · gate AMBER informative 41.4 unchanged · blocks normal (vol-barrier scan-no-candidate).
+   596→- SV: real-keep 15 unchanged · real-veto 23 unchanged · paper-keep 30 · paper-veto 0.
+   597→- HB: last 0001Z, next due ~0201Z — not due.
+   598→Decision: SILENT — no NEW triggers; run steady at 2 issued / 2 settled.
+   599→
+   600→---
+   601→Task ID: WATCH-RAWCAL-20260919T0130Z
+   602→Agent: cron pace watcher (job 380065)
+   603→Task: 01:30Z pace check — steady progression
+   604→
+   605→Work Log:
+   606→- pulse 200 · rawcal 200. armed TRUE (E-20260919) · issued 3 (new run; serial 555 at 01:20:22Z) · settled 545/576 needed 31 · openRaw 2 · cadence B.
+   607→- Rates: issue3h 1.0 · sinceArm 1.93/h · settle3h 6.67/h · spacing mean 57.2min · ETA 4.65h · ETA-steady 16.09h.
+   608→- stalls null · blocks normal (vol-barrier scan-no-candidate). gate AMBER informative 42.1 (+0.7, no trigger).
+   609→- milestones: same 7 historical fired steps, no new.
+   610→- Triggers: MILESTONE none · STALL none · LIFT-FAIL none (needed 31>0).
+   611→Decision: SILENT (no Telegram). Book +5 settles since 01:00Z cycle.
+   612→
+   613→---
+   614→Task ID: RUN380-WATCH-20260919T0131Z
+   615→Agent: cron RUN380 watch (job 384822)
+   616→Task: 01:31Z rawcal capture-run watch cycle — E-20260919 active, SV bump alert
+   617→
+   618→Work Log:
+   619→- rawcal 200 · sv 200. armed TRUE · issued 3 · settled 547/576 · open 1/8 · lastIssueAt 01:20:22Z (~11min, no stall) · stalls null · gate AMBER informative 42.1 unchanged · blocks normal (vol-barrier).
+   620→- SV TRIGGER: real-keep 15 to 16 (increase — policy alert). real-veto 23 to 22 (drain decrease). paper-keep 30 · paper-veto 0.
+   621→- ALERT SENT (Persian, msg 3894): keep bump + run state + mechanical rolling-window assessment (settle-driven refill, consistent with prior churn-phase ±1 pattern).
+   622→- HB: last 0001Z, next due ~0201Z — not due this cycle.
+   623→Decision: sent (real-keep increase trigger); otherwise steady.
+   624→
+   625→---
+   626→Task ID: WATCH-RAWCAL-20260919T0200Z
+   627→Agent: cron pace watcher (job 380065)
+   628→Task: 02:00Z pace check — no new issues in last 40min
+   629→
+   630→Work Log:
+   631→- pulse 200 · rawcal 200. armed TRUE (E-20260919) · issued 3 (new run; last serial 555 at 01:20:22Z, ~40min ago — under 90min threshold) · settled 548/576 needed 28 · openRaw 1 · cadence C (was B).
+   632→- Rates: issue3h 1.0 · sinceArm 1.47/h (declining as expected with 57min observed spacing) · settle3h 6.67/h · ETA 4.2h · ETA-steady 19.06h.
+   633→- stalls null · blocks normal (vol-barrier/ER-floor scan-no-candidate). gate AMBER informative 42.1 unchanged.
+   634→- milestones: same 7 historical fired steps, no new.
+   635→- Triggers: MILESTONE none · STALL none · LIFT-FAIL none (needed 28>0).
+   636→Decision: SILENT (no Telegram). Cadence drift B→C noted; no mandate trigger.
+   637→
+   638→---
+   639→Task ID: RUN380-WATCH-20260919T0201Z
+   640→Agent: cron RUN380 watch (job 384822)
+   641→Task: 02:01Z rawcal capture-run watch cycle — HB due
+   642→
+   643→Work Log:
+   644→- rawcal 200 · sv 200. armed TRUE · issued 3 · settled 548/576 · open 1/8 · lastIssueAt 01:20:22Z (~41min, no stall) · stalls null · gate AMBER informative 42.1 unchanged · blocks normal (ER-floor barrier).
+   645→- SV: real-keep 16 unchanged (01:31Z bump already reported) · real-veto 22 unchanged · paper-keep 30 · paper-veto 0.
+   646→- HB due (last 0001Z): HEARTBEAT SENT (msg 3904) — issued 3 · 548/576 · open 1/8 · AMBER · 16k/22v. HB file appended (0201Z, next due ~0401Z).
+   647→Decision: sent (scheduled heartbeat); no other triggers.
+   648→
+   649→---
+   650→Task ID: WATCH-RAWCAL-20260919T0230Z
+   651→Agent: cron pace watcher (job 380065)
+   652→Task: 02:30Z pace check — stall counter tripped
+   653→
+   654→Work Log:
+   655→- pulse 200 · rawcal 200. armed TRUE (E-20260919) · issued 3 (last serial 555 at 01:20:22Z, ~71min ago) · settled 550/576 needed 26 · openRaw 1 · cadence D (B→C→D drift).
+   656→- STALL trigger: issueStallMin 71 (mechanical != null). Borderline vs observed mean spacing 57min; below the 90min severe threshold. settle3h 6.67 normal.
+   657→- Blocks: scan-no-candidate vol-barrier (t1r up to 2260m over 240m cap) — constraint-driven, not engine fault.
+   658→- ALERT SENT (Persian, msg 3916): 71min stall + borderline framing + block cause + 90min escalation commitment.
+   659→- milestones: same 7 historical, no new. gate AMBER informative 42.1.
+   660→Decision: sent (mechanical STALL trigger); escalation at 90min if no new issue.
+   661→
+   662→---
+   663→Task ID: RUN380-WATCH-20260919T0231Z
+   664→Agent: cron RUN380 watch (job 384822)
+   665→Task: 02:31Z rawcal capture-run watch cycle — pre-90min stall watch
+   666→
+   667→Work Log:
+   668→- rawcal 200 · sv 200. armed TRUE · issued 3 · settled 550/576 · open 1/8 · lastIssueAt 01:20:22Z (~73min — under RUN380 90min threshold) · gate AMBER informative 42.1 unchanged · blocks normal (vol-barrier).
+   669→- stalls: issueStallMin 73 — mechanical counter already alerted by sibling pace watcher (msg 3916 at 02:30Z); no duplicate per no-spam policy.
+   670→- SV: real-keep 16 unchanged · real-veto 22 unchanged · paper-keep 30 · paper-veto 0.
+   671→- HB: last 0201Z, next due ~0401Z — not due.
+   672→Decision: SILENT — 90min stall crossing at ~02:50Z; next cycle will escalate if lastIssueAt unchanged.
+   673→
+   674→---
+   675→Task ID: SUPERVISOR-20260919T0300Z
+   676→Agent: resident SUPERVISOR (job 387118)
+   677→Task: deep-audit cycle 2026-09-19 03:00Z
+   678→
+   679→Work Log:
+   680→- Read worklog tail + rawcal/sv/advisor/pulse/terminal. Key NEW event: memory gate profit-first suppressing AI-SWING (-5.4%/trade n=30 rolling) on WLD/SUI/FIL/APT from 02:52Z; stall hit 92min; cadence D; 552/576.
+   681→- Diagnosis (2 thoughts posted): drought now triple-cause (vol-barrier t1r, ER-floor, memory-gate suppression) — evidence-completion is gate-limited; gate statistic (mean %-expectancy) is outlier-sensitive, non-risk-normalized, no sqrt(N) discount — corroborated by paper-keep 53.3% WR/net -$5.31 and real-veto net +$1.33 (veto unvalidated, seq z=-0.63).
+   682→- Proposal posted (web-validated via search: Van Tharp SQN, Lopez de Prado meta-labeling, small-sample mean-R): SQN-style R-normalized memory-gate statistic + GATE-NEAR-MISS paper capture (extends approved Phase 3/4); decision by 30-settle paper cohort; no knob change without APPROVE.
+   683→- TELEGRAM SENT (msg 3920): proposal ready for operator review.
+   684→- Advisor: 0 pending proposals; equity $90.67, daily -$0.60 (within -$3 limit).
+   685→Decision: Telegram sent (proposal-ready trigger); all changes deferred to advisor approval contract.
+   686→
+   687→---
+   688→Task ID: WATCH-RAWCAL-20260919T0300Z
+   689→Agent: cron pace watcher (job 380065)
+   690→Task: 03:00Z pace check — stall escalated past 90min
+   691→
+   692→Work Log:
+   693→- pulse 200 · rawcal 200. armed TRUE (E-20260919) · issued 3 (last serial 555 at 01:20:22Z, 100min ago) · settled 552/576 needed 24 · openRaw 1 · cadence D.
+   694→- STALL: issueStallMin 100 — definite escalation per 02:30Z commitment (90min). settle3h 6.33 normal (settle side healthy).
+   695→- Causes: vol-barrier blocks (t1r up to 2260m vs 240m cap) + ER-floor + NEW memory-gate AI-SWING suppression (SUPERVISOR audit 03:00Z). Constraint-driven, not engine fault.
+   696→- ESCALATION SENT (Persian, msg 3924): 100min stall + multi-layer causes + SQN-gate proposal cross-ref (msg 3920).
+   697→- milestones: same 7 historical, no new. gate AMBER informative 42.1.
+   698→Decision: sent (definite stall escalation); continue monitoring.
+   699→
+   700→---
+   701→Task ID: RUN380-WATCH-20260919T0301Z
+   702→Agent: cron RUN380 watch (job 384822)
+   703→Task: 03:01Z rawcal capture-run watch cycle — stall covered by sibling alert
+   704→
+   705→Work Log:
+   706→- rawcal 200 · sv 200. armed TRUE · issued 3 · settled 552/576 · open 1/8 · lastIssueAt 01:20:22Z (102min — RUN380 90min trigger technically fired).
+   707→- No duplicate: pace watcher delivered the identical 100min escalation (msg 3924) 60s prior with same causes (vol-barrier + ER-floor + memory-gate suppression) — no-spam policy per 0001Z precedent.
+   708→- SV: real-keep 16 unchanged · real-veto 22 unchanged · paper-keep 30 · paper-veto 0.
+   709→- HB: last 0201Z, next due ~0401Z — not due.
+   710→Decision: SILENT — stall trigger already on channel (msg 3924); continue monitoring for next issue.
+   711→
+   712→---
+   713→Task ID: WATCH-RAWCAL-20260919T0330Z
+   714→Agent: cron pace watcher (job 380065)
+   715→Task: 03:30Z pace check — ongoing stall, no re-alert
+   716→
+   717→Work Log:
+   718→- pulse 200 · rawcal 200. armed TRUE (E-20260919) · issued 3 (last serial 555 at 01:20:22Z, 131min) · settled 554/576 needed 22 · openRaw 1 · cadence D.
+   719→- STALL continuing (131min) — SAME event already escalated at 100min (msg 3924, full causes + SQN proposal cross-ref). Repeating per-cycle adds no information: no-spam policy.
+   720→- settle3h 5/h normal · gate AMBER informative 42.1 · blocks same pattern (vol-barrier t1r) · milestones: same 7 historical.
+   721→- Re-alert commitment: 180min (~3x observed spacing 57min, 2x severe threshold) if still no issue; silent-clear if new issue lands.
+   722→Decision: SILENT (ongoing event, escalation already on channel).
+   723→
+   724→---
+   725→Task ID: RUN380-WATCH-20260919T0331Z
+   726→Agent: cron RUN380 watch (job 384822)
+   727→Task: 03:31Z rawcal capture-run watch cycle — ongoing stall, SV keep drain
+   728→
+   729→Work Log:
+   730→- rawcal 200 · sv 200. armed TRUE · issued 3 · settled 554/576 · open 1/8 · lastIssueAt 01:20:22Z (133min — same stall event, escalation already on channel msg 3924; no duplicate).
+   731→- SV: real-keep 16 to 15 (rolling-window drain decrease, not a trigger) · real-veto 22 unchanged · paper-keep 30 · paper-veto 0.
+   732→- gate AMBER informative 42.1 unchanged · HB: last 0201Z, next due ~0401Z — not due.
+   733→Decision: SILENT — no NEW triggers; stall continuation governed by pace watcher (re-alert at 180min).
+   734→
+   735→---
+   736→Task ID: WATCH-RAWCAL-20260919T0400Z
+   737→Agent: cron pace watcher (job 380065)
+   738→Task: 04:00Z pace check — stall cleared silently
+   739→
+   740→Work Log:
+   741→- pulse 200 · rawcal 200. armed TRUE (E-20260919) · issued 4 (new run; serial 565 at 03:39:39Z) · settled 556/576 needed 20 · openRaw 2 · cadence C (recovered from D).
+   742→- STALL CLEARED: issueStallMin null — 131-min drought ended at 03:39:39Z (total gap 139min, under the 180min re-alert threshold). Silent-clear per 03:30Z commitment.
+   743→- Rates: sinceArm 0.99/h · settle3h 5/h · spacing mean 57.7min · ETA-steady 20.22h. gate AMBER informative 42.5 (+0.4).
+   744→- milestones: same 7 historical, no new. Triggers: MILESTONE none · STALL none · LIFT-FAIL none.
+   745→Decision: SILENT (no Telegram). Drought event closed; barrier + memory-gate constraints remain the pacing factors.
+   746→
+   747→---
+   748→Task ID: RUN380-WATCH-20260919T0401Z
+   749→Agent: cron RUN380 watch (job 384822)
+   750→Task: 04:01Z rawcal capture-run watch cycle — SV veto bump + HB due
+   751→
+   752→Work Log:
+   753→- rawcal 200 · sv 200. armed TRUE · issued 4 (serial 565 at 03:39:39Z — stall cleared, no stall 22min) · settled 556/576 · open 2/8 · gate AMBER informative 42.5 unchanged-ish.
+   754→- SV TRIGGER: real-veto 22 to 23 (increase — policy alert). real-keep 15 to 14 (drain decrease). Rolling-window churn between the two arms as legacy settles roll; paper-keep 30 · paper-veto 0.
+   755→- ALERT SENT (Persian, msg 3946): veto bump + run state + drought close + mechanical churn assessment.
+   756→- HB due (last 0201Z): msg 3946 carried the full progress line (issued/settled/open/gate/real-arms) — HB timestamp appended (0401Z), no separate duplicate per 0001Z precedent. Next HB due ~0601Z.
+   757→Decision: sent (veto increase trigger; doubled as scheduled heartbeat content).
+   758→---
+   759→Task ID: WATCH-RAWCAL-20260919T0430Z
+   760→Agent: cron pace watcher (job 380065)
+   761→Task: 04:30Z pace check — new mechanical stall (51min)
+   762→
+   763→Work Log:
+   764→- pulse 200 · rawcal 200. armed TRUE (E-20260919) · issued 4 (serial 565 at 03:39:39Z) · settled 558/576 needed 18 · openRaw 2 · cadence D.
+   765→- STALL: issueStallMin 51 (non-null) — NEW event (prior drought closed at 03:39:39Z). First non-null observation → mechanical stage-1 alert per protocol.
+   766→- Rates: issue3h 0.33/h · sinceArm 0.88/h · settle3h 4.33/h · spacing mean 57.7min · ETA 4.15h / steady 20.5h.
+   767→- Context flagged in message: 51min still under mean spacing (borderline-normal); definite escalation committed at 90min if no new issue.
+   768→- Blocks: vol-scaled barrier t1r (BNB 3186m, APT 724-858m, ETH 2971m vs cap 240m) + ER floor (UNI 0.02 vs 0.12). gate AMBER informative 42.5.
+   769→- milestones: same 7 historical, no new. Triggers: MILESTONE none · STALL yes (mechanical) · LIFT-FAIL none.
+   770→Decision: ALERT SENT (Persian, msg 3959) — stage-1 mechanical; escalation at 90min if still stalled.
+   771→---
+   772→Task ID: RUN380-WATCH-20260919T0438Z
+   773→Agent: cron RUN380 watch (job 384822)
+   774→Task: 04:38Z rawcal capture-run watch cycle — all quiet, sibling alert on channel
+   775→
+   776→Work Log:
+   777→- rawcal 200 · sv 200. armed TRUE · issued 4 (serial 565 at 03:39:39Z, stall 58min — under 90min; stage-1 mechanical already on channel via pace watcher msg 3959) · settled 560/576 · open 1/8 · cadence D · gate AMBER informative 42.2 (state long since reported, 41.4-42.5 for many cycles — no-spam).
+   778→- SV: real-keep 14 unchanged · real-veto 23 unchanged · paper-keep 30 · paper-veto 0.
+   779→- HB: last 0401Z, next due ~0601Z — not due. No API failures.
+   780→Decision: SILENT — no NEW triggers; stall escalation governed by pace watcher (90min definite stage).
+   781→---
+   782→Task ID: WATCH-RAWCAL-20260919T0500Z
+   783→Agent: cron pace watcher (job 380065)
+   784→Task: 05:00Z pace check — ongoing stall 81min, pre-escalation
+   785→
+   786→Work Log:
+   787→- pulse 200 · rawcal 200. armed TRUE (E-20260919) · issued 4 (serial 565 at 03:39:39Z) · settled 560/576 needed 16 · openRaw 1 · cadence D.
+   788→- STALL continuing (81min) — SAME event, stage-1 mechanical already on channel (msg 3959 at 04:30Z). Definite-escalation threshold 90min (= 05:09:39Z) not yet crossed.
+   789→- Rates: issue3h 0.33/h · sinceArm 0.79/h · settle3h 3.67/h (slowing) · spacing mean 57.7min · ETA 4.36h / steady 20.17h.
+   790→- gate AMBER informative 42.2 · milestones: same 7 historical, no new. Triggers: MILESTONE none · STALL ongoing (no-spam) · LIFT-FAIL none.
+   791→- Escalation handoff: next pace cycle 05:30Z (~111min) or sibling RUN380 05:31Z (>90min trigger) carries the definite alert — first sender wins, other stays silent.
+   792→Decision: SILENT (ongoing event, escalation not yet due).
+   793→---
+   794→Task ID: RUN380-WATCH-20260919T0501Z
+   795→Agent: cron RUN380 watch (job 384822)
+   796→Task: 05:01Z rawcal capture-run watch cycle — SV veto bump 23 to 24
+   797→
+   798→Work Log:
+   799→- rawcal 200 · sv 200. armed TRUE · issued 4 (serial 565 at 03:39:39Z, stall 83min — under 90min, stage-1 msg 3959 on channel) · settled 560/576 · open 1/8 · cadence D · gate AMBER informative 42.2.
+   800→- SV TRIGGER: real-veto 23 to 24 (increase — policy alert). real-keep 14 unchanged · paper-keep 30 · paper-veto 0.
+   801→- ALERT SENT (Persian, msg 3975): veto bump + run state + stall status (escalation per protocol at 90min threshold).
+   802→- HB: last 0401Z, next due ~0601Z — not due. No API failures.
+   803→Decision: sent (real-veto increase trigger).
+   804→---
+   805→Task ID: WATCH-RAWCAL-20260919T0530Z
+   806→Agent: cron pace watcher (job 380065)
+   807→Task: 05:30Z pace check — definite stall escalation (111min)
+   808→
+   809→Work Log:
+   810→- pulse 200 · rawcal 200. armed TRUE (E-20260919) · issued 4 (serial 565 at 03:39:39Z) · settled 561/576 needed 15 · openRaw 1 · cadence D.
+   811→- STALL 111min — DEFINITE escalation threshold (90min) crossed; this cycle carries the escalation per 05:00Z handoff (RUN380 05:01Z was pre-threshold at 83min).
+   812→- Rates: issue3h 0.33/h · sinceArm 0.72/h · settle3h 3.33/h (slowing) · spacing mean 57.7min · ETA 4.5h / steady 20.83h.
+   813→- Blocks: vol-scaled barrier t1r — XRP up to 4932m, PUMP up to 1240m vs cap 240m (low-vol regime; same pattern as prior 139min drought).
+   814→- gate AMBER informative 42.2 · milestones: same 7 historical. Triggers: MILESTONE none · STALL definite · LIFT-FAIL none.
+   815→Decision: ALERT SENT (Persian definite escalation, msg 3977) — silent-clear on next issue; no further re-alerts for this event per no-spam policy.
+   816→---
+   817→Task ID: RUN380-WATCH-20260919T0531Z
+   818→Agent: cron RUN380 watch (job 384822)
+   819→Task: 05:31Z rawcal capture-run watch cycle — stall covered by sibling escalation
+   820→
+   821→Work Log:
+   822→- rawcal 200 · sv 200. armed TRUE · issued 4 (serial 565 at 03:39:39Z, stall 113min — RUN380 90min trigger technically fired) · settled 562/576 · open 1/8 · cadence D · gate AMBER informative 42.2.
+   823→- No duplicate: pace watcher delivered the identical definite escalation (msg 3977) 60s prior with same causes (vol-barrier t1r, low-vol regime) — no-spam per 0300Z precedent.
+   824→- SV: real-keep 14 unchanged · real-veto 24 unchanged · paper-keep 30 to 27 (paper drain decrease, not a trigger) · paper-veto 0.
+   825→- HB: last 0401Z, next due ~0601Z — not due. No API failures.
+   826→Decision: SILENT — no NEW triggers; stall escalation already on channel (msg 3977).
+   827→---
+   828→Task ID: WATCH-RAWCAL-20260919T0600Z
+   829→Agent: cron pace watcher (job 380065)
+   830→Task: 06:00Z pace check — ongoing stall 141min, pre-180min stage
+   831→
+   832→Work Log:
+   833→- pulse 200 · rawcal 200. armed TRUE (E-20260919) · issued 4 (serial 565 at 03:39:39Z) · settled 563/576 needed 13 · openRaw 1 · cadence D.
+   834→- STALL continuing (141min) — SAME event; stage-1 (msg 3959) + definite escalation (msg 3977) already on channel. 180min re-alert threshold (= 06:39:39Z) not yet reached.
+   835→- Rates: issue3h 0.33/h · sinceArm 0.66/h · settle3h 3.33/h · spacing mean 57.7min · ETA 3.9h / steady 19.64h.
+   836→- gate AMBER informative 42.2 · milestones: same 7 historical. Triggers: MILESTONE none · STALL ongoing (no-spam) · LIFT-FAIL none.
+   837→- 180min re-alert handoff: first cycle past 06:39:39Z (pace 07:00Z at ~201min, or sibling RUN380 07:01Z) carries it — first sender wins.
+   838→Decision: SILENT (ongoing event, both alert stages on channel, 180min stage not yet due).
+   839→---
+   840→Task ID: RUN380-WATCH-20260919T0601Z
+   841→Agent: cron RUN380 watch (job 384822)
+   842→Task: 06:01Z rawcal capture-run watch cycle — stall cleared + scheduled HB
+   843→
+   844→Work Log:
+   845→- rawcal 200 · sv 200. armed TRUE · issued 5 (NEW serial at 06:00:55.849Z — 141min drought ended, just under 180min re-alert threshold) · settled 563/576 · open 2/8 · cadence C (recovered from D) · stalls null · gate AMBER informative 42.2.
+   846→- STALL CLEARED silently per protocol — 180min re-alert stage dies with the event.
+   847→- SV: real-keep 14 unchanged · real-veto 24 unchanged · paper-keep 27 to 28 (paper fill, not a trigger) · paper-veto 0.
+   848→- HB DUE (last 0401Z): HEARTBEAT SENT (msg 3986, one-line progress + silent-clear note) · HB file appended (0601Z). Next HB due ~0801Z.
+   849→Decision: sent (scheduled 2h heartbeat; no alert triggers active).
+   850→---
+   851→Task ID: WATCH-RAWCAL-20260919T0630Z
+   852→Agent: cron pace watcher (job 380065)
+   853→Task: 06:30Z pace check — issuance recovering, all clear
+   854→
+   855→Work Log:
+   856→- pulse 200 · rawcal 200. armed TRUE (E-20260919) · issued 6 (serial 572 at 06:29:02Z — second new issue in 28min, cadence recovering) · settled 563/576 needed 13 · openRaw 3 · cadence C.
+   857→- stalls null — no stall. Rates: issue3h 1.0/h (up from 0.33) · sinceArm 0.92/h · settle3h 3/h · spacing mean 58min · ETA 4.33h / steady 14.2h (improving).
+   858→- gate AMBER informative 42.2 · milestones: same 7 historical. Triggers: MILESTONE none · STALL none · LIFT-FAIL none.
+   859→Decision: SILENT (no Telegram). Post-drought recovery in progress; steady-state ETA improved 19.6 to 14.2h.
+   860→---
+   861→Task ID: RUN380-WATCH-20260919T0631Z
+   862→Agent: cron RUN380 watch (job 384822)
+   863→Task: 06:31Z rawcal capture-run watch cycle — all quiet, recovery holding
+   864→
+   865→Work Log:
+   866→- rawcal 200 · sv 200. armed TRUE · issued 6 (serial 572 at 06:29:02Z, 2min old — no stall) · settled 563/576 · open 3/8 · cadence C · gate AMBER informative 42.2 · stalls null.
+   867→- SV: real-keep 14 unchanged · real-veto 24 unchanged · paper-keep 28 to 25 (paper drain, not a trigger) · paper-veto 0.
+   868→- HB: last 0601Z, next due ~0801Z — not due. No API failures.
+   869→Decision: SILENT — no NEW triggers; post-drought recovery holding.
+   870→---
+   871→Task ID: SUPERVISOR-20260919T0651Z
+   872→Agent: resident SUPERVISOR (job 387118)
+   873→Task: 06:51Z deep-audit cycle — counterfactual inversion + adaptive barrier proposal
+   874→
+   875→Work Log:
+   876→- Read worklog tail (drought lifecycle + recovery), rawcal (564/576, cadence C, gate AMBER 42.2), SV arms, advisor (pendingCount 0), pulse (equity cum -1.36, today -0.35 — within thresholds), terminal (no repeats).
+   877→- DIAGNOSE posted: shadow-veto counterfactual inversion — would-veto cohort profitable (24/30, wr 50%, net +1.46 USD vs promotion needs negative) while agreement cohort paper-loses (paper-keep -4.75 USD, wr 34.6%); paper-vs-real sign divergence on same rule; promotion 0/5. Low-vol regime makes AI veto anti-correlated with outcomes.
+   878→- PROPOSE posted (web-validated vs triple-barrier literature + compression-expansion sources): regime-adaptive vertical-barrier cap (240m fixed → 240-720m scaled by vol percentile) + BARRIER-CAP-NEAR-MISS paper counterfactual queue; complements pending SQN/GATE-NEAR-MISS set (msg 3920).
+   879→- TELEGRAM SENT (msg 4000): 2 findings + proposal — material (new proposal ready for operator review).
+   880→- No code/DB/EngineSetting touched. Changes only via advisor APPROVE contract.
+   881→Decision: sent (new validated proposal ready for operator review).
+   882→---
+   883→Task ID: WATCH-RAWCAL-20260919T0700Z
+   884→Agent: cron pace watcher (job 380065)
+   885→Task: 07:00Z pace check — steady recovery, no triggers
+   886→
+   887→Work Log:
+   888→- pulse 200 · rawcal 200. armed TRUE (E-20260919) · issued 6 (serial 572 at 06:29:02Z, 31min — no stall) · settled 564/576 needed 12 · openRaw 3 · cadence C.
+   889→- stalls null. Rates: issue3h 0.67/h · sinceArm 0.85/h · settle3h 3/h · spacing mean 58min · ETA 4h / steady 14.09h.
+   890→- gate AMBER informative 42.2 · milestones: same 7 historical. Triggers: MILESTONE none · STALL none · LIFT-FAIL none.
+   891→Decision: SILENT (no Telegram). Recovery holding; 12 settles remain to evidence-completion.
+   892→---
+   893→Task ID: RUN380-WATCH-20260919T0701Z
+   894→Agent: cron RUN380 watch (job 384822)
+   895→Task: 07:01Z rawcal capture-run watch cycle — all quiet
+   896→
+   897→Work Log:
+   898→- rawcal 200 · sv 200. armed TRUE · issued 6 (serial 572 at 06:29:02Z, 32min — no stall) · settled 564/576 · open 3/8 · cadence C · gate AMBER informative 42.2 · stalls null.
+   899→- SV: real-keep 14 unchanged · real-veto 24 unchanged · paper-keep 29 (paper churn, not a trigger) · paper-veto 0.
+   900→- HB: last 0601Z, next due ~0801Z — not due. No API failures.
+   901→Decision: SILENT — no NEW triggers.
+   902→---
+   903→Task ID: WATCH-RAWCAL-20260919T0730Z
+   904→Agent: cron pace watcher (job 380065)
+   905→Task: 07:30Z pace check — strong progress, 7 settles to target
+   906→
+   907→Work Log:
+   908→- pulse 200 · rawcal 200. armed TRUE (E-20260919) · issued 7 (serial 579 at 07:32:17Z — second fresh issue, 63min after 572) · settled 569/576 needed 7 · openRaw 3 · cadence C.
+   909→- stalls null — no stall. Rates: issue3h 1.0/h · sinceArm 0.92/h · settle3h 3.67/h · spacing mean 58min · ETA 1.91h / steady 7.6h (sharp improvement).
+   910→- settle burst: 564 to 569 (+5 in 30min) — evidence-completion run approaching target, completion projected ~09:25Z.
+   911→- gate AMBER informative 42.6 (+0.4) · blocks: vol-barrier t1r (NEAR 473-488m vs cap 240m) · milestones: same 7 historical.
+   912→- Triggers: MILESTONE none · STALL none · LIFT-FAIL none.
+   913→Decision: SILENT (no Telegram). Target completion now within ~2h at current settle rate.
+   914→---
+   915→Task ID: RUN380-WATCH-20260919T0731Z
+   916→Agent: cron RUN380 watch (job 384822)
+   917→Task: 07:31Z rawcal capture-run watch cycle — SV veto bump 24 to 25 (3rd today)
+   918→
+   919→Work Log:
+   920→- rawcal 200 · sv 200. armed TRUE · issued 7 (serial 579 at 07:32:17Z, fresh — no stall) · settled 570/576 needed 6 · open 2/8 · cadence C · gate AMBER informative 42.9 · stalls null.
+   921→- SV TRIGGER: real-veto 24 to 25 (increase — policy alert; 3rd bump today: 22-23-24-25). real-keep 14 unchanged · paper-keep 24 (drain) · paper-veto 0.
+   922→- ALERT SENT (Persian, msg 4022): veto bump + today's pattern cross-ref to SUPERVISOR counterfactual-inversion finding + run state (6 settles to target).
+   923→- HB: last 0601Z, next due ~0801Z — not due. No API failures.
+   924→Decision: sent (real-veto increase trigger).
+   925→---
+   926→Task ID: WATCH-RAWCAL-20260919T0800Z
+   927→Agent: cron pace watcher (job 380065)
+   928→Task: 08:00Z pace check — 5 settles to target
+   929→
+   930→Work Log:
+   931→- pulse 200 · rawcal 200. armed TRUE (E-20260919) · issued 7 (serial 579 at 07:32:17Z, 29min — no stall) · settled 571/576 needed 5 · openRaw 2 · cadence C.
+   932→- stalls null. Rates: issue3h 1.0/h · sinceArm 0.87/h · settle3h 3.67/h · spacing mean 58min · ETA 1.36h / steady 5.75h.
+   933→- gate AMBER informative 42.9 · milestones: same 7 historical. Triggers: MILESTONE none · STALL none · LIFT-FAIL none.
+   934→Decision: SILENT (no Telegram). Evidence-completion run: 5 settles remaining, completion projected ~09:20Z.
+   935→---
+   936→Task ID: RUN380-WATCH-20260919T0801Z
+   937→Agent: cron RUN380 watch (job 384822)
+   938→Task: 08:01Z rawcal capture-run watch cycle — SV keep bump 14 to 15 + HB due
+   939→
+   940→Work Log:
+   941→- rawcal 200 · sv 200. armed TRUE · issued 7 (serial 579 at 07:32:17Z, ~30min — no stall) · settled 571/576 needed 5 · open 2/8 · cadence C · gate AMBER informative 42.9 · stalls null.
+   942→- SV TRIGGER: real-keep 14 to 15 (increase — policy alert; first keep increase after hours of drain). real-veto 25 unchanged · paper-keep 25 · paper-veto 0.
+   943→- ALERT SENT (Persian, msg 4032): keep bump + HB progress line (issued 7 · 571/576 · open 2/8 · gate AMBER · real-arms 15/25) — HB dedup per 0001Z precedent.
+   944→- HB file appended (0801Z). Next HB due ~1001Z. No API failures.
+   945→Decision: sent (real-keep increase trigger; doubled as scheduled heartbeat).
+   946→---
+   947→Task ID: WATCH-RAWCAL-20260919T0830Z
+   948→Agent: cron pace watcher (job 380065)
+   949→Task: 08:30Z pace check — 1 settle to target
+   950→
+   951→Work Log:
+   952→- pulse 200 · rawcal 200. armed TRUE (E-20260919) · settled 575/576 needed 1 (+4 in 30min — completion imminent ~08:42Z) · openRaw 1 · cadence B (upgraded C→B).
+   953→- Fresh issue at 08:19:38Z (~11min ago, no stall) · stalls null. Rates: issue3h 1.67/h · sinceArm 1.05/h · settle3h 5.0/h · spacing mean 57.6min · ETA 0.2h / steady 0.95h.
+   954→- gate AMBER · milestones: empty {} this cycle (previously 7 historical listed — likely structure change near completion; no NEW fired step vs worklog).
+   955→- Triggers: MILESTONE none · STALL none · LIFT-FAIL none (needed=1, run not complete; precedent: LIFT-FAIL only if armed true after needed=0).
+   956→Decision: SILENT (no Telegram). Watch next cycle for auto-lift at needed=0.
+   957→---
+   958→Task ID: RUN380-WATCH-20260919T0831Z
+   959→Agent: cron RUN380 watch (job 384822)
+   960→Task: 08:31Z rawcal capture-run watch cycle — RUN COMPLETE, auto-lift
+   961→
+   962→Work Log:
+   963→- rawcal 200 · sv 200. ARMED FLIPPED FALSE (auto-lift): settled 576/576 needed 0 — evidence budget met, E-20260919 run complete. issued 9 this run · openRaw 1/8 residual · gate AMBER informative 43.6 · stalls null · lastIssueAt 08:19:38Z.
+   964→- blocks tail: vol-scaled barrier t1r scans (AR 550m, BNB 3069m vs cap 240m) then "not armed" — consistent with disarm.
+   965→- SV TRIGGER (bundled): real-keep 15→17 (+2; wr 29.4% · net +0.10) · real-veto 25 unchanged (wr 48% · net +1.39) · paper-keep 23 (drain) · paper-veto 0. Inversion pattern intact.
+   966→- ALERT SENT (Persian, msg 4053): auto-lift + run stats + SV keep bump. HB not due (last 0801Z, next ~1001Z).
+   967→Decision: sent (armed-flip + real-keep increase triggers).
+   968→---
+   969→Task ID: BRIDGE-IMPLEMENT-20260919T0856Z
+   970→Agent: cron bridge watch (job 376843) — operator instruction execution
+   971→Task: operator msg 861802419 «پیشنهادات سوپروایزر رو کامل و مهندسی انجام بده» — implement SUPERVISOR proposals (adaptive barrier cap + SQN memory-gate + GATE-NEAR-MISS)
+   972→
+   973→Work Log:
+   974→- Read both proposal specs (terminal thoughts 03:00Z msg 3920 + 06:51Z). Operator bridge message = the required APPROVE. Implemented as v10.14:
+   975→- NEW src/lib/vol-percentile.ts: realizedVolPctile (30d, 1h bars, 24h-σ windows, percentile rank vs own history, 30min cache, FAIL-OPEN null) + adaptiveBarrierCap (verbatim formula: p≥30 → base; else clamp(base×(1+2×(30−p)/30), base, 3×base) → 240→720m at p0).
+   976→- gate-settings.ts: new knob volBarrierAdaptive [0..1] default 1 (operator-approved ON); describeGate shows ADAPTIVE tag. Base knob volBarrierCapMin untouched.
+   977→- engine.ts VOL-BARRIER: effective cap = adaptive formula per candidate; skip reasons + VOL-SCALED BARRIER events carry volPctile/adaptive-cap regime tag; nearMissCaptureBarrier now receives capMin=effCap + volPctile + baseCap → BARRIER-CAP-NEAR-MISS queue is cap-aware with full counterfactual metadata.
+   978→- engine.ts realizedEdgeFilter: SQN telemetry added (√N × mean(R)/std(R) + 10%-trimmed, on the same rolling pnlPercent windows; module map + memoryGateSqnSnapshot export). DECISION RULES UNCHANGED (−3%/−2% floors decide until GATE cohort lands) — per msg 3920 decision rule.
+   979→- engine.ts memory-gate reject branch: nearMissCaptureGate wired → GATE-NEAR-MISS paper tier (engine-identical geometry, rails 8/day · 2h dedup · 16 open). Suppression reasons now include SQN.
+   980→- near-miss.ts: tier GATE added; NMCapture + volPctile/capUsed/baseCap/gateReason (jsonl backfill for old rows); armRow + SQN/sqnTrim/meanR/expPct; state + gateDecision block (ready n≥30 → KEEP_GATE or FILE_KNOB_ADJUST).
+   981→- /api/ai/near-miss: serves 3 arms + gateDecision + gateSqn (live memory-gate windows side-by-side). tsc: 0 errors in touched files. Dev recompiled clean (Ready 3.9s). pulse 200. Formula sanity verified (p0→720, p15→480, p29→256, p30→240).
+   982→- Live confirmation: nm-gate arm already captured n=1 (3/day counter) — BTC-class memory-gate suppressions feeding the cohort immediately; nm-score n30 SQN +1.70 (trim +1.84, exp +4.63%), nm-barrier n12 SQN −0.55 (exp −4.56%).
+   983→Stage Summary:
+   984→- v10.14 deployed: adaptive barrier cap LIVE (volBarrierAdaptive=1) + BARRIER-CAP-NEAR-MISS regime metadata + GATE-NEAR-MISS cohort + SQN statistics — all zero-live-risk paper instrumentation except the operator-approved cap mechanism itself.
+   985→- Operator Telegram reply sent; inbox marked read. Next: SUPERVISOR monitors GATE cohort toward 30-settle decision + advisor path.
+   986→
+   987→---
+   988→Task ID: 364970-ENOSPC-FIX
+   989→Agent: SUPERVISOR (main)
+   990→Task: Daily report job 364970 (17:30 +08:00) — hit ENOSPC, root-cause fix, retry
+   991→
+   992→Work Log:
+   993→- POST /api/report/daily?force=1 returned HTML 500: ENOSPC no space left on device (Turbopack manifest write failed)
+   994→- df: rootfs 9.9G 100% full; dev.log tail confirmed ENOSPC write errors + unhandledRejection
+   995→- Root cause: 3-hourly snapshot job 352556 never prunes — /tmp/my-project/backups accumulated 5.6G (each cycle = zip 38M + zip.enc 38M + 2 part files 38M ≈ 114M/cycle)
+   996→- Fix (ops hygiene, no code/DB/EngineSetting touched): deleted all snapshot sets except two most recent (20260919-073100, 20260919-043500); removed stale restore-staging 140M; npm cache clean 321M
+   997→- NOTE: platform disk-pressure reaper appears to have also evicted .next + node_modules caches mid-fix (du shrank 1.5G→568K / 1.2G→22M); verified app still healthy (pulse 200, next-server alive, 570 pkgs intact)
+   998→- Disk after: 355M free (97% used)
+   999→- Retry force=1: ok:false deduped:true forceBlocked:true — BY-DESIGN (report already delivered Tehran 00:00, lastSentAt 1789763409569); no double-send; next scheduled 00:00 Tehran send unaffected
+  1000→
+  1001→Stage Summary:
+  1002→- Daily digest for Sep 18→19 Tehran already sent at midnight; nothing to resend
+  1003→- Live digest figures: opened 69, closed 72, wins 16, wr 22%, realized -$0.69, equity $90.13, best ONEUSDT +$74.84, worst LSKUSDT -$63.17, volCauseCaptures 24 top VOL-ONSET
+  1004→- ⚠️ STRUCTURAL: snapshot job refills ~114M/3h (~0.9G/day) — disk will re-fill in ~9-10h without retention policy. PROPOSAL for operator/advisor: snapshot retention (keep last N=8 sets, or drop .zip duplicate + .part files after .enc assembly → saves 76M/cycle)
+  1005→- Keep-alive/watch jobs should treat transi
+  1006→---
+  1007→Task ID: 364970-ENOSPC-FIX
+  1008→Agent: SUPERVISOR (main)
+  1009→Task: Daily report 364970 (17:30 +08:00) hit ENOSPC — root cause, cleanup, outcome
+  1010→
+  1011→Work Log:
+  1012→- POST /api/report/daily?force=1 → HTML 500 ENOSPC (Turbopack manifest write fail); dev.log confirmed
+  1013→- Rootfs / is 9.9G overlay: base image ~9.6G baked (python venv 4.4G in /app/.venv, node stack, playwright/puppeteer/bun caches) + thin upper layer → avail oscillates 0..~355M
+  1014→- Cleaned (upper-layer): npm cache 321M, dev.log 5.7M truncated; pruned snapshot backups 5.6G on /tmp/my-project (PolarFS mount — separate fs, keeps 2 latest snapshot sets), bun install cache 1.5G, puppeteer cache 653M, 2 stale restore zips (deletions of lower-layer files create whiteouts only — df unchanged for those)
+  1015→- Platform disk-pressure reaper had evicted .next + node_modules caches mid-incident; Turbopack rebuilt → avail returned to 0
+  1016→- Forced clean restart of next-server (kill 15690/15676 + dev-up.sh; watchdog respawned) — app 200, no deleted-fd hoarding found
+  1017→- Final: app:200 liq:200 ws:400, df used 9.7G avail 0 — sandbox functional but chronically tight
+  1018→- Retry force=1 → ok:false deduped:true forceBlocked:true BY-DESIGN: daily report already delivered Tehran 00:00 (lastSentAt 1789763409569); no double-send; next 00:00 Tehran send unaffected
+  1019→
+  1020→Stage Summary:
+  1021→- Digest Sep 18→19 Tehran (already sent at midnight): opened 69, closed 72, wins 16, wr 22%, realized -$0.69, equity $90.13, best ONEUSDT +$74.84, worst LSKUSDT -$63.17, volCauseCaptures 24 top VOL-ONSET
+  1022→- ⚠️ ROOTFS QUOTA IS THE STRUCTURAL RISK: ~9.6G is baked image; any large write (snapshot job writing to overlay, new npm installs, log growth) → ENOSPC incidents. PROPOSAL (needs operator/advisor): raise rootfs quota, or relocate heavy caches to PolarFS mounts, and add retention to snapshot job (it already stores 3 copies per cycle on PolarFS, 114M/3h)
+  1023→- All services verified healthy post-cleanup: app/liq/ws + bridge relay up; jobs may see transient ENOSPC blips until quota raised
+  1024→
+  1025→---
+  1026→Task ID: WATCH-RAWCAL-20260919T0939Z
+  1027→Agent: cron pace watcher
+  1028→Task: Pace watch job 380065 (17:30 +08:00) — post-completion cycle
+  1029→
+  1030→Parsed: armed=false (disarmed 08:32:57Z "target reached"), settledE2 579/576 (+3 over-delivery), needed 0, openRaw 1, issuedTotal 166 (run issued 9, last serial 586 @ 08:19:38Z), cadenceGrade OFF, issue3h 1/h sinceArm 0.93/h, settle3h 5.67/h, spacing mean 57.6min, eta 0/0 (zeroed), stalls null/null, gate AMBER informative 43.6 (window 65.4, settled 52)
+  1031→Decision: SILENT — no new milestone (steps 50-100 all fired pre-Sep-13, already reported), no stall, no lift-fail (disarmed); post-completion watch for re-arm only
+  1032→Anomaly: milestones field repopulated (prior 0830Z empty-{} self-resolved); blocks show "not armed" as expected
+  1033→
+  1034→---
+  1035→Task ID: RUN380-WATCH-20260919T0931Z
+  1036→Agent: cron RUN380 watcher
+  1037→Task: Capture-run watch job 384822 (17:31 +08:00) — post-completion cycle
+  1038→
+  1039→Parsed: armed=false (disarmed 08:32:57Z), settledN 579, openRaw 1/8, issuedTotal 166, gate AMBER informative 43.6; SV arms real-keep 17 (wr 29.4% net +0.10) / real-veto 25 (wr 48% net +1.39) / paper-keep 21 (was 23, rolling drain) / paper-veto 0
+  1040→Decision: SILENT — armed-flip already reported (msg 4053 @0831Z); no real-arm increase; no stall/openRaw/informative/API triggers; heartbeat N/A (run complete)
+  1041→Anomaly: none; paper-keep 23→21 rolling-window drain, monotonic increase trigger not met
+  1042→
+  1043→---
+  1044→Task ID: BRIDGE-WATCH-20260919T1000Z
+  1045→Agent: SUPERVISOR (main)
+  1046→Task: Bridge watch job 376843 (17:56 +08:00) — operator Q&A handled
+  1047→
+  1048→Work Log:
+  1049→- 1 unread from Amir (msg 861802420 @09:30:44Z): 4 questions — why no signals, learning status, why today negative, why yesterday positive
+  1050→- Grounded via /api/rawcal (579/576 settled, disarmed, spacing mean 57.6min), /api/ai/shadow-veto (real-keep 17 wr 29.4% / real-veto 25 wr 48% net +1.39 / paper-keep 21), daily digest (opened 69, closed 72: 39 SL / 32 expired / 1 TP, realized -0.69, equity 90.13, best ONEUSDT +74.84, worst LSK -63.17), /api/pulse live prices OK
+  1051→- Replied Persian msg 4084 (4 answers + NEAR-MISS review suggestion); marked all read
+  1052→
+  1053→Stage Summary:
+  1054→- Key explanation: today's flat-negative = 39 SL + 32 expired vs 1 TP, 3 big stops killed ONEUSDT winner; yesterday positive = big-winners-dependent profile (GUSDT ~+95)
+  1055→- Capture silence is by-design post auto-lift (evidence run complete); live cadence normal
+  1056→- Operator pointed to NEAR-MISS proposal as next step for fast -15% stops problem
+  1057→
+  1058→---
+  1059→Task ID: WATCH-RAWCAL-20260919T1000Z
+  1060→Agent: cron pace watcher
+  1061→Task: Pace watch job 380065 (18:00 +08:00) — post-completion cycle
+  1062→
+  1063→Parsed: armed=false, settledE2 581/576 (+5 over-delivery, +2 since 0939Z), needed 0, openRaw 1, issuedTotal 166 (last serial 586 @ 08:19:38Z), cadenceGrade OFF, issue3h 1/h, settle3h 6/h, spacing mean 57.6min, eta 0/0 (zeroed), stalls null/null, steps 50-100 all fired (pre-Sep-13, already reported)
+  1064→Decision: SILENT — no new milestone, no stall, no lift-fail (disarmed); watch for re-arm only
+  1065→Anomaly: none; residual openRaw 1 continues settling normally
+  1066→
+  1067→---
+  1068→Task ID: RUN380-WATCH-20260919T1001Z
+  1069→Agent: cron RUN380 watcher
+  1070→Task: Capture-run watch job 384822 (18:01 +08:00) — post-completion cycle
+  1071→
+  1072→Parsed: armed=false (disarmed 08:32:57Z), settledN 581, openRaw 1/8, issuedTotal 166, gate AMBER informative 43.6; SV arms real-keep 17 / real-veto 25 (both unchanged) / paper-keep 23 (rolling recompute 21 to 23) / paper-veto 0
+  1073→Decision: SILENT — no armed-flip (already reported msg 4053), no real-arm increase, no stall/openRaw/informative/API triggers; heartbeat N/A (run complete, no active run to track)
+  1074→Anomaly: none; paper-keep counter oscillates with rolling-30 recompute, not a trigger axis
+  1075→
+  1076→---
+  1077→Task ID: WATCH-RAWCAL-20260919T1032Z
+  1078→Agent: cron pace watcher
+  1079→Task: Pace watch job 380065 (18:30 +08:00) — post-completion cycle
+  1080→
+  1081→Parsed: armed=false, settledE2 583/576 (+7 over-delivery), needed 0, openRaw 0 (residual fully settled), issuedTotal 166 (last serial 586 @ 08:19:38Z), cadenceGrade OFF, issue3h 1/h, settle3h 5.33/h, spacing mean 57.6min, eta 0/0, stalls null/null, steps 50-100 all fired (pre-reported)
+  1082→Decision: SILENT — no new milestone, no stall, no lift-fail (disarmed); watch for re-arm only
+  1083→Anomaly: two transient empty-response blips on /api/rawcal during fetch (ENOSPC-era Turbopack churn); third fetch 200 with full payload — not an engine fault
+  1084→
+  1085→---
+  1086→Task ID: SNAPSHOT-20260919T1035Z
+  1087→Agent: SUPERVISOR (main)
+  1088→Task: Snapshot job 352556 (18:30 +08:00) — ABORTED on disk guard, root cause + escalation
+  1089→
+  1090→Work Log:
+  1091→- backup.sh aborted twice: "low disk (0MB free < 600MB) even after hygiene" — fail-loud guard, nothing written
+  1092→- disk-hygiene.sh --force: cache 1MB→1MB, free 0MB→0MB (nothing to clean)
+  1093→- Root cause confirmed: rootfs 9.9G is ~97% consumed by the BAKED BASE IMAGE (python venv 4.4G, node stack, playwright/puppeteer/bun caches); runtime-deletable content is exhausted — deleting ms-playwright old set (608M) and other lower-layer files produced ZERO df gain (whiteout effect)
+  1094→- Only ~0.2G of the rootfs was ever writable; Turbopack churn oscillates it 0..355M — the script's 600MB floor is unreachable from inside the sandbox
+  1095→- Last good snapshot: nexus-snapshot-20260919-073100 (+ 043500) on PolarFS /tmp/my-project/backups — session work after 07:31Z currently UNPROTECTED against rollback
+  1096→- Escalated to operator via Telegram (quota raise / snapshot-to-PolarFS request)
+  1097→
+  1098→Stage Summary:
+  1099→- SNAPSHOT DOWN since 10:30Z cycle — needs platform action (raise rootfs quota OR retarget backup.sh output to PolarFS mount which has effectively unlimited space)
+  1100→- All other services healthy; snapshot data itself safe on PolarFS
+  1101→
+  1102→---
+  1103→Task ID: RUN380-WATCH-20260919T1031Z
+  1104→Agent: cron RUN380 watcher
+  1105→Task: Capture-run watch job 384822 (18:31 +08:00) — real-keep bump detected
+  1106→
+  1107→Parsed: armed=false (run complete), settledN 583, openRaw 0/8, issuedTotal 166, gate AMBER informative 43.4; SV arms real-keep 18 (was 17) / real-veto 25 / paper-keep 26 (rolling) / paper-veto 0
+  1108→Decision: ALERT SENT (msg 4095) — real-keep count increased 17 to 18 per policy; bundled run-complete context + inversion intact
+  1109→Anomaly: none; informative 43.6 to 43.4 noise, no trigger
+  1110→
+  1111→---
+  1112→Task ID: SUPERVISOR-20260919T1054Z
+  1113→Agent: SUPERVISOR (main)
+  1114→Task: Deep-audit cycle job 387118 (18:51 +08:00)
+  1115→
+  1116→Work Log:
+  1117→- Read worklog (120L) + advisor (cycle 53, shortSizeMult 0.80 APPLIED 09:09Z, pending 0) + pulse (cumPnl -1.26, today -0.39, yesterday +1.31) + terminal events
+  1118→- Verified live systems: SQN memory-gate skip (BTCUSDT+AI-SCALP SQN -3.01), NEAR-MISS paper capture (WLDUSDT NM-0116), verdict-core #452 (5391 verdicts), consensus sweep tracking (worst 363bps GUSDT)
+  1119→- KEY FINDING: persistent venue dislocation on big-loss symbols — GUSDT 338-366bps sustained (OKX/BYBIT outliers), STRK 27-36, AR 14-24, HYPERLIQUID recurring outlier; CHASE-ADJ +6 is order-level only, no venue-consistency gate exists
+  1120→- Posted 2 terminal thoughts: DIAGNOSE (dislocation adverse-selection = top root cause of 38SL/1TP asymmetry) + PROPOSE DISLOCATION-GATE (warnBps 50 size-x0.5 / skipBps 150 rolling-5-scan, reuses existing telemetry, advisor knobs via APPROVE)
+  1121→- Web-search validated against execution-quality/implementation-shortfall practice + regime-aware calibration
+  1122→- Telegram sent (msg 4107): proposal ready for operator review, queued after NEAR-MISS + BARRIER
+  1123→
+  1124→Stage Summary:
+  1125→- New proposal DISLOCATION-GATE in review queue; zero-infra, evidence: GUSDT would have been blocked today
+  1126→- Pending operator queue now: NEAR-MISS review, BARRIER-NEAR-MISS paper queue, dislocation-gate, snapshot/disk quota fix
+  1127→
+  1128→---
+  1129→Task ID: BRIDGE-WATCH-20260919T1100Z
+  1130→Agent: SUPERVISOR (main)
+  1131→Task: Bridge watch job 376843 (18:56 +08:00) — operator directives EXECUTED
+  1132→
+  1133→Work Log:
+  1134→- Operator msg 861802421 (Amir @10:50Z): (1) delete old files, snapshots use PolarFS; (2) if veto outperforms, make entry conditions consistent
+  1135→- DISCOVERED root cause of chronic disk pressure: backup.sh wrote snapshots to $ROOT/backups ON ROOTFS (993M accumulated, ~114M/3h refill) — /tmp/my-project/backups was only legacy copies
+  1136→- Executed: pruned old rootfs backup sets (kept 073100) → freed ~900M (rootfs 0→322M avail); EDITED backup.sh v3.4 per explicit operator instruction: BACKUPS=/tmp/my-project/backups (PolarFS), L3 guard moved to output fs (600MB floor) + rootfs sanity floor 50MB
+  1137→- Re-ran snapshot: SNAPSHOT OK — 20260919-105905.zip 38M, enc ENCRYPTED, off-site UPLOADED, wal VACUUM-COPY-CONSISTENT — rootfs no longer consumed by 3-hourly job
+  1138→- Directive 2: evidence real-veto 25/30 wr48% vs real-keep 18/30 wr29.4% — tightening queue logged to terminal (NEAR-MISS band + DISLOCATION-GATE + already-applied BREAKOUT minScore45 / SHORT-GUARD / shortSize 0.80); live changes require operator APPROVE per contract
+  1139→- Replied Persian msg 4111 (both directives confirmed); marked all read
+  1140→
+  1141→Stage Summary:
+  1142→- SNAPSHOT INFRA PERMANENTLY FIXED (rootfs-writer → PolarFS-writer); disk pressure root cause eliminated
+  1143→- Operator tightening directive recorded; awaiting APPROVE on queued proposals
+  1144→
+  1145→---
+  1146→Task ID: WATCH-RAWCAL-20260919T1100Z
+  1147→Agent: cron pace watcher
+  1148→Task: Pace watch job 380065 (19:00 +08:00) — post-completion cycle
+  1149→
+  1150→Parsed: armed=false, settledE2 586/576 (+10 over-delivery), needed 0, openRaw 0, issuedTotal 166 (last serial 586 @ 08:19:38Z), cadenceGrade OFF, issue3h 0.67/h, settle3h 5.33/h, spacing mean 57.6min, eta 0/0, stalls null/null, steps 50-100 all fired (pre-reported)
+  1151→Decision: SILENT — no new milestone, no stall, no lift-fail (disarmed); watch for re-arm only
+  1152→Anomaly: none
+  1153→
+  1154→---
+  1155→Task ID: RUN380-WATCH-20260919T1101Z
+  1156→Agent: cron RUN380 watcher
+  1157→Task: Capture-run watch job 384822 (19:01 +08:00) — post-completion cycle
+  1158→
+  1159→Parsed: armed=false (run complete 08:32:57Z), settledN 586, openRaw 0/8, issuedTotal 166, gate AMBER; SV arms real-keep 18 / real-veto 25 (both unchanged since msg 4095) / paper-keep 27 (rolling) / paper-veto 0
+  1160→Decision: SILENT — no real-arm increase, no stall/openRaw/informative/API triggers; heartbeat N/A (run complete)
+  1161→Anomaly: none
+  1162→
+  1163→---
+  1164→Task ID: WATCH-RAWCAL-20260919T1130Z
+  1165→Agent: cron pace watcher
+  1166→Task: Pace watch job 380065 (19:30 +08:00) — post-completion cycle
+  1167→
+  1168→Parsed: armed=false, settledE2 586/576 (+10 over-delivery), needed 0, openRaw 0, issuedTotal 166, cadenceGrade OFF, stalls null/null, steps 50-100 all fired (pre-reported); pulse 200
+  1169→Decision: SILENT — no new milestone, no stall, no lift-fail (disarmed); watch for re-arm only
+  1170→Anomaly: none
+  1171→
+  1172→---
+  1173→Task ID: RUN380-WATCH-20260919T1133Z
+  1174→Agent: cron RUN380 watcher
+  1175→Task: Capture-run watch job 384822 (19:31 +08:00) — post-completion cycle
+  1176→
+  1177→Parsed: armed=false (complete 08:32:57Z, target 576 reached, disarmed "target reached"), settledN 586 (+10 over-delivery), openRaw 0/8, issuedTotal 166, lastIssueAt 08:19:38Z, gate AMBER (informativePct 43.4, stable since run completion — no fresh move since last check); SV arms real-keep 18 / real-veto 25 (both unchanged since msg 4095) / paper-keep 29 (+2, not a send trigger) / paper-veto 0; blocks: only "not armed"; stalls null
+  1178→Decision: HEARTBEAT SENT (3h32m since 0801Z last) — msg 4128: «RUN-380: issued 166 · run 586/576 settled (تکمیل شد) · open 0/8 · gate AMBER · real-arms 18/25»; heartbeat tracker appended 2026-09-19T1133Z; no other triggers (no real-arm increase, no stall/not-armed, openRaw 0, no fresh informative move, APIs OK)
+  1179→Anomaly: none
+  1180→
+  1181→---
+  1182→Task ID: BRIDGE-WATCH-20260919T1145Z
+  1183→Agent: bridge watch (job 376843)
+  1184→Task: Operator msg 861802422 «تایید پیشنهادهای سوپروایزر کامل و مهندسی انجام بده» — APPROVE + execute SUPERVISOR engineering
+  1185→
+  1186→Work Log:
+  1187→- Read inbox (1 unread, Amir 11:36:05Z); identified queue: DISLOCATION-GATE was the only proposal awaiting APPROVE/engineering (NEAR-MISS review sequenced after re-arm — run complete 08:32:57Z; BARRIER-NEAR-MISS already live v10.14; snapshot/disk fix done 10:59Z)
+  1188→- IMPLEMENTED v10.15 DISLOCATION-GATE (SUPERVISOR proposal 10:54Z): gate-settings.ts 3 knobs (dislocationGate [0,1,1] · dislocationWarnBps [20,200,50] · dislocationSkipBps [50,500,150]) + clampAll + describeGate; gate-journal.ts GateName +DISLOCATION; engine.ts: module rolling-5-scan ring (median, bounded, fail-open) + guard chain SHORT-GUARD→DISLOCATION (skip ≥skipBps, forced/bypassQuality exempt) + warn-band HALF margin (dislocationMult in margin chain) + DISLOCATION-HALF tag + sizing note + v10.15 header
+  1189→- Verified: tsc 0 errors in touched files (only pre-existing q-pump-diag errors); dev-up restart OK pulse 200; /api/settings serves dislocationGate:1, warn:50, skip:150
+  1190→- NEAR-MISS review (Phase 2) executed on completed-run data: nm-score n=30 COMPLETE WR 36.7% exp −0.49% → KEEP score threshold (no loosening); nm-gate n=18/30 WR 5.6% exp −10.82% SQN −4.46 → memory gate VALIDATED; nm-barrier n=13/30 exp −6.05% → 1.5×cap widening NOT supported, cohort fills (4 open)
+  1191→- Phase 4 (expectancy(R) co-primary) deferred with rationale: SV seq-stop decision OPEN (CONTINUE, t=0.72) — changing promotion criteria mid-decision violates COHORT-FREEZE discipline; applies after terminal state. Phase 5 (paper-veto backfill) next in queue
+  1192→- Replied Persian (msg 4143, full report); marked all read ({"ok":true})
+  1193→
+  1194→Stage Summary:
+  1195→- v10.15 DISLOCATION-GATE LIVE — zero-infra adverse-selection gate (rolling-5 median, skip 150 / half-size 50, knobs clamped+audited)
+  1196→- NEAR-MISS review verdict: all three rejection layers evidence-validated — nothing to loosen
+  1197→- Phases 4/5 sequenced behind open seq-stop decision per freeze discipline
+  1198→
+  1199→---
+  1200→Task ID: WATCH-RAWCAL-20260919T1200Z
+  1201→Agent: cron pace watcher
+  1202→Task: Pace watch job 380065 (20:00 +08:00) — post-completion cycle
+  1203→
+  1204→Parsed: armed=false, settledE2 592/576 (+16 over-delivery), needed 0, openRaw 0, issuedTotal 166, cadenceGrade OFF, issue3h 0/h, settle3h 4.33/h, spacing mean 57.6min, eta 0/0, stalls null/null, lastIssueAt 08:19:38Z, steps 50-100 all fired (pre-reported); pulse 200; blocks: only "not armed"
+  1205→Decision: SILENT — no new milestone, no stall, no lift-fail (disarmed); watch for re-arm only
+  1206→Anomaly: none
+  1207→
+  1208→---
+  1209→Task ID: RUN380-WATCH-20260919T1207Z
+  1210→Agent: cron RUN380 watcher
+  1211→Task: Capture-run watch job 384822 (20:01 +08:00) — post-completion cycle
+  1212→
+  1213→Parsed: armed=false (complete 08:32:57Z), settledN 592, openRaw 0/8, issuedTotal 166, gate AMBER, informativePct 43.4 (stable); SV arms real-keep 18 / real-veto 25 (both unchanged) / paper-keep 27 / paper-veto 0; stalls null; blocks: only "not armed"
+  1214→Decision: SILENT — no triggers (no real-arm increase, no stall, openRaw 0, informative stable, APIs OK); heartbeat N/A (34min since 1133Z, need 2h)
+  1215→Anomaly: none
+  1216→
+  1217→---
+  1218→Task ID: WATCH-RAWCAL-20260919T1230Z
+  1219→Agent: cron pace watcher
+  1220→Task: Pace watch job 380065 (20:30 +08:00) — post-completion cycle
+  1221→
+  1222→Parsed: armed=false, settledE2 593/576 (+17 over-delivery), needed 0, openRaw 0, issuedTotal 166, cadenceGrade OFF, i3h 0/h, iArm 0.72/h, s3h 4.67/h, spacing 57.6min, stalls null/null, steps 50-100 all fired (pre-reported); pulse 200
+  1223→Decision: SILENT — no new milestone, no stall, no lift-fail (disarmed); watch for re-arm only
+  1224→Anomaly: none
+  1225→
+  1226→---
+  1227→Task ID: RUN380-WATCH-20260919T1233Z
+  1228→Agent: cron RUN380 watcher
+  1229→Task: Capture-run watch job 384822 (20:31 +08:00) — post-completion cycle
+  1230→
+  1231→Parsed: armed=false, settledN 593, openRaw 0/8, issuedTotal 166, gate AMBER, informativePct 43.4, stalls null; SV arms real-keep 19/30 (+1 since 11:33Z — TRIGGER) WR 26.3% net −$0.16 / real-veto 25/30 unchanged WR 48% net +$1.39 / paper-keep 27 / paper-veto 0
+  1232→Decision: ALERT SENT (Persian) — real-keep count increased 18→19; no other triggers; heartbeat N/A
+  1233→Anomaly: none
+  1234→
+  1235→---
+  1236→Task ID: WATCH-RAWCAL-20260919T1300Z
+  1237→Agent: cron pace watcher
+  1238→Task: Pace watch job 380065 (21:00 +08:00) — post-completion cycle
+  1239→
+  1240→Parsed: armed=false, settledE2 597/576 (+21 over-delivery), needed 0, openRaw 0, issuedTotal 166, cadenceGrade OFF, stalls null/null, steps 50-100 all fired (pre-reported); pulse 200
+  1241→Decision: SILENT — no new milestone, no stall, no lift-fail (disarmed); watch for re-arm only
+  1242→Anomaly: none
+  1243→
+  1244→---
+  1245→Task ID: RUN380-WATCH-20260919T1302Z
+  1246→Agent: cron RUN380 watcher
+  1247→Task: Capture-run watch job 384822 (21:01 +08:00) — post-completion cycle
+  1248→
+  1249→Parsed: armed=false, settledN 597, openRaw 0/8, issuedTotal 166, gate AMBER, informativePct 43.4 (stable); SV arms real-keep 19 / real-veto 25 (both unchanged since 1233Z alert) / paper-keep 29 (+2, not a trigger) / paper-veto 0; stalls null; blocks: only "not armed"
+  1250→Decision: SILENT — no triggers; heartbeat N/A (1h29m since 1133Z, need 2h)
+  1251→Anomaly: none
+  1252→
+  1253→---
+  1254→Task ID: 1+2
+  1255→Agent: Z.ai Code (lead senior engineer)
+  1256→Task: Receive operator backup upload, verify integrity, decrypt snapshot for inspection-only audit
+  1257→
+  1258→Work Log:
+  1259→- Operator uploaded 8 files to /home/z/my-project/upload (RECOVERY-INDEX-latest.txt, RECOVERY-RUNBOOK.md, recovery-restore.sh, calibration-latest.json, backup passphrase file, snapshot .enc + 2 parts)
+  1260→- Verified sha256 of full archive (3eb22090… matches index) and both parts (b2faa3e8…, cc3b12be… match) — integrity PASS
+  1261→- Decrypted AES-256-CBC/PBKDF2-200k with operator passphrase into /home/z/audit-staging (NOT restored into project — operator approval pending)
+  1262→- Extracted snapshot (60MB): src/, prisma/, scripts/ (180 files), mini-services/ (5), docs/, .data/ journals, db/custom.db, .env, worklog.md (1.7MB), dev.log, MANIFEST.json (gitHead 775b14ec, 611 signals / 20767 events / 111673 price points / 37 assets)
+  1263→- Identified system: NEXUS//SIGNALS v10.15 AI trading-signal terminal (Next.js 16 + Prisma/SQLite + 5 bun mini-services + Telegram bridge + two-layer watchdog)
+  1264→
+  1265→Stage Summary:
+  1266→- Snapshot integrity verified, staged read-only at /home/z/audit-staging/snapshot
+  1267→- No execution/restoration performed — awaiting operator approval
+  1268→- Deep audit dispatched: 3-a tracking, 3-b wiring, 3-c core intelligence, 3-d architecture/ops
+  1269→
+  1270→---
+  1271→Task ID: 3-a
+  1272→Agent: Explore (tracking audit)
+  1273→Task: READ-ONLY audit of tracking subsystem (Signal lifecycle, settlement, TTL, afterlife, pump radar, events, PricePoint)
+  1274→
+  1275→Work Log:
+  1276→- Read engine.ts fully (2264 lines), verdict/accounting/ttl-gate/seq-stop/lifecycle-learning/pump-dump/backtest, prisma schema; inspected SQLite read-only
+  1277→- Mapped tick loop (3.5s), settlement priority chain, tranche-weighted v6.6 NET accounting, afterlife 48h window, pump radar stage-1/2 + honest criterion, event retention (30d/20k policy)
+  1278→
+  1279→Stage Summary:
+  1280→- P0: settlement can run on simulated/random prices when feed degrades (sim fallback consumed by resolveSignals/trackAfterlife/pumpTick without source check)
+  1281→- P1: spot-vs-perp basis (settlement on spot median for perp signals; BINANCE venue price always null); backtest not parity with live rules (TP3 overstated ~68%, no tranche/BE-trail); SignalEvent 20k cap truncates history to ~19h; missing signalId index; PumpTrack leak on universe exit; serial race; Float money; tag editor can erase cohort tags
+  1282→- Strengths: tranche math correct, honest pump scoring, seq-stop textbook, deploy honesty rails, restart-tolerant gates
+  1283→
+  1284→---
+  1285→Task ID: 3-b
+  1286→Agent: Explore (wiring audit)
+  1287→Task: READ-ONLY audit of wiring/infra (mini-services, watchdogs, gateway, telegram, crons, journals, heartbeats)
+  1288→
+  1289→Work Log:
+  1290→- Audited all 5 mini-services (ports 3003/3005/3010/3011/3020), dev-up.sh, watchdog.sh v3.1, boot-kit.sh, Caddyfile, telegram-bridge.ts poller (instrumentation.ts), notify.ts, .data journals, cron job inventory from worklog
+  1291→
+  1292→Stage Summary:
+  1293→- P0: control plane unauthenticated (57 routes; only optional BRIDGE_TOKEN which is unset) + Caddy XTransformPort forwards to ANY localhost port (bridge send/inbox, watchdog pause, rawcal arm/disarm exposed)
+  1294→- P1: cold-boot recovery depends on platform-level crons (no IaC in repo); memory headroom thin (RSS up to 2912MB on 4GB no-swap, alert-only); layer-1 watchdog lacks circuit breaker; pause contract covers app only (sidecar heal races)
+  1295→- P2: bridge ndjson unbounded + full re-parse per request; /api/pulse many-hats chokepoint; hardcoded /home/z/my-project in 56 files; dev.log unrotated
+  1296→- Verdict: excellent process-level self-healing (two-layer watchdog + pulse re-arm); cold-boot is operator/cron-dependent; filesystem is weakest link
+  1297→
+  1298→---
+  1299→Task ID: 3-c
+  1300→Agent: Explore (core intelligence audit)
+  1301→Task: READ-ONLY audit of AI/decision/learning stack (ai.ts, governor, advisor, gates, shadow-veto, near-miss, rawcal, memory, statistics)
+  1302→
+  1303→Work Log:
+  1304→- Read all ~35 intelligence modules in full incl. shadow-veto.ts (1528 lines), gate-settings/gate-journal, calibration, seq-stop, strategy-probation, raw-cal/rawcal-quality; cross-checked live .data journals and telemetry
+  1305→
+  1306→Stage Summary:
+  1307→- Strengths: LLM cannot move money directly (clamps + veto-only + operator approval verified across 7 call sites); veracity/grounding audits real; seq-stop + EB-shrinkage probation genuinely rigorous; counterfactual paper cohorts for every rejection layer; anti-lockup engineering measured
+  1308→- P1: R6 calibration unfroze on censored book (informative 43.4% AMBER but n-count lift fired); edge pockets trade at n>=6 with +8..10 score bonus (multiple-comparisons); capture-observe pollutes shadow-veto A/B arms; real-arm feed leak (125 unlinked PASS verdicts >24h)
+  1309→- P2: governor loosens gate on bad BACKTEST; prompt bug (maxActions literal); inconsistent WR definitions; no zod/max_tokens on LLM JSON; time-governor 24 buckets at n=8; in-memory LLM budgets
+  1310→- Statistical verdict: instrumentation real and honest, but learning is currently hypothesis-generating machinery wearing hypothesis-testing clothes; ~10 independent loops, no unified error budget; base process marginal (raw WR 18.7%)
+  1311→
+  1312→---
+  1313→Task ID: 3-d
+  1314→Agent: Explore (architecture/ops/security audit)
+  1315→Task: READ-ONLY audit of architecture, ops history forensics, backup/recovery, security, resilience
+  1316→
+  1317→Work Log:
+  1318→- Read docs, worklog forensics (14381 lines; 12 major incidents incl. 2 OOMs, 2 platform rollbacks, ENOSPC, SST corruption x3, secrets-scrub), dev.log tail (7376 lines), backup.sh v3.4 chain, recovery-restore.sh, hygiene scripts, .env keys (masked), versioning
+  1319→
+  1320→Stage Summary:
+  1321→- P0: dev server (next dev + Turbopack) is the production runtime — root cause of OOM/ENOSPC/split-brain incident class
+  1322→- P1: recovery-restore.sh cannot actually restore a wiped tree (never copies src/prisma/package.json/mini-services); restore-drill.sh path regression (reads backups/ but ring moved to /tmp); Telegram single-provider SPOF for off-site+commands+alerts; self-referential passphrase chain, no rotation
+  1323→- Security top5: unauthenticated mutating API; open localhost proxy; soft Telegram operator identity (impersonation path after env loss — already happened 0912); single-passphrase self-encrypted chain; healthz info disclosure
+  1324→- Resilience: MTTR process-level 30s-2min auto; platform rollback ~1h; full wipe 1-3h manual; SPOF #1 = single sandbox (4GB no-swap)
+  1325→

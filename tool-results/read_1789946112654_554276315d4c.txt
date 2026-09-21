@@ -1,0 +1,402 @@
+  1400→        const extreme = erupUp ? Math.max(...post.map((b) => b.high)) : Math.min(...post.map((b) => b.low));
+  1401→        const leg = Math.abs(extreme - erupRef);
+  1402→        if (leg / erupRef >= 0.003) {
+  1403→          // clean impulse leg ≥0.3% — otherwise the "burst" is noise, don't gate on it
+  1404→          const retr = leg > 0 ? (erupUp ? extreme - asset.price : asset.price - extreme) / leg : 1;
+  1405→          if (retr < 0.3) {
+  1406→            void recordGateBlock({ gate: "ONSET-RETEST", symbol: asset.symbol, direction, reason: `chasing a ${erupUp ? "UP" : "DOWN"} eruption ${onsetInfo.minutesSince.toFixed(0)}m old — ${(retr * 100).toFixed(0)}% retraced, ≥30% required` });
+  1407→            if (Date.now() - lastRetestGateEventAt > 600_000) {
+  1408→              lastRetestGateEventAt = Date.now();
+  1409→              await fireEvent(null, asset.symbol, "ENGINE", "warn", `VOL-ONSET RETEST GATE: ${asset.symbol} ${direction} blocked — chasing a ${erupUp ? "UP" : "DOWN"} eruption ${onsetInfo.minutesSince.toFixed(0)}m old with only ${(retr * 100).toFixed(0)}% retracement (need ≥30%). Entry on retest, not on burst — DURATION-LAB evidence: 9 fast-kills were untested-burst chases.`);
+  1410→            }
+  1411→            return { error: `vol-onset retest gate: ${asset.symbol} ${direction} chases a hot ${erupUp ? "UP" : "DOWN"} eruption (${(retr * 100).toFixed(0)}% retraced, ≥30% required) — wait for the retest`, status: 409 };
+  1412→          }
+  1413→          onsetRetested = true;
+  1414→        }
+  1415→      }
+  1416→    }
+  1417→  }
+  1418→
+  1419→  // v6.4 VOL-CAUSE hook (operator: research top-volatility causes → track →
+  1420→  // learn → use). When this symbol recently entered MARKET MATRIX top-|Δ24h|
+  1421→  // with an attributed cause whose LEARNED continuation profile passed the
+  1422→  // gate (n ≥ 30 · cont ≥ 55% · |mean fwd6h| ≥ 0.12%) AND the deployment
+  1423→  // direction matches the event direction — conviction +2..4 and sizing
+  1424→  // ×1.15. Otherwise the cause still ships as a vote-0 telemetry tag.
+  1425→  const volCause = await volCauseBoost(asset.symbol, direction).catch(() => null);
+  1426→  if (volCause?.cause) {
+  1427→    conf.votes.push({
+  1428→      factor: `VOL-CAUSE:${volCause.cause}`,
+  1429→      vote: 0,
+  1430→      detail: volCause.basis === "LEARNED-CONTINUATION" ? `learned continuation profile → +${volCause.boost}` : volCause.detail ?? "telemetry-only",
+  1431→    });
+  1432→  }
+  1433→  // v6.7 SMC-lite sweep telemetry (operator-approved package item ⑥): the last
+  1434→  // closed bar sweeping prior swing liquidity and rejecting is the classic
+  1435→  // liquidity-grab print. Aligned sweeps earn the LIQ-SWEEP tag; opposing
+  1436→  // sweeps still ship as a vote-0 line so the ledger can judge them later.
+  1437→  const sweepInfo = detectLiquiditySweep(klineCache.get(asset.symbol)?.candles, direction);
+  1438→  if (sweepInfo.swept) {
+  1439→    conf.votes.push({ factor: "LIQ-SWEEP", vote: 0, detail: sweepInfo.detail });
+  1440→  }
+  1441→  const price = asset.price;
+  1442→  const entry = price;
+  1443→
+  1444→  // ── v9.3 ANTI-LATE-ENTRY PRICE GUARD (operator mandate) ──
+  1445→  // Duration-Lab verdict LATE_ENTRY_CASCADE_CHASE: the real fast-kill cohort
+  1446→  // NEVER went green — they were entries executed well after detection, buying
+  1447→  // the top of the cascade. Root cause: NOTHING measured the distance between
+  1448→  // the detection reference and the actual entry price. Now it is measured:
+  1449→  // radar cards compare against the track's anchorPrice (the detection instant),
+  1450→  // scans against the scan-time tick price. If price already ran further than
+  1451→  // the strategy's chase cap IN THE TRADE DIRECTION, the deploy is refused —
+  1452→  // execution can no longer enter later than detection. Operator-forced deploys
+  1453→  // bypass (explicit human override, audited). Every refusal is journaled
+  1454→  // (gate CHASE-PRICE) so the rejected-chase cohort stays auditable.
+  1455→  const chaseRef = opts?.refPrice ?? chosen.scanPrice ?? price;
+  1456→  const chaseCap = opts?.chaseCapPct ?? CHASE_CAP_BY_STRATEGY[conf.strategy] ?? 0.6;
+  1457→  const chaseDrift = chaseRef > 0 ? ((entry - chaseRef) / chaseRef) * 100 * (isLong ? 1 : -1) : 0;
+  1458→  if (chaseDrift > chaseCap && !opts?.forced) {
+  1459→    const reason = `entry ${chaseDrift.toFixed(2)}% past detection ref ${chaseRef} (cap ${chaseCap}% for ${conf.strategy}) — late cascade-chase entry refused`;
+  1460→    void recordGateBlock({ gate: "CHASE-PRICE", symbol: asset.symbol, direction, reason });
+  1461→    await fireEvent(null, asset.symbol, "ENGINE", "warn", `ANTI-LATE-ENTRY GUARD: ${direction} ${asset.symbol} deploy refused — ${reason} · Duration-Lab evidence: the fast-kill cohort never went green (LATE_ENTRY_CASCADE_CHASE)`);
+  1462→    return { error: `anti-late-entry guard: ${asset.symbol} ${direction} entry is ${chaseDrift.toFixed(2)}% past its detection reference (cap ${chaseCap}%) — no cascade chasing`, status: 409 };
+  1463→  }
+  1464→
+  1465→  // regime + crowd scaling constants (needed before SL math)
+  1466→  const slMult = chosen.slMult ?? 1;
+  1467→  const crowdCut = isCrowdCut(asset.symbol);
+  1468→  const regimeSize = chosen.sizeMult ?? 1;
+  1469→  // v10.15 DISLOCATION-GATE warn band: the candidate survived the skip floor —
+  1470→  // a rolling-5 median still ≥ warnBps means the venue board is stretched but
+  1471→  // not broken: admit at HALF margin, tagged DISLOCATION-HALF, so the cohort's
+  1472→  // settles are auditable (same measured-caution pattern as G4-PROBE/MG-PROBE).
+  1473→  const dislocMedian = rollingDislocationBps(asset.symbol, asset.maxDevBps);
+  1474→  const dislocationMult = gate.dislocationGate !== 0 && !opts?.forced && !bypassQuality && dislocMedian >= gate.dislocationWarnBps ? 0.5 : 1;
+  1475→
+  1476→  // ── v8.1 P2 VOLATILITY-SCALED GEOMETRY (vol-forecast.ts) ──
+  1477→  // The forecast regime scales the risk geometry with the vol the market is
+  1478→  // ENTERING (bounded ×0.9..×1.15 stop / ±0.2R targets): LOW tightens and
+  1479→  // stretches, ELEVATED/EXTREME breathe the stop and trim targets. Logged +
+  1480→  // tagged (VOL-REGIME-* cohorts); null-safe — no forecast, no change.
+  1481→  const volF = peekVolForecast(asset.symbol);
+  1482→  const volGeo = volGeometry(volF);
+  1483→  if (!volF) void getVolBoard([asset.symbol], 1).catch(() => undefined);
+  1484→
+  1485→  const atrPct = await atrPctOf(asset.symbol);
+  1486→  // v6.3: stop distance is GOVERNOR-OWNED — slAtrMult (0.8–2.5) scales the ATR
+  1487→  // multiple; regime slMult still widens for volatility on top; v8.1: the vol
+  1488→  // regime multiplier rides on top (bounded ×0.9..×1.15).
+  1489→  const slDistPct = Math.min(5, Math.max(0.7, gate.slAtrMult * atrPct * slMult * volGeo.slMult)) / 100;
+  1490→  const stopLoss = entry * (isLong ? 1 - slDistPct : 1 + slDistPct);
+  1491→  const risk = Math.abs(entry - stopLoss);
+  1492→
+  1493→  // ── v5.4 DYNAMIC RISK:REWARD CALCULATOR (root-cause fix for "R:R always 1:2.6") ──
+  1494→  // RR was hardcoded at 2.6 for every deployment. It is now computed per-signal
+  1495→  // from four measured drivers, so the analytics AVG R:R and per-card R:R become
+  1496→  // real distributions instead of a flat constant:
+  1497→  //   · strategy base      — scalps bank shorter, swings stretch further
+  1498→  //   · order flow         — CONFIRMS flow pays for a wider target, CONFLICTS trims it
+  1499→  //   · confluence conviction — higher score → room to the final target
+  1500→  //   · market regime      — TRENDING stretches, VOLATILE/CHOP compress
+  1501→  // v6.3: the whole ladder then scales by the GOVERNOR-OWNED rrScale knob
+  1502→  // (0.75–1.35) — the AI can stretch or trim targets from realized TP3/SL evidence.
+  1503→  const RR_BASE: Record<string, number> = { "AI-SCALP": 2.1, "MEAN-REVERT": 2.4, MOMENTUM: 2.8, BREAKOUT: 3.1, "AI-SWING": 3.4 };
+  1504→  // v8.4 R4 VETO-ONLY (audit 2026-09-11): flow CONFIRMS stretched targets on an
+  1505→  // anti-signal (CONFIRMS cohort tp 12.5%, Σ−124.4%) — the flow term is now
+  1506→  // clamped ≤ 0: CONFLICTS still trim, CONFIRMS no longer stretch. Veto power
+  1507→  // (flowVetoScore gate) is untouched until the factor passes its backtest.
+  1508→  const flowAdj = Math.min(0, chosenFlow.score / 50);
+  1509→  const confAdj = (conf.confidence - 60) / 40;
+  1510→  const regimeAdjRR = chosen.regimeTag.includes("TREND") ? 0.2 : chosen.regimeTag.includes("VOLATILE") ? -0.3 : chosen.regimeTag.includes("CHOP") ? -0.25 : 0;
+  1511→  const rr = Number(Math.min(4.2, Math.max(1.8, ((RR_BASE[conf.strategy] ?? 2.6) + flowAdj + confAdj + regimeAdjRR + volGeo.rrAdj) * gate.rrScale)).toFixed(1));
+  1512→  // TP2 scales with RR (was frozen at 1.8R) — keeps the ladder proportional
+  1513→  const tp2Mult = Number(Math.min(2.2, Math.max(1.5, 1.2 + rr * 0.22)).toFixed(2));
+  1514→  const rrDrivers = `base ${RR_BASE[conf.strategy] ?? 2.6} · flow ${flowAdj >= 0 ? "+" : ""}${flowAdj.toFixed(2)} · conv ${confAdj >= 0 ? "+" : ""}${confAdj.toFixed(2)} · regime ${regimeAdjRR >= 0 ? "+" : ""}${regimeAdjRR.toFixed(1)} · vol ${volGeo.rrAdj >= 0 ? "+" : ""}${volGeo.rrAdj.toFixed(1)} · gov-scale ×${gate.rrScale.toFixed(2)}`;
+  1515→  const tp1 = isLong ? entry + risk : entry - risk;
+  1516→  const tp2 = isLong ? entry + risk * tp2Mult : entry - risk * tp2Mult;
+  1517→  const tp3 = isLong ? entry + risk * rr : entry - risk * rr;
+  1518→  // ── v8.4 R5 RESEARCH-SHADOW LADDER — the audit caught the live geometry
+  1519→  // CONTRADICTING the flow-factor research optimum (slAtr 1.8 vs 1.2, rrScale
+  1520→  // 0.75 vs 1.15, BE-trail on vs off). Flipping the live book to unproven
+  1521→  // params would be reckless, so every deploy journals the research-aligned
+  1522→  // ladder built from the SAME drivers (post-R4 scoring) — settle time replays
+  1523→  // both ladders on 1m candles into db/research-shadow/ (the adoption A/B).
+  1524→  const rawUnscaledRR = (RR_BASE[conf.strategy] ?? 2.6) + flowAdj + confAdj + regimeAdjRR + volGeo.rrAdj;
+  1525→  const researchLadder = gate.researchShadow > 0 ? buildResearchLadder(entry, isLong, atrPct, slMult, volGeo.slMult, rawUnscaledRR) : null;
+  1526→
+  1527→  const [ttlMin, ttlMax] = TTL_BY_STRATEGY[conf.strategy] ?? [90, 180];
+  1528→  // v9.3 R6-INFORMATIVE PACKAGE: radar cards carry an explicit short TTL
+  1529→  // (60–75m) + ttlNoExtend so they RESOLVE fast instead of drifting to a
+  1530→  // censored EXPIRED-no-touch — the R6 informative ratio's main lever.
+  1531→  // v10.9.2: `let` — the VOL-SCALED VERTICAL BARRIER (below) may replace the
+  1532→  // random band TTL with the per-candidate solved one.
+  1533→  let ttl = opts?.ttlMinutes ?? Math.round(ttlMin + Math.random() * (ttlMax - ttlMin));
+  1534→  const now = new Date();
+  1535→
+  1536→  // ── shared excursion math (v10.9.2) — ONE 20×15m window feeds BOTH the
+  1537→  // VOL-SCALED VERTICAL BARRIER and the v10.6 DECISIVE-EXCURSION filter, so
+  1538→  // both gates reason over the same tape view (no double counting).
+  1539→  const exBars = klineCache.get(asset.symbol)?.candles ?? [];
+  1540→  const exWin = exBars.slice(-20);
+  1541→  let exEr: number | null = null; // Kaufman efficiency ratio (null = window not measurable)
+  1542→  if (exWin.length >= 10) {
+  1543→    const exNet = Math.abs(exWin[exWin.length - 1]!.close - exWin[0]!.open);
+  1544→    let exPath = 0;
+  1545→    for (let i = 1; i < exWin.length; i++) exPath += Math.abs(exWin[i]!.close - exWin[i - 1]!.close);
+  1546→    exEr = exPath > 0 ? exNet / exPath : 0;
+  1547→  }
+  1548→
+  1549→  // ── v10.9.2 VOL-SCALED VERTICAL BARRIER (SUPERVISOR proposal, operator
+  1550→  // blanket-approve 2026-09-16T09:03Z) — expiry-censoring root cause #2: the
+  1551→  // RANDOM strategy-band TTL has no relationship to how far THIS tape can
+  1552→  // carry price inside the holding window. Slow-tape candidates get 180-300m
+  1553→  // of runway and die as EXPIRED-no-touch (censored rows — 44% of the
+  1554→  // post-filter cohort), hot-tape candidates get TTLs shorter than their
+  1555→  // travel justifies. Fix: SOLVE the diffusion projection for the time the
+  1556→  // first decision (min(TP1dist, SLdist) = 1R) is reached —
+  1557→  //   t1r = 15 × (requiredPct / (atrPct × ER))²
+  1558→  // and set the vertical barrier there × volBarrierMult (headroom for the fat
+  1559→  // right tail of touch times), clamped [30m, volBarrierCapMin]. A projected
+  1560→  // touch beyond the cap (or ER below the chop floor) = SLOW-TOUCH candidate:
+  1561→  // SKIPPED — a farther barrier would only manufacture the same censored rows
+  1562→  // with extra fees. Explicit TTL overrides (radar cards), forced deploys and
+  1563→  // authority bypasses are untouched; RAW-CAL capture DOES ride the barrier —
+  1564→  // the censoring lives exactly there. Composes with the decisive filter:
+  1565→  // a barrier-qualified candidate projects ≥1R travel by construction, so the
+  1566→  // decisive check degrades to its chop-floor guard (coherent, not redundant).
+  1567→  // v10.14 REGIME-ADAPTIVE CAP (SUPERVISOR proposal 2026-09-19T06:51Z,
+  1568→  // operator APPROVE 2026-09-19T08:56Z msg 861802419): when
+  1569→  // gate.volBarrierAdaptive=1 the EFFECTIVE cap relaxes from the base knob up
+  1570→  // to 3×base as the symbol's 30d realized-vol percentile falls below 30 —
+  1571→  // 240→720m at p0 — so compression regimes stop killing the exact setups
+  1572→  // that expand (both droughts: 100% vol-barrier blocks, healthy sweep).
+  1573→  // Fail-open: volPctile null (feed/cache fail) → FIXED base cap, legacy
+  1574→  // behavior. Residual rejects feed the BARRIER-CAP-NEAR-MISS paper queue
+  1575→  // with volPctile/capUsed metadata (counterfactual audit of the widening).
+  1576→  if (gate.volBarrier > 0 && !opts?.forced && !opts?.authorityBypass && opts?.ttlMinutes === undefined) {
+  1577→    const vbRequiredPct = slDistPct * 100;
+  1578→    const vbSkip = (reason: string, detail: string) =>
+  1579→      ({ reason, detail }) as const;
+  1580→    let vbSkipInfo: ReturnType<typeof vbSkip> | null = null;
+  1581→    let vbT1r: number | null = null; // v10.13 — hoisted projected 1R touch (near-miss tier B evidence)
+  1582→    // v10.14 — effective cap: base knob, regime-relaxed when the symbol sits
+  1583→    // in its own low-vol tail (percentile < 30). Adaptive ONLY when the knob
+  1584→    // is on AND the percentile is measurable — otherwise exactly legacy.
+  1585→    let effCap = gate.volBarrierCapMin;
+  1586→    let volPctile: number | null = null;
+  1587→    if (gate.volBarrierAdaptive) {
+  1588→      volPctile = await realizedVolPctile(asset.symbol).catch(() => null);
+  1589→      if (volPctile !== null) effCap = adaptiveBarrierCap(gate.volBarrierCapMin, volPctile);
+  1590→    }
+  1591→    const vbRegime = volPctile !== null && effCap !== gate.volBarrierCapMin ? ` · volPctile p${Math.round(volPctile)} → adaptive cap ${effCap}m` : "";
+  1592→    if (exEr === null || exEr < gate.decisiveErMin || atrPct <= 0) {
+  1593→      vbSkipInfo = vbSkip(
+  1594→        `no measurable travel regime (ER ${exEr === null ? "n/a" : exEr.toFixed(2)} vs chop floor ${gate.decisiveErMin.toFixed(2)}, ATR ${atrPct.toFixed(2)}%) — slow-touch candidate`,
+  1595→        `ER ${exEr === null ? "n/a" : exEr.toFixed(2)} below floor ${gate.decisiveErMin.toFixed(2)}`,
+  1596→      );
+  1597→    } else {
+  1598→      const t1r = 15 * Math.pow(vbRequiredPct / (atrPct * exEr), 2);
+  1599→      vbT1r = t1r;
+  1600→      if (t1r > effCap) {
+  1601→        vbSkipInfo = vbSkip(
+  1602→          `projected 1R touch ${Math.round(t1r)}m beyond the ${effCap}m barrier cap (ATR ${atrPct.toFixed(2)}% × ER ${exEr.toFixed(2)}) — slow-touch candidate`,
+  1603→          `t1r ${Math.round(t1r)}m > cap ${effCap}m`,
+  1604→        );
+  1605→      } else {
+  1606→        const barrier = Math.round(Math.min(effCap, Math.max(30, t1r * gate.volBarrierMult)));
+  1607→        if (Math.abs(barrier - ttl) >= 10) {
+  1608→          void fireEvent(null, asset.symbol, "ENGINE", "info", `VOL-SCALED BARRIER: ${direction} ${asset.symbol} ${conf.strategy} TTL ${ttl}m → ${barrier}m (projected 1R touch ${Math.round(t1r)}m × ${gate.volBarrierMult.toFixed(2)} headroom · ATR ${atrPct.toFixed(2)}% · ER ${exEr.toFixed(2)}${vbRegime})`).catch(() => undefined);
+  1609→        }
+  1610→        ttl = barrier;
+  1611→      }
+  1612→    }
+  1613→    if (vbSkipInfo) {
+  1614→      void recordGateBlock({ gate: "VOL-BARRIER", symbol: asset.symbol, direction, reason: vbSkipInfo.reason });
+  1615→      // v10.13 NEAR-MISS TIER B (operator APPROVE 2026-09-18T18:58Z msg 861802415):
+  1616→      // a slow-touch reject with t1r in (cap, 1.5×cap] becomes a PAPER capture
+  1617→      // riding the engine-identical ladder built above (entry/stopLoss/tp1-3/rr)
+  1618→      // under the hypothetical 1.5×cap barrier — outcome-tracked answer to "is
+  1619→      // the barrier cap over-tight in regime-guard L2?" Zero live risk (no
+  1620→      // order, no ledger row); rails (8/day tier cap · 2h dedup · 16 open) live
+  1621→      // in near-miss.ts. Self-skips outside the band.
+  1622→      void nearMissCaptureBarrier({ symbol: asset.symbol, direction, strategy: conf.strategy, entry, stopLoss, tp1, tp2, tp3, slDistPct, rr, t1rMin: vbT1r ?? 0, capMin: effCap, volBarrierMult: gate.volBarrierMult, volPctile, baseCap: gate.volBarrierCapMin }).catch(() => undefined);
+  1623→      if (Date.now() - lastDecisiveEventAt > 600_000) {
+  1624→        lastDecisiveEventAt = Date.now();
+  1625→        await fireEvent(null, asset.symbol, "ENGINE", "info", `VOL-SCALED BARRIER: ${direction} ${asset.symbol} ${conf.strategy} deploy skipped — ${vbSkipInfo.reason} · evidence: post-filter cohort expiry 44% (censored rows starve R6 attribution, SUPERVISOR proposal 2026-09-16)`);
+  1626→      }
+  1627→      return { error: `vol-scaled barrier: ${asset.symbol} ${direction} ${vbSkipInfo.detail} — slow-touch, deploy skipped`, status: 409 };
+  1628→    }
+  1629→  }
+  1630→
+  1631→  // ── v10.6 DECISIVE-EXCURSION FILTER (operator mandate «علت های ریشه‌ای را برطرف کن» 2026-09-15) ──
+  1632→  // Root cause #1 of the 7-day bleed (SUPERVISOR audit + proposal msg 2325):
+  1633→  // 62% of settles EXPIRE without ever touching TP1 or SL — expiredNoTouch
+  1634→  // 75/113 on RAW-CAL, bucket 30-60m 99/121 — censored rows starve R6 factor
+  1635→  // attribution AND bleed fees. The filter predicts the no-touch cohort BEFORE
+  1636→  // entry: the ATR-projected price TRAVEL within TTL (diffusion √t scaling off
+  1637→  // the 15m ATR14, discounted by the Kaufman efficiency ratio so chop counts
+  1638→  // as no-travel) must reach the first decision distance min(TP1dist, SLdist).
+  1639→  // With TP1 = 1R both equal the stop distance — the bar is 1R in price terms.
+  1640→  // Predicted no-touch → deploy SKIPPED (gate journal gate=DECISIVE).
+  1641→  // Operator-forced + radar direct-authority deploys bypass (explicit human
+  1642→  // override); RAW-CAL capture does NOT bypass — the censoring lives exactly
+  1643→  // there and the mandate targets it.
+  1644→  if (gate.decisiveFilter > 0 && !opts?.forced && !opts?.authorityBypass) {
+  1645→    // v10.9.2: reuses the shared excursion window (exEr above) and runs AFTER
+  1646→    // the vol-scaled barrier, so it judges the BARRIER TTL the trade will
+  1647→    // actually live under; for barrier-qualified candidates the projection is
+  1648→    // ≥1R by construction and this degrades to its chop-floor guard.
+  1649→    if (exEr !== null) {
+  1650→      const requiredPct = slDistPct * 100; // min(TP1dist, SLdist) = 1R (tp1 = entry ± risk)
+  1651→      const decMult = gate.decisiveFilter >= 2 ? 1 : 0.85; // level 1 lenient ×0.85 · level 2 strict ×1.0
+  1652→      const projPct = atrPct * Math.sqrt(ttl / 15) * exEr; // 15m-ATR diffusion projection × efficiency
+  1653→      if (exEr < gate.decisiveErMin || projPct < requiredPct * decMult) {
+  1654→        const reason = `projected travel ${projPct.toFixed(2)}% in ${ttl}m (ATR ${atrPct.toFixed(2)}% × √(ttl/15m) × ER ${exEr.toFixed(2)}) vs required ${(requiredPct * decMult).toFixed(2)}% = 1R min(TP1,SL)${exEr < gate.decisiveErMin ? ` · ER ${exEr.toFixed(2)} below chop floor ${gate.decisiveErMin}` : ""} — predicted no-touch`;
+  1655→        void recordGateBlock({ gate: "DECISIVE", symbol: asset.symbol, direction, reason });
+  1656→        if (Date.now() - lastDecisiveEventAt > 600_000) {
+  1657→          lastDecisiveEventAt = Date.now();
+  1658→          await fireEvent(null, asset.symbol, "ENGINE", "info", `DECISIVE-EXCURSION FILTER: ${direction} ${asset.symbol} ${conf.strategy} deploy skipped — ${reason} · evidence: expiredNoTouch 75/113, bucket 30-60m 99/121 expired (root cause #1, operator mandate 2026-09-15)`);
+  1659→        }
+  1660→        return { error: `decisive-excursion filter: ${asset.symbol} ${direction} projected travel ${projPct.toFixed(2)}% < ${(requiredPct * decMult).toFixed(2)}% required within ${ttl}m (ER ${exEr.toFixed(2)}) — predicted no-touch, deploy skipped`, status: 409 };
+  1661→      }
+  1662→    }
+  1663→  }
+  1664→
+  1665→  // ── v5.4 DYNAMIC TIMEFRAME ALLOCATION (root-cause fix for "TIMEFRAME EDGE always constant") ──
+  1666→  // Every deployment used to be stamped "15m", collapsing the TIMEFRAME EDGE
+  1667→  // analytics into a single dead bar. The intended holding horizon is now
+  1668→  // derived from strategy family, then tilted by measured volatility + regime:
+  1669→  const TF_BASE: Record<string, string> = { "AI-SCALP": "5m", "MEAN-REVERT": "15m", MOMENTUM: "15m", BREAKOUT: "15m", "AI-SWING": "1h" };
+  1670→  const TF_LADDER = ["5m", "15m", "1h", "4h"];
+  1671→  let tfIdx = TF_LADDER.indexOf(TF_BASE[conf.strategy] ?? "15m");
+  1672→  const tfVolTilt = atrPct >= 2.2 ? -1 : atrPct < 0.8 ? 1 : 0; // hot tape → faster horizon, dead tape → slower
+  1673→  tfIdx = Math.max(0, Math.min(TF_LADDER.length - 1, tfIdx + tfVolTilt + (chosen.regimeTag.includes("TREND") && conf.strategy === "AI-SWING" ? 1 : 0)));
+  1674→  const timeframe = TF_LADDER[tfIdx]!;
+  1675→
+  1676→  // equity + confidence-sized margin, regime-scaled (VOLATILE ×0.6 etc.) + L3.5 crowd cut
+  1677→  const settled = await db.signal.findMany({ where: { status: { in: ["TP1", "TP2", "TP3", "SL", "EXPIRED", "CLOSED"] } }, select: { pnlPercent: true, marginUsd: true } });
+  1678→  const openSigs = await db.signal.findMany({ where: { status: { in: ["ACTIVE", "TP1", "TP2"] } }, select: { pnlPercent: true, marginUsd: true } });
+  1679→  const realized = settled.reduce((a, s) => a + (s.marginUsd * s.pnlPercent) / 100, 0);
+  1680→  const unrealized = openSigs.reduce((a, s) => a + (s.marginUsd * s.pnlPercent) / 100, 0);
+  1681→  const equity = ACCOUNT_START_USD + realized + unrealized;
+  1682→  const exposure = openSigs.reduce((a, s) => a + s.marginUsd, 0);
+  1683→  const marginBase = confidenceMargin(conf.confidence, equity, Math.max(0, equity - exposure));
+  1684→
+  1685→  // ── v8.1 P2 RISK OVERLAY (risk-overlay.ts) ──
+  1686→  // getRiskState(symbol, direction) assesses the STANDING book (union-merge
+  1687→  // clusters |ρ|≥0.65, drawdown sizing ×1/×0.75/×0.5 at 3%/7%) plus the
+  1688→  // candidate join test (same-direction correlated share ≥35% of equity →
+  1689→  // blocked). Auto path: refused with an audited, rate-limited event.
+  1690→  // Operator-forced deploys are never refused — they deploy HALF-SIZED with
+  1691→  // the RISK-CLUSTER tag so the ledger can judge the override cohort.
+  1692→  const riskOv = await getRiskState(asset.symbol, direction);
+  1693→  let riskMult = riskOv.state.sizeMult;
+  1694→  let riskTag: string | null = null;
+  1695→  let riskNote: string | null = riskOv.candidateJoinsBlocked || riskOv.state.verdict !== "OK" ? riskOv.state.reasons.join(" · ") : null;
+  1696→  if (riskOv.candidateJoinsBlocked) {
+  1697→    if (!opts?.forced && !bypassQuality) {
+  1698→      if (Date.now() - lastRiskBlockEventAt > 600_000) {
+  1699→        lastRiskBlockEventAt = Date.now();
+  1700→        await fireEvent(null, asset.symbol, "ENGINE", "warn", `RISK-CLUSTER BLOCK: ${direction} ${asset.symbol} refused — ${riskNote ?? "correlated cluster over cap"}. The overlay caps same-direction correlated exposure at 35% of equity.`);
+  1701→      }
+  1702→      void recordGateBlock({ gate: "RISK-CLUSTER", symbol: asset.symbol, direction, reason: riskOv.state.reasons[0] ?? "correlated cluster over cap" });
+  1703→      return { error: `risk overlay: ${direction} ${asset.symbol} would join an over-cap correlated cluster (${riskOv.state.reasons[0] ?? "exposure cap"})`, status: 409 };
+  1704→    }
+  1705→    riskMult = Math.min(riskMult, 0.5);
+  1706→    riskTag = "RISK-CLUSTER";
+  1707→    riskNote = `${opts?.forced ? "operator-forced" : "capture-authority"} deploy joins an over-cap correlated cluster — HALF-SIZED per overlay policy (${riskNote ?? "exposure cap"})`;
+  1708→  } else if (riskOv.state.drawdownPct >= 3) {
+  1709→    riskTag = "RISK-DD";
+  1710→  }
+  1711→
+  1712→  // ── v8.2 SHADOW-VETO DEPLOY GATE (AI-core Phase 0/1, operator 2026-09-09) ──
+  1713→  // Tiered authority at the fence: in mode=veto (unlockable ONLY through the
+  1714→  // measured evidence gate — ≥30 settled per arm + Wilson-LB separation +
+  1715→  // negative veto-cohort PnL), a fresh VETO verdict from the shadow adjudicator
+  1716→  // blocks this deployment. FAIL-OPEN: no fresh verdict → the deploy proceeds
+  1717→  // and the adjudicator pre-warms for the next evaluation. Operator-forced
+  1718→  // deploys always bypass (explicit human override, audited).
+  1719→  // v10.6 CAPTURE-OBSERVE branch (operator mandate «پرشدن بازوهای shadow-veto
+  1720→  // را سرعت و بهبود ببخش» 2026-09-15): RAW-CAL deploys skip the veto gate by
+  1721→  // design, but the skip also SKIPPED VERDICT CREATION — 113 capture issues
+  1722→  // starved the REAL arms (real-keep 9/30). Under capture the adjudicator now
+  1723→  // runs OBSERVE-ONLY (side PASS, verdict never vetoes — capture authority is
+  1724→  // untouched) and the verdict binds to the real serial via linkRealDeploy →
+  1725→  // every capture settle feeds real-keep / real-veto.
+  1726→  {
+  1727→    const svGap = Math.abs(chosen.adjScore) - chosen.effMin;
+  1728→    const svRank = [...conf.votes].sort((a, b) => Math.abs(b.vote) - Math.abs(a.vote));
+  1729→    const svDirSign = direction === "LONG" ? 1 : -1;
+  1730→    const svCtx = {
+  1731→      symbol: asset.symbol,
+  1732→      direction,
+  1733→      strategy: conf.strategy,
+  1734→      score: chosen.adjScore,
+  1735→      effMin: chosen.effMin,
+  1736→      gap: svGap,
+  1737→      thr: chosen.thrParts,
+  1738→      confirms: svRank.filter((v) => v.vote * svDirSign > 0).slice(0, 3).map((v) => ({ factor: v.factor, vote: v.vote, detail: v.detail })),
+  1739→      opposes: svRank.filter((v) => v.vote * svDirSign < 0).slice(0, 3).map((v) => ({ factor: v.factor, vote: v.vote, detail: v.detail })),
+  1740→      notes: chosen.regimeNote,
+  1741→      entryPrice: entry,
+  1742→      source: gateSource,
+  1743→    };
+  1744→    if (!opts?.forced && !bypassQuality) {
+  1745→      const sv = await shadowVetoDeployGate(svCtx);
+  1746→      if (sv.veto) {
+  1747→        const svMsg = `SHADOW-VETO BLOCK [${sv.verdictId}]: ${direction} ${asset.symbol} deploy refused — ${sv.reason}`;
+  1748→        void recordGateBlock({ gate: "SHADOW-VETO", symbol: asset.symbol, direction, reason: svMsg });
+  1749→        await fireEvent(null, asset.symbol, "ENGINE", "warn", `${svMsg} · veto-only core authority active (mode=veto, evidence-gated) — the blocked trade is paper-tracked for revocation evidence`);
+  1750→        return { error: `shadow-veto gate: ${direction} ${asset.symbol} blocked by the AI core (${sv.reason}) — tiered veto authority, revocable via /api/ai/shadow-veto`, status: 409 };
+  1751→      }
+  1752→    } else if (opts?.calCapture && !opts?.forced) {
+  1753→      await shadowVetoObserve(svCtx);
+  1754→    }
+  1755→  }
+  1756→
+  1757→  // v6.3: riskPerTrade is GOVERNOR-OWNED (0.5–1.5) — scales the whole margin so
+  1758→  // the LLM can de-risk in drawdowns and re-size on proven positive expectancy
+  1759→  // v6.5: two more measured multipliers — shortSizeMult (SHORT book bleeds:
+  1760→  // 27.8% win / −$26.65 vs LONG +$2.32) and BREAKOUT half-size under guard L1.
+  1761→  // v8.1: risk-overlay multiplier (drawdown throttle + cluster policy).
+  1762→  const stratSizeMult = conf.strategy === "BREAKOUT" && boGuard === 1 ? 0.5 : 1;
+  1763→  // v10.6 PER-STRATEGY SIZING (SUPERVISOR proposal completed for operator
+  1764→  // decision): per-strategy margin multiplier instead of ONE global size —
+  1765→  // staged weights cut the AI-SWING bleed (57% of book @ −1.87%/trade) and
+  1766→  // feed the proven AI-SCALP/MEAN-REVERT edges. Neutral ×1 while the module
+  1767→  // is disabled; activation = explicit operator decision (/api/strategy-weights).
+  1768→  const stratW = await strategyWeightFor(conf.strategy);
+  1769→  // v10.11 STRAT-PROBATION — soft margin valve: ×0.5 while the strategy's
+  1770→  // EB-shrunk expectancy UCB is negative (sizing only, never a veto; the
+  1771→  // memory gate / breakoutGuard / governor semantics are untouched).
+  1772→  const probF = await probationFactorFor(conf.strategy);
+  1773→  // v10.9.3 MG-PROBE — memory-gate hysteresis re-entry: HALF margin until the
+  1774→  // 5-probe block proves expectancy ≥ 0 (operator APPROVE 2026-09-16).
+  1775→  const mgProbe = mgProbeKeys.has(`${asset.symbol}:${conf.strategy}`);
+  1776→  let margin = Number((marginBase * gate.riskPerTrade * regimeSize * (crowdCut ? 0.6 : 1) * (volCause?.basis === "LEARNED-CONTINUATION" ? 1.15 : 1) * (direction === "SHORT" ? gate.shortSizeMult : 1) * stratSizeMult * stratW * probF * riskMult * (probeBypass ? 0.5 : 1) * (mgProbe ? 0.5 : 1) * dislocationMult).toFixed(2));
+  1777→
+  1778→  // v6.7.2 LEVERED RISK CAP (operator mandate): slDist% × leverage is the real
+  1779→  // single-trade swing at the stop. Design targeted a constant ~60%; the 20x
+  1780→  // clamp let tight stops through at 36% (NX-0185) and wide stops 61% (NX-0138)
+  1781→  // — two trades carried the day. Excess leverage is trimmed so the stop costs
+  1782→  // ≤ leveredRiskCap% of margin. 5x floor: if even 5x breaks the cap the stop
+  1783→  // is structurally broken — keep 5x (SL floor 0.7% bounds the damage at 3.5%).
+  1784→  let leverage = Math.round(Math.min(20, Math.max(5, 60 / (slDistPct * 100))));
+  1785→  let riskCapped = false;
+  1786→  const rawLev = leverage;
+  1787→  if (gate.leveredRiskCap > 0 && slDistPct * 100 * leverage > gate.leveredRiskCap) {
+  1788→    const capped = Math.floor(gate.leveredRiskCap / (slDistPct * 100));
+  1789→    if (capped >= 5 && capped < leverage) {
+  1790→      leverage = capped;
+  1791→      riskCapped = true;
+  1792→    }
+  1793→  }
+  1794→
+  1795→  // v8.4 R4 VETO-ONLY: flow can no longer LIFT conviction either — clamp ≤ 0
+  1796→  // (a conflicting board still drags it down; a confirming one adds nothing).
+  1797→  const conviction = Math.round(Math.min(96, Math.max(55, conf.confidence + Math.min(0, chosenFlow.score * 0.3) + (volCause?.boost ?? 0))));
+  1798→  const serial = await nextSerial();
+  1799→
+
+[showing lines 1400-1799 of 2265; use offset=1800 with limit to continue reading]

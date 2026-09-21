@@ -1,15 +1,30 @@
+# ── NEXUS//SIGNALS gateway (task 4-b · audit P0-1: open localhost proxy) ────
+# The XTransformPort forwarder used to proxy to ANY localhost port. It is now
+# restricted to an allowlist of ONLY :3003 (price-ws socket.io — the one route
+# the dashboard needs). Any other XTransformPort value → 403. Everything else
+# → the Next app on :3000 (unchanged). NOTE: after editing, `caddy reload` is
+# required by whoever operates the gateway (intentionally NOT done from the
+# sandbox per contract).
 :81 {
-	@transform_port_query {
+	@xform_allowed {
+		query XTransformPort=3003
+	}
+
+	@xform_other {
 		query XTransformPort=*
 	}
 
-	handle @transform_port_query {
-		reverse_proxy localhost:{query.XTransformPort} {
+	handle @xform_allowed {
+		reverse_proxy localhost:3003 {
 			header_up Host {host}
 			header_up X-Forwarded-For {remote_host}
 			header_up X-Forwarded-Proto {scheme}
 			header_up X-Real-IP {remote_host}
 		}
+	}
+
+	handle @xform_other {
+		respond 403
 	}
 
 	handle {

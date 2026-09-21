@@ -1,0 +1,547 @@
+     1→// ── FlowRadar Neo v6.3 outbound relay (server-only) ───────────────────────
+     2→// TELEGRAM mirror for ALERTABLE engine events. v6.3 operator round:
+     3→// «اصلاح ساختار پیام‌های تلگرامی — چیدمان مرتب و خط به خط با ایموجی، و
+     4→// تصویر برای سیگنالهای win / stop / EXPIRED». Every relay now sends a
+     5→// STRUCTURED HTML card (tidy line-by-line, emoji-labelled fields) and the
+     6→// three outcome classes get a RENDERED BANNER IMAGE (dependency-free PNG
+     7→// from telegram-image.ts): WIN (TP1/TP2/TP3, mint), STOP (SL, danger),
+     8→// EXPIRED (TTL_EXPIRED, amber). Card fields come from the REAL signal row —
+     9→// nothing is invented; when the row is unavailable the engine message line
+    10→// is relayed verbatim as the honest fallback.
+    11→//
+    12→// Delivery remains fire-and-forget with hard timeouts so Telegram can never
+    13→// stall the engine tick; the error ring + counters feed /api/notify health.
+    14→
+    15→import { db } from "@/lib/db";
+    16→import { APP_NAME } from "./brand";
+    17→import fs from "node:fs/promises";
+    18→import path from "node:path";
+    19→import { renderStatusBanner, type BannerStatus } from "./telegram-image";
+    20→import { renderSignalBannerV2, renderDailyPoster } from "./telegram-art";
+    21→
+    22→const TOKEN = process.env.TELEGRAM_BOT_TOKEN ?? "";
+    23→const ENV_CHAT = process.env.TELEGRAM_CHAT_ID ?? "";
+    24→
+    25→const CHAT_OVERRIDE_KEY = "telegram.chatId";
+    26→const ERR_RING_CAP = 8;
+    27→
+    28→export const RELAYABLE_TYPES = new Set(["CREATED", "TP1", "TP2", "TP3", "SL", "TTL_EXPIRED", "TTL_EXTENDED", "AFTERLIFE", "PUMP_RADAR", "EARLY_EXIT"]); // v10.4: + EARLY_EXIT — v8.4 R2/R7 early time-exits are real settle outcomes (7 of the last 8 closes) and were silently dropped from the operator mirror
+    29→
+    30→const errRing: string[] = [];
+    31→let sentCount = 0;
+    32→let failCount = 0;
+    33→let lastSentAt: number | null = null;
+    34→let botId: number | null = null; // learned once via getMe
+    35→let botUsername: string | null = null;
+    36→let chatOverride: string | null = null; // EngineSetting override (wins over env)
+    37→let overrideLoaded = false;
+    38→let bootLogged = false;
+    39→
+    40→function pushErr(msg: string): void {
+    41→  errRing.unshift(`${new Date().toISOString().slice(11, 19)}Z ${msg}`);
+    42→  if (errRing.length > ERR_RING_CAP) errRing.pop();
+    43→}
+    44→
+    45→/** Token present — synchronous cheap check used on the engine hot path. */
+    46→export function relayArmed(): boolean {
+    47→  return TOKEN.length > 0;
+    48→}
+    49→
+    50→export function relayHealth(): {
+    51→  armed: boolean; tokenValid: boolean | null; botUsername: string | null;
+    52→  chatId: string | null; chatResolved: boolean; chatSource: "env" | "discovered" | "none";
+    53→  sent: number; failed: number; lastSentAt: number | null; lastErrors: string[];
+    54→} {
+    55→  const chat = chatOverride ?? ENV_CHAT;
+    56→  return {
+    57→    armed: relayArmed(),
+    58→    tokenValid: botId !== null ? true : null,
+    59→    botUsername,
+    60→    chatId: chat ? `${chat.slice(0, 3)}***${chat.slice(-2)}` : null,
+    61→    chatResolved: chat.length > 0 && botId !== null && chat !== String(botId),
+    62→    chatSource: chatOverride ? "discovered" : ENV_CHAT ? "env" : "none",
+    63→    sent: sentCount, failed: failCount, lastSentAt, lastErrors: [...errRing],
+    64→  };
+    65→}
+    66→
+    67→/** Load the persisted chat override (EngineSetting telegram.chatId) once.
+    68→ * op-audit-20260908: must run BEFORE the boot log — the first boot log used to
+    69→ * print "DORMANT · TELEGRAM_CHAT_ID unset" even when the chat id was already
+    70→ * persisted, because ensureAutoDiscover→getMe logged before resolveChat ever
+    71→ * loaded the override. One DB read, once per module instance. */
+    72→async function loadOverride(): Promise<void> {
+    73→  if (overrideLoaded) return;
+    74→  overrideLoaded = true;
+    75→  try {
+    76→    const row = await db.engineSetting.findUnique({ where: { key: CHAT_OVERRIDE_KEY } });
+    77→    if (row?.value) chatOverride = row.value;
+    78→  } catch { /* fresh db */ }
+    79→}
+    80→
+    81→async function ensureBotIdentity(): Promise<void> {
+    82→  if (botId !== null || !TOKEN) return;
+    83→  await loadOverride(); // truthful boot log — persisted chat counts as resolved
+    84→  try {
+    85→    const ctrl = new AbortController();
+    86→    const t = setTimeout(() => ctrl.abort(), 4500);
+    87→    const res = await fetch(`https://api.telegram.org/bot${TOKEN}/getMe`, { signal: ctrl.signal, cache: "no-store" });
+    88→    clearTimeout(t);
+    89→    const json = (await res.json()) as { ok: boolean; result?: { id: number; username?: string } };
+    90→    if (json.ok && json.result) {
+    91→      botId = json.result.id;
+    92→      botUsername = json.result.username ?? null;
+    93→      if (!bootLogged) {
+    94→        bootLogged = true;
+    95→        const chat = chatOverride ?? ENV_CHAT;
+    96→        const selfRefused = chat === String(botId);
+    97→        console.log(`[NOTIFY] telegram relay ${selfRefused ? "ARMED (chat PENDING)" : chat ? "ARMED" : "DORMANT (no chat)"} — bot @${botUsername} (#${botId})${selfRefused ? ` · TELEGRAM_CHAT_ID equals the bot's own id — Telegram rejects bot→bot sends; waiting for discoverChat()/override` : chat ? ` · chat ${chat.slice(0, 3)}***${chat.slice(-2)}` : " · TELEGRAM_CHAT_ID unset"}`);
+    98→      }
+    99→    }
+   100→  } catch (e: unknown) {
+   101→    pushErr(`getMe failed: ${e instanceof Error ? e.message : String(e)}`);
+   102→  }
+   103→}
+   104→
+   105→async function resolveChat(): Promise<string | null> {
+   106→  await ensureBotIdentity();
+   107→  await loadOverride();
+   108→  const chat = chatOverride ?? ENV_CHAT;
+   109→  if (!chat || botId === null || chat === String(botId)) return null;
+   110→  return chat;
+   111→}
+   112→
+   113→async function apiCall<T>(method: string, body: unknown, timeoutMs = 4500): Promise<{ ok: boolean; result?: T; error?: string }> {
+   114→  const ctrl = new AbortController();
+   115→  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+   116→  try {
+   117→    const res = await fetch(`https://api.telegram.org/bot${TOKEN}/${method}`, {
+   118→      method: "POST",
+   119→      headers: { "content-type": "application/json" },
+   120→      body: JSON.stringify(body),
+   121→      signal: ctrl.signal,
+   122→      cache: "no-store",
+   123→    });
+   124→    const json = (await res.json()) as { ok: boolean; result?: T; description?: string };
+   125→    return json.ok ? { ok: true, result: json.result } : { ok: false, error: json.description ?? `HTTP ${res.status}` };
+   126→  } catch (e: unknown) {
+   127→    return { ok: false, error: e instanceof Error ? (e.name === "AbortError" ? `timeout ${timeoutMs}ms` : e.message) : String(e) };
+   128→  } finally {
+   129→    clearTimeout(timer);
+   130→  }
+   131→}
+   132→
+   133→/** Multipart photo upload (sendPhoto) — FormData/Blob are global in Node 18+. */
+   134→async function apiSendPhoto(chat: string, caption: string, photo: Buffer, filename: string): Promise<{ ok: boolean; error?: string }> {
+   135→  const ctrl = new AbortController();
+   136→  const timer = setTimeout(() => ctrl.abort(), 9000);
+   137→  try {
+   138→    const isPng = filename.toLowerCase().endsWith(".png");
+   139→    const form = new FormData();
+   140→    form.append("chat_id", chat);
+   141→    form.append("caption", caption.slice(0, 1024));
+   142→    form.append("parse_mode", "HTML");
+   143→    form.append("photo", new Blob([new Uint8Array(photo)], { type: isPng ? "image/png" : "image/jpeg" }), filename);
+   144→    const res = await fetch(`https://api.telegram.org/bot${TOKEN}/sendPhoto`, { method: "POST", body: form, signal: ctrl.signal, cache: "no-store" });
+   145→    const json = (await res.json()) as { ok: boolean; description?: string };
+   146→    return json.ok ? { ok: true } : { ok: false, error: json.description ?? `HTTP ${res.status}` };
+   147→  } catch (e: unknown) {
+   148→    return { ok: false, error: e instanceof Error ? (e.name === "AbortError" ? "timeout 9000ms" : e.message) : String(e) };
+   149→  } finally {
+   150→    clearTimeout(timer);
+   151→  }
+   152→}
+   153→
+   154→function esc(s: string): string {
+   155→  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+   156→}
+   157→
+   158→function fmtPrice(p: number): string {
+   159→  return p >= 100 ? p.toFixed(2) : p.toFixed(p >= 1 ? 4 : 6);
+   160→}
+   161→
+   162→// ── v6.3.2 OPERATOR ARTWORK — the full uploaded banner set ──
+   163→// Operator mandate: «استفاده از تصویر های ضمینه شده برای سیگنالهای win / stop /
+   164→// EXPIRED» + the lost-window batch (2026-09-05 21:09) adds NEW / TTL / FULL /
+   165→// Short. The PROVIDED artwork ships first; the dependency-free rendered
+   166→// banner (telegram-image.ts) is only the fallback when a file is missing.
+   167→type ArtKind = BannerStatus;
+   168→const ART_FILES: Record<ArtKind, string> = {
+   169→  WIN: "WIN.jpg", STOP: "STOP.jpg", EXPIRED: "EXPIRED.jpg",
+   170→  NEW: "NEW.jpg", SHORT: "SHORT.jpg", TTL_EXT: "TTL.jpg", FULL: "FULL.jpg",
+   171→  AFTERLIFE: "AFTERLIFE.jpg",
+   172→};
+   173→const artCache = new Map<ArtKind, Buffer | null>();
+   174→
+   175→async function loadOperatorArt(kind: ArtKind): Promise<Buffer | null> {
+   176→  if (artCache.has(kind)) return artCache.get(kind) ?? null;
+   177→  try {
+   178→    const buf = await fs.readFile(path.join(process.cwd(), "assets", "telegram", ART_FILES[kind]));
+   179→    artCache.set(kind, buf);
+   180→    return buf;
+   181→  } catch {
+   182→    artCache.set(kind, null);
+   183→    return null;
+   184→  }
+   185→}
+   186→
+   187→// ── v6.3 STRUCTURED CARD COMPOSER ─────────────────────────────────────────
+   188→// Event → (emoji headline, HTML body, optional banner image). Every field is
+   189→// read from the persisted Signal row; the engine message is appended verbatim.
+   190→interface RelayCard {
+   191→  text: string;
+   192→  photo?: Buffer;
+   193→  photoName?: string;
+   194→}
+   195→
+   196→const HEADLINE: Record<string, { emoji: string; title: string }> = {
+   197→  CREATED: { emoji: "🚀", title: "NEW SIGNAL DEPLOYED" },
+   198→  TP1: { emoji: "💰", title: "TP1 HIT — 50% BOOKED" },
+   199→  TP2: { emoji: "💰💰", title: "TP2 HIT — 80% BOOKED" },
+   200→  TP3: { emoji: "🏆", title: "FULL LADDER — TP3 CAPTURED" },
+   201→  SL: { emoji: "🛑", title: "STOPPED OUT" },
+   202→  TTL_EXPIRED: { emoji: "⏰", title: "SIGNAL EXPIRED" },
+   203→  EARLY_EXIT: { emoji: "🚪", title: "EARLY TIME-EXIT" }, // v10.4: v8.4 R2/R7 adverse/stalled cut — was invisible to the operator
+   204→  TTL_EXTENDED: { emoji: "⏳", title: "TTL EXTENDED" },
+   205→  AFTERLIFE: { emoji: "🔮", title: "EXPIRED FOLLOW-UP" },
+   206→  // v9.0 PUMP/DUMP RADAR — flow tracking declarations + resolutions + unlock
+   207→  PUMP_RADAR: { emoji: "📡", title: "PUMP/DUMP RADAR" },
+   208→};
+   209→
+   210→const BANNER_STATUS: Partial<Record<string, BannerStatus>> = {
+   211→  CREATED: "NEW", TP1: "WIN", TP2: "WIN", TP3: "FULL", SL: "STOP", TTL_EXPIRED: "EXPIRED", TTL_EXTENDED: "TTL_EXT",
+   212→  AFTERLIFE: "AFTERLIFE", EARLY_EXIT: "EXPIRED", // v10.4: early cut settles EXPIRED → amber artwork
+   213→};
+   214→
+   215→type SignalLike = NonNullable<Awaited<ReturnType<typeof db.signal.findUnique>>>;
+   216→
+   217→/** Tehran wall-clock stamp for artwork corners — presentation only. */
+   218→function tehranStamp(): string {
+   219→  return `${new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Tehran", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date()).replace(",", "")} TEHRAN`;
+   220→}
+   221→
+   222→/** The tidy line-by-line HTML body shared by live cards and sample proofs. */
+   223→function composeSignalText(type: string, sig: SignalLike, engineMessage: string): string {
+   224→  const head = HEADLINE[type] ?? { emoji: "📡", title: type };
+   225→  const dirEmoji = sig.direction === "LONG" ? "🟢 LONG" : "🔴 SHORT";
+   226→  const serial = `NX-${String(sig.serial).padStart(4, "0")}`;
+   227→  const pnl = sig.pnlPercent ?? 0;
+   228→  const pnlLine = `${pnl >= 0 ? "+" : ""}${pnl.toFixed(1)}% NET`;
+   229→  const reached = sig.reachedTp ?? 0;
+   230→  const lines: string[] = [
+   231→    `${head.emoji} <b>${esc(head.title)}</b>`,
+   232→    `${dirEmoji} · <b>${esc(sig.symbol)}</b> · <i>${esc(sig.strategy)}${sig.timeframe ? ` (${esc(sig.timeframe)})` : ""}</i>`,
+   233→    "",
+   234→    `🎯 TP1: <code>${fmtPrice(sig.tp1)}</code>   💰 TP2: <code>${fmtPrice(sig.tp2)}</code>   🏆 TP3: <code>${fmtPrice(sig.tp3)}</code>`,
+   235→    `🛑 Stop: <code>${fmtPrice(sig.stopLoss)}</code>   📍 Entry: <code>${fmtPrice(sig.entryPrice)}</code>`,
+   236→    "",
+   237→    `⚡ Leverage: <b>${sig.leverage}x</b>   💵 Margin: <b>$${sig.marginUsd.toFixed(0)}</b>   📐 R:R <b>1:${sig.riskReward.toFixed(1)}</b>`,
+   238→    `📊 Conviction: <b>${sig.confidence}%</b>   ⏳ TTL: <b>${sig.ttlMinutes}m</b>${sig.ttlExtensions ? ` (+${sig.ttlExtensions} ext)` : ""}`,
+   239→  ];
+   240→  if (type !== "CREATED") {
+   241→    lines.push(`💵 Result: <b>${pnl >= 0 ? "✅" : "❌"} ${esc(pnlLine)}</b>   🪜 Ladder: <b>${reached}/3</b>`);
+   242→  }
+   243→  lines.push("", `<blockquote>💬 ${esc(engineMessage)}</blockquote>`);
+   244→  lines.push(`<i>🤖 ${esc(serial)} · FLOWRADAR-NEO AI live engine</i>`);
+   245→  return lines.join("\n");
+   246→}
+   247→
+   248→async function buildCard(type: string, symbol: string | null, engineMessage: string, signalId: string | null): Promise<RelayCard> {
+   249→  const head = HEADLINE[type] ?? { emoji: "📡", title: type };
+   250→  const sig = signalId ? await db.signal.findUnique({ where: { id: signalId } }).catch(() => null) : null;
+   251→
+   252→  if (!sig) {
+   253→    // honest fallback — engine line only
+   254→    return { text: `${head.emoji} <b>${APP_NAME} — ${esc(head.title)}</b>\n${symbol ? `📊 <b>${esc(symbol)}</b>\n` : ""}\n<blockquote>${esc(engineMessage)}</blockquote>` };
+   255→  }
+   256→
+   257→  const text = composeSignalText(type, sig, engineMessage);
+   258→  const banner = BANNER_STATUS[type];
+   259→  if (!banner) return { text };
+   260→  // CREATED cards are direction-aware: the red bear artwork ships for SHORT
+   261→  // deployments, the rocket/bull for LONG.
+   262→  const kind: BannerStatus = type === "CREATED" && sig.direction === "SHORT" ? "SHORT" : banner;
+   263→
+   264→  const serial = `NX-${String(sig.serial).padStart(4, "0")}`;
+   265→  const pnl = sig.pnlPercent ?? 0;
+   266→  const pnlLine = `${pnl >= 0 ? "+" : ""}${pnl.toFixed(1)}% NET`;
+   267→  const reached = sig.reachedTp ?? 0;
+   268→  const line2 = type === "SL" ? `RISK CONTAINED · LADDER ${reached}/3` : type === "TTL_EXPIRED" ? `TTL ${sig.ttlMinutes}M ELAPSED · LADDER ${reached}/3` : type === "EARLY_EXIT" ? `EARLY CUT (R2/R7) · LADDER ${reached}/3` : type === "TTL_EXTENDED" ? `+${sig.ttlExtensions} EXT · STILL LIVE` : type === "AFTERLIFE" ? `POST-EXPIRY ${((sig.afterlife ?? "TRACKING").replace(/_/g, " "))} · MFE ${((sig.maxPostPnlPercent ?? 0) >= 0 ? "+" : "")}${(sig.maxPostPnlPercent ?? 0).toFixed(1)}%` : type === "CREATED" ? `ENTRY ${fmtPrice(sig.entryPrice)} · RR 1:${sig.riskReward.toFixed(1)}` : `LADDER ${reached}/3 BANKED · RR 1:${sig.riskReward.toFixed(1)}`;
+   269→  const spec = {
+   270→    status: kind,
+   271→    title: `${sig.symbol} ${sig.direction}`,
+   272→    line1: `${serial} · ${pnlLine}`,
+   273→    line2,
+   274→    ts: tehranStamp(),
+   275→  };
+   276→  // v8.1: professional composite (AI art + coin logo + live data) first; the
+   277→  // operator JPG set and the pixel-font banner remain as fallbacks.
+   278→  try {
+   279→    const photo = await renderSignalBannerV2(spec);
+   280→    return { text, photo, photoName: `${kind.toLowerCase()}-${serial}.png` };
+   281→  } catch { /* sharp failure → legacy chain below */ }
+   282→  const art = await loadOperatorArt(kind);
+   283→  if (art) return { text, photo: art, photoName: ART_FILES[kind] };
+   284→  return { text, photo: renderStatusBanner(spec), photoName: `${kind.toLowerCase()}-${serial}.png` };
+   285→}
+   286→
+   287→/** Fire-and-forget relay — NEVER await this from the engine hot path. */
+   288→export function relaySignalEvent(type: string, symbol: string | null, message: string, signalId?: string | null): void {
+   289→  if (!relayArmed() || !RELAYABLE_TYPES.has(type)) return;
+   290→  void (async () => {
+   291→    const chat = await resolveChat();
+   292→    if (!chat) return; // honest pending state — not an error, no doomed send
+   293→    // v9.1 RAW-CAL SPAM GUARD → v10.4 REBALANCE (operator mandate: «گزارشات
+   294→    // کامل و دقیق به تلگرام ارسال نمیشه، مثل کارت های سیگنال جدید، استاپ و
+   295→    // دیگر کارتها»): RAW-CAL CREATED cards no longer VANISH — they ship as
+   296→    // compact TEXT cards (structured HTML body, photo suppressed) so the
+   297→    // capture run stays fully visible without flooding the chat with ~5 heavy
+   298→    // photo posters/hour. Outcome cards (SL / EARLY_EXIT / TTL_EXPIRED / TP*)
+   299→    // keep their full photo treatment — that is where the detail matters.
+   300→    let rawCalTextOnly = false;
+   301→    if (type === "CREATED" && signalId) {
+   302→      const sig = await db.signal.findUnique({ where: { id: signalId }, select: { tags: true } }).catch(() => null);
+   303→      if (sig?.tags?.includes("RAW-CAL")) rawCalTextOnly = true;
+   304→    }
+   305→    let card: RelayCard;
+   306→    try {
+   307→      card = await buildCard(type, symbol, message, signalId ?? null);
+   308→    } catch {
+   309→      card = { text: `📡 ${APP_NAME} ${type}${symbol ? ` · ${esc(symbol)}` : ""}\n${esc(message)}`.slice(0, 3800) };
+   310→    }
+   311→    if (rawCalTextOnly) card = { text: card.text }; // v10.4: strip photo, keep the full HTML body
+   312→    let r: { ok: boolean; error?: string };
+   313→    if (card.photo) {
+   314→      r = await apiSendPhoto(chat, card.text, card.photo, card.photoName ?? "flowradar-signal.png");
+   315→      if (!r.ok) {
+   316→        // photo failed (size/network) — retry once as plain HTML text so the
+   317→        // alert still lands; banner is presentation, the message is the payload
+   318→        r = await apiCall<unknown>("sendMessage", { chat_id: chat, text: card.text.slice(0, 3800), parse_mode: "HTML", disable_web_page_preview: true });
+   319→      }
+   320→    } else {
+   321→      r = await apiCall<unknown>("sendMessage", { chat_id: chat, text: card.text.slice(0, 3800), parse_mode: "HTML", disable_web_page_preview: true });
+   322→    }
+   323→    if (r.ok) {
+   324→      sentCount++;
+   325→      lastSentAt = Date.now();
+   326→    } else {
+   327→      failCount++;
+   328→      pushErr(`${type}: ${r.error}`);
+   329→      console.error(`[NOTIFY] telegram relay send failed (${type}): ${r.error}`);
+   330→    }
+   331→  })();
+   332→}
+   333→
+   334→/** v6.3: module-state primer — Next dev compiles each route bundle separately,
+   335→ * so /api/notify's copy of this module starts with cold state even when the
+   336→ * engine's copy already resolved the chat. Call before reading relayHealth(). */
+   337→export async function primeRelayState(): Promise<void> {
+   338→  await resolveChat();
+   339→}
+   340→
+   341→/** Operator-initiated proof: send an arbitrary line to the resolved chat. */
+   342→export async function sendDirect(text: string): Promise<{ ok: boolean; error?: string; chatId?: string }> {
+   343→  const chat = await resolveChat();
+   344→  if (!TOKEN) return { ok: false, error: "TELEGRAM_BOT_TOKEN unset — relay dormant" };
+   345→  if (!chat) {
+   346→    if (botId !== null && (chatOverride ?? ENV_CHAT) === String(botId)) {
+   347→      return { ok: false, error: `TELEGRAM_CHAT_ID (${ENV_CHAT}) is the bot's own id — Telegram rejects bot→bot sends. Message the bot once from your account, then run discover.` };
+   348→    }
+   349→    return { ok: false, error: chatOverride || ENV_CHAT ? "chat unresolved (getMe pending or override pending)" : "TELEGRAM_CHAT_ID unset and no discovered chat yet" };
+   350→  }
+   351→  const r = await apiCall<unknown>("sendMessage", { chat_id: chat, text, disable_web_page_preview: true });
+   352→  if (r.ok) { sentCount++; lastSentAt = Date.now(); } else { failCount++; pushErr(`direct: ${r.error}`); }
+   353→  return { ok: r.ok, error: r.error, chatId: chat };
+   354→}
+   355→
+   356→// ── v6.4 DAILY PERFORMANCE REPORT (operator request 2026-09-07) ──────────
+   357→// «هر روز ساعت 00:00 یک گزارش کوتاه و مفید از عملکرد روزانه به تلگرام
+   358→//  بفرست با این تصویر» — the DAILY.jpg artwork ships as the photo, the
+   359→// compiled 24h performance digest rides as the HTML caption. Numbers come
+   360→// from the REAL db rows (lib/dailyReport.ts); DAILY.jpg was uploaded by the
+   361→// operator and lives in assets/telegram/.
+   362→const DAILY_ART = path.join(process.cwd(), "assets", "telegram", "DAILY.jpg");
+   363→let dailyArtCache: Buffer | null | undefined;
+   364→
+   365→export async function loadDailyArt(): Promise<Buffer | null> {
+   366→  if (dailyArtCache !== undefined) return dailyArtCache;
+   367→  try {
+   368→    dailyArtCache = await fs.readFile(DAILY_ART);
+   369→  } catch {
+   370→    dailyArtCache = null;
+   371→  }
+   372→  return dailyArtCache;
+   373→}
+   374→
+   375→/** Send the daily performance report — photo (v8.1 rendered poster; the
+   376→ * operator's DAILY.jpg remains the fallback) + caption. */
+   377→export async function sendDailyReport(text: string, poster?: Buffer | null): Promise<{ ok: boolean; error?: string; withPhoto: boolean }> {
+   378→  const chat = await resolveChat();
+   379→  if (!TOKEN) return { ok: false, error: "TELEGRAM_BOT_TOKEN unset — relay dormant", withPhoto: false };
+   380→  if (!chat) return { ok: false, error: "chat unresolved — message the bot once, then retry", withPhoto: false };
+   381→  let art = poster ?? null;
+   382→  if (!art) art = await loadDailyArt();
+   383→  const r = art
+   384→    ? await apiSendPhoto(chat, text, art, "DAILY.jpg")
+   385→    : await apiCall<unknown>("sendMessage", { chat_id: chat, text: text.slice(0, 3800), parse_mode: "HTML", disable_web_page_preview: true });
+   386→  if (r.ok) { sentCount++; lastSentAt = Date.now(); } else { failCount++; pushErr(`daily: ${r.error}`); }
+   387→  return { ok: r.ok, error: r.error, withPhoto: Boolean(art) };
+   388→}
+   389→
+   390→/** Design-preview channel — pushes any photo to the operator chat OUTSIDE the
+   391→ * daily-report dedup guard. Used by /api/report/daily/poster?send=1 so artwork
+   392→ * iterations can be reviewed live without consuming the once-per-day report. */
+   393→export async function sendPhotoDirect(caption: string, photo: Buffer, filename = "preview.jpg"): Promise<{ ok: boolean; error?: string }> {
+   394→  if (!TOKEN) return { ok: false, error: "TELEGRAM_BOT_TOKEN unset — relay dormant" };
+   395→  const chat = await resolveChat();
+   396→  if (!chat) return { ok: false, error: "chat unresolved — message the bot once, then retry" };
+   397→  const r = await apiSendPhoto(chat, caption, photo, filename);
+   398→  if (r.ok) { sentCount++; lastSentAt = Date.now(); } else { failCount++; pushErr(`photo-direct: ${r.error}`); }
+   399→  return r;
+   400→}
+   401→
+   402→/** v6.3.2 operator proof: ALL SEVEN photo outcome cards with clearly-labelled
+   403→ * SAMPLE rows — never engine data, format verification only. */
+   404→export async function sendSampleCards(): Promise<{ ok: boolean; error?: string; detail?: string }> {
+   405→  const chat = await resolveChat();
+   406→  if (!TOKEN) return { ok: false, error: "TELEGRAM_BOT_TOKEN unset — relay dormant" };
+   407→  if (!chat) return { ok: false, error: "chat unresolved — message the bot once, then retry" };
+   408→  const mk = (over: Record<string, unknown>): SignalLike =>
+   409→    ({
+   410→      id: "sample", createdAt: new Date(), updatedAt: new Date(), closedAt: new Date(),
+   411→      symbol: "BTCUSDT", direction: "LONG", entryPrice: 65000, entryZoneLow: 64948, entryZoneHigh: 65052,
+   412→      tp1: 66000, tp2: 67500, tp3: 69000, stopLoss: 64000, leverage: 10, marginUsd: 12, confidence: 78, riskReward: 2.8,
+   413→      timeframe: "1h", strategy: "AI-SWING", status: "TP2", analysis: "", tags: "high-conviction,FLOW-CONFIRM,REGIME-TREND-UP",
+   414→      engine: "SAMPLE", serial: 0, factorsJson: null, flowJson: null, ttlMinutes: 120, expiresAt: new Date(Date.now() + 3600_000),
+   415→      pnlPercent: 27.3, maxPnlPercent: 31.4, feeUsd: 0.11, swapUsd: 0.01, reachedTp: 2, ttlExtensions: 0,
+   416→      afterlife: null, afterlifeAt: null, maxPostPnlPercent: 0, operatorNotes: "", notesUpdatedAt: null,
+   417→      ...over,
+   418→    } as unknown as SignalLike);
+   419→  const samples: Array<[string, SignalLike, string]> = [
+   420→    ["CREATED", mk({ serial: 1 }), "SAMPLE — new LONG deployment detected by the live engine (card-format proof, not a live signal)"],
+   421→    ["CREATED", mk({ serial: 2, direction: "SHORT", symbol: "ETHUSDT", strategy: "BREAKOUT", timeframe: "15m", entryPrice: 3120, entryZoneLow: 3118, entryZoneHigh: 3122, tp1: 3060, tp2: 2990, tp3: 2900, stopLoss: 3180, leverage: 8, marginUsd: 9.5, confidence: 71, riskReward: 2.6, tags: "confluence,FLOW-NEUTRAL,REGIME-CHOP" }), "SAMPLE — new SHORT deployment detected by the live engine (card-format proof, not a live signal)"],
+   422→    ["TP2", mk({ serial: 3, pnlPercent: 27.3, maxPnlPercent: 31.4, feeUsd: 0.11, swapUsd: 0.01, reachedTp: 2 }), "SAMPLE — TP2 reached — 80% booked, stop trailed to TP1 (card-format proof, not a live signal)"],
+   423→    ["TP3", mk({ serial: 4, symbol: "SOLUSDT", strategy: "AI-SWING", entryPrice: 184.2, entryZoneLow: 183.9, entryZoneHigh: 184.5, tp1: 191.2, tp2: 201.0, tp3: 214.0, stopLoss: 177.2, leverage: 6, marginUsd: 8.25, confidence: 68, riskReward: 3.1, pnlPercent: 48.9, maxPnlPercent: 52.1, reachedTp: 3, status: "TP3", closedAt: new Date() }), "SAMPLE — FULL TARGET achieved — ladder 3/3 banked (card-format proof, not a live signal)"],
+   424→    ["SL", mk({ serial: 5, direction: "SHORT", symbol: "ETHUSDT", strategy: "BREAKOUT", timeframe: "15m", entryPrice: 3120, entryZoneLow: 3118, entryZoneHigh: 3122, tp1: 3060, tp2: 2990, tp3: 2900, stopLoss: 3180, leverage: 8, marginUsd: 9.5, confidence: 71, riskReward: 2.6, pnlPercent: -29.8, reachedTp: 0, status: "SL", closedAt: new Date(), tags: "confluence,FLOW-NEUTRAL,REGIME-CHOP" }), "SAMPLE — stopped @ 3180 — risk contained (card-format proof, not a live signal)"],
+   425→    ["TTL_EXTENDED", mk({ serial: 6, symbol: "SOLUSDT", strategy: "AI-SWING", entryPrice: 184.2, entryZoneLow: 183.9, entryZoneHigh: 184.5, tp1: 191.2, tp2: 201.0, tp3: 214.0, stopLoss: 177.2, leverage: 6, marginUsd: 8.25, confidence: 68, riskReward: 3.1, ttlMinutes: 90, ttlExtensions: 1, tags: "confluence,FLOW-CONFIRM,REGIME-TREND-UP" }), "SAMPLE — TTL 90m extended +1 — expiry gate bought more room (card-format proof, not a live signal)"],
+   426→    ["TTL_EXPIRED", mk({ serial: 7, symbol: "SOLUSDT", strategy: "AI-SWING", entryPrice: 184.2, entryZoneLow: 183.9, entryZoneHigh: 184.5, tp1: 191.2, tp2: 201.0, tp3: 214.0, stopLoss: 177.2, leverage: 6, marginUsd: 8.25, confidence: 68, riskReward: 3.1, pnlPercent: 11.2, reachedTp: 1, ttlMinutes: 90, ttlExtensions: 1, status: "EXPIRED", closedAt: new Date(), tags: "confluence,FLOW-CONFIRM,REGIME-TREND-UP" }), "SAMPLE — TTL 90m +1 ext elapsed — auto-closed at mark (card-format proof, not a live signal)"],
+   427→  ];
+   428→  const results: string[] = [];
+   429→  for (const [type, sig, msg] of samples) {
+   430→    try {
+   431→      const text = `🧪 <b>SAMPLE — CARD FORMAT PROOF</b>\n\n${composeSignalText(type, sig, msg)}`;
+   432→      const banner = BANNER_STATUS[type];
+   433→      let r: { ok: boolean; error?: string };
+   434→      const serial = `NX-${String(sig.serial).padStart(4, "0")}`;
+   435→      const pnl = sig.pnlPercent ?? 0;
+   436→      const photo = banner
+   437→        ? await renderSignalBannerV2({
+   438→            status: banner,
+   439→            title: `${sig.symbol} ${sig.direction}`,
+   440→            line1: `${serial} · ${pnl >= 0 ? "+" : ""}${pnl.toFixed(1)}% NET`,
+   441→            line2: banner === "NEW" || banner === "SHORT" ? `ENTRY ${fmtPrice(sig.entryPrice)} · RR 1:${sig.riskReward.toFixed(1)}` : `LADDER ${sig.reachedTp}/3 · RR 1:${sig.riskReward.toFixed(1)}`,
+   442→            ts: tehranStamp(),
+   443→          }).catch(() => null)
+   444→        : null;
+   445→      if (photo) r = await apiSendPhoto(chat, text, photo, `sample-${type.toLowerCase()}.png`);
+   446→      else {
+   447→        const art = banner ? await loadOperatorArt(banner) : null;
+   448→        if (art) r = await apiSendPhoto(chat, text, art, ART_FILES[banner!]);
+   449→        else r = await apiCall<unknown>("sendMessage", { chat_id: chat, text: text.slice(0, 3800), parse_mode: "HTML", disable_web_page_preview: true });
+   450→      }
+   451→      if (!r.ok) r = await apiCall<unknown>("sendMessage", { chat_id: chat, text: text.slice(0, 3800), parse_mode: "HTML", disable_web_page_preview: true });
+   452→      results.push(`${type}: ${r.ok ? "OK" : r.error}`);
+   453→    } catch (e) {
+   454→      results.push(`${type}: ${e instanceof Error ? e.message : String(e)}`);
+   455→    }
+   456→  }
+   457→  const okAll = results.every((r) => r.endsWith("OK"));
+   458→  if (okAll) { sentCount += samples.length; lastSentAt = Date.now(); } else failCount += results.filter((r) => !r.endsWith("OK")).length;
+   459→  return { ok: okAll, detail: results.join(" · ") };
+   460→}
+   461→
+   462→// ── v6.2.2 AUTO-DISCOVER (operator round) ─────────────────────────────────
+   463→// The operator's credential set shipped TELEGRAM_CHAT_ID === the bot's own id
+   464→// (Telegram hard-rejects bot→bot sends), leaving the relay stuck in ARMED
+   465→// (chat PENDING) until someone runs discoverChat() at exactly the right
+   466→// moment. Instead of babysitting, this loop polls getUpdates every 30s WHILE
+   467→// the chat is unresolved; the instant the operator messages the bot once,
+   468→// the chat id is learned, persisted, confirmed back, and the loop retires.
+   469→let autoDiscoverTimer: ReturnType<typeof setInterval> | null = null;
+   470→
+   471→function chatResolvedNow(): boolean {
+   472→  const chat = chatOverride ?? ENV_CHAT;
+   473→  return chat.length > 0 && botId !== null && chat !== String(botId);
+   474→}
+   475→
+   476→export function ensureAutoDiscover(): void {
+   477→  if (autoDiscoverTimer || !relayArmed()) return;
+   478→  // v8.3 BRIDGE COEXISTENCE: the chat id is already persisted (EngineSetting
+   479→  // telegram.chatId) since v6.2.2 — discovery is DONE. The legacy 30s
+   480→  // getUpdates probe now 409-terminates the v8.3 bridge long-poller, so the
+   481→  // loop may only start after a DB-backed override check FAILS, and each
+   482→  // tick re-checks the override BEFORE touching getUpdates.
+   483→  void (async () => {
+   484→    try {
+   485→      await ensureBotIdentity();
+   486→      await loadOverride();
+   487→    } catch {
+   488→      /* identity check is best-effort */
+   489→    }
+   490→    if (chatResolvedNow()) {
+   491→      console.log("[NOTIFY] auto-discover SKIPPED — chat already resolved (v8.3 bridge owns getUpdates)");
+   492→      return;
+   493→    }
+   494→    const timer: ReturnType<typeof setInterval> = setInterval(() => {
+   495→      if (chatResolvedNow()) {
+   496→        clearInterval(timer);
+   497→        autoDiscoverTimer = null;
+   498→        return;
+   499→      }
+   500→      void (async () => {
+   501→        try {
+   502→          await ensureBotIdentity();
+   503→          await loadOverride();
+   504→        } catch {
+   505→          /* best-effort */
+   506→        }
+   507→        if (chatResolvedNow()) {
+   508→          clearInterval(timer);
+   509→          autoDiscoverTimer = null;
+   510→          return;
+   511→        }
+   512→        const r = await discoverChat();
+   513→        if (r.ok) {
+   514→          clearInterval(timer);
+   515→          autoDiscoverTimer = null;
+   516→          const proof = await sendDirect(
+   517→            `🟢 ${APP_NAME} relay ARMED — operator chat discovered and persisted.\nFrom now on CREATED / TP1-3 / SL / TTL_EXPIRED / TTL_EXTENDED / AFTERLIFE events mirror here as structured cards (WIN / STOP / EXPIRED outcomes also arrive as rendered banner images).`
+   518→          );
+   519→          console.log(`[NOTIFY] auto-discover complete — confirmation ${proof.ok ? "delivered" : `NOT delivered (${proof.error ?? "unknown"})`}`);
+   520→        }
+   521→        // ok:false → "no messages waiting" (benign, keep polling) or a
+   522→        // transient network error (silent retry on the next 30s pass).
+   523→      })();
+   524→    }, 30_000);
+   525→    autoDiscoverTimer = timer;
+   526→    console.log("[NOTIFY] auto-discover loop started — polling getUpdates every 30s until the operator messages the bot");
+   527→  })();
+   528→}
+   529→
+   530→/** Learn the operator chat from the bot's update stream — the operator sends
+   531→ * ANY message to the bot in Telegram, we read getUpdates and persist the chat. */
+   532→export async function discoverChat(): Promise<{ ok: boolean; error?: string; chatId?: string; from?: string; text?: string }> {
+   533→  if (!TOKEN) return { ok: false, error: "TELEGRAM_BOT_TOKEN unset — relay dormant" };
+   534→  await ensureBotIdentity();
+   535→  const r = await apiCall<Array<{ message?: { chat: { id: number; first_name?: string; username?: string }; text?: string } }>>("getUpdates", { limit: 10, timeout: 0 }, 8000);
+   536→  if (!r.ok || !r.result) return { ok: false, error: r.error ?? "getUpdates returned no payload" };
+   537→  const withMsg = r.result.filter((u) => u.message?.chat?.id !== undefined);
+   538→  if (withMsg.length === 0) return { ok: false, error: "no messages waiting — open the bot in Telegram, press START and send any message (e.g. «سلام»), then retry discover" };
+   539→  const last = withMsg[withMsg.length - 1].message!;
+   540→  const chatId = String(last.chat.id);
+   541→  chatOverride = chatId;
+   542→  overrideLoaded = true;
+   543→  await db.engineSetting.upsert({ where: { key: CHAT_OVERRIDE_KEY }, create: { key: CHAT_OVERRIDE_KEY, value: chatId }, update: { value: chatId } });
+   544→  console.log(`[NOTIFY] telegram chat DISCOVERED — id ${chatId} (${last.chat.first_name ?? last.chat.username ?? "unknown"}), persisted to ${CHAT_OVERRIDE_KEY}; relay fully ARMED`);
+   545→  return { ok: true, chatId, from: last.chat.first_name ?? last.chat.username, text: last.text };
+   546→}
+   547→

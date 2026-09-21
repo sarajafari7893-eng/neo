@@ -1,0 +1,452 @@
+   450→    const price = priceMap.get(s.symbol);
+   451→    if (!price) continue;
+   452→
+   453→    const isLong = s.direction === "LONG";
+   454→    const movePct = ((price - s.entryPrice) / s.entryPrice) * (isLong ? 1 : -1) * 100; // UNLEVERED price move %
+   455→    const gross = movePct * s.leverage; // levered % on margin (display)
+   456→    const fb = feeBreakdown(s.marginUsd, s.leverage, movePct, heldMinutes(s, now));
+   457→    const maxGross = Math.max(s.maxPnlPercent, fb.netPct);
+   458→
+   459→    let status = s.status;
+   460→    let closedAt: Date | null = null;
+   461→    let stopLossNext: number | null = null; // v5.4: trail the stop when ladder rungs are banked
+   462→
+   463→    const hitTp = (level: 1 | 2 | 3) => {
+   464→      const target = level === 1 ? s.tp1 : level === 2 ? s.tp2 : s.tp3;
+   465→      return isLong ? price >= target : price <= target;
+   466→    };
+   467→    const hitSl = isLong ? price <= s.stopLoss : price >= s.stopLoss;
+   468→
+   469→    // v5.4 TP-PROVEN LEDGER — reaching TP1/TP2 is a permanent, auditable win:
+   470→    // reachedTp persists even if the trade later stops out or expires, so the
+   471→    // analytics win-rate counts every TP1/TP2/TP3 touch (operator request).
+   472→    const reachedTp = Math.max(s.reachedTp, hitTp(1) ? 1 : 0, hitTp(2) ? 2 : 0, hitTp(3) ? 3 : 0);
+   473→
+   474→    if (hitSl) {
+   475→      status = "SL";
+   476→      closedAt = now;
+   477→      // v5.4: PnL is measured to the EFFECTIVE stop (trailed stops are real):
+   478→      // original stop → -1R · breakeven trail after TP1 → ~0R · TP1 trail after TP2 → +1R
+   479→      const stopMovePct = ((s.stopLoss - s.entryPrice) / s.entryPrice) * (isLong ? 1 : -1) * 100;
+   480→      const grossAtStop = stopMovePct * s.leverage;
+   481→      const trailNote = grossAtStop > 0.5 ? " · trailed stop executed at TP1 — +1R locked on the runner" : Math.abs(grossAtStop) <= 0.5 ? " · breakeven stop executed — runner flat, TP1 profit banked" : "";
+   482→      await fireEvent(s.id, s.symbol, "SL", "error", `${s.symbol} stopped @ ${s.stopLoss.toFixed(s.stopLoss > 100 ? 1 : 4)} — risk contained (${grossAtStop >= 0 ? "+" : "-"}${Math.abs(grossAtStop).toFixed(1)}% gross)${trailNote || (reachedTp >= 1 ? " · TP1 had been banked earlier" : "")}`);
+   483→    } else if (hitTp(3)) {
+   484→      status = "TP3";
+   485→      closedAt = now;
+   486→      await fireEvent(s.id, s.symbol, "TP3", "success", `${s.symbol} final target secured — full ${s.riskReward.toFixed(1)}R journey captured 🎯 (TP ladder ${reachedTp}/3 banked · v6.6 tranche-settled: 50% @TP1 + 30% @TP2 + 20% @TP3)`);
+   487→    } else if (hitTp(2) && s.status !== "TP2") {
+   488→      status = "TP2";
+   489→      stopLossNext = s.tp1; // v5.4: trail the stop to TP1 — the announced +1R lock is now enforced
+   490→      await fireEvent(s.id, s.symbol, "TP2", "success", `${s.symbol} TP2 reached — 80% booked, stop trailed to TP1 (+1R locked) · recorded as WIN (TP-proven ${reachedTp}/3)`);
+   491→    } else if (hitTp(1) && s.status === "ACTIVE") {
+   492→      status = "TP1";
+   493→      stopLossNext = s.entryPrice; // v5.4: breakeven trail is now enforced, not just announced
+   494→      await fireEvent(s.id, s.symbol, "TP1", "success", `${s.symbol} TP1 reached — 50% booked, SL → breakeven · recorded as WIN (TP-proven ${reachedTp}/3)`);
+   495→    } else if (
+   496→      // ── v6.5 MID-LADDER BREAKEVEN ARM (perf forensics 2026-09-07) ──
+   497→      // Evidence: 57% of SL trades were first in profit (avg MFE +15% levered)
+   498→      // but the v5.4 trail armed only at TP1 (+1R ≈ +25% levered typical), so
+   499→      // winners round-tripped into full −1R stops — the largest damage bucket
+   500→      // (SL −$89.21 of −$114.96 gross loss). Once the NET pnl first touches
+   501→      // +beTrailPct% levered, the stop moves to entry: downside becomes fee-only.
+   502→      // ── v8.4 R2 DEFINITIVE BREAKEVEN (module-performance audit 2026-09-11) ──
+   503→      // The audit still found 8 winners (MFE ≥ +8% levered) closing negative —
+   504→      // ≈$4.73 give-back, MARSCOIN +22%→−59.7%. The arm now ALSO fires on the
+   505→      // UNLEVERED price move (beArmMovePct, default +1.5% — leverage-invariant,
+   506→      // catches spikes between pulses whatever the multiplier) and stays
+   507→      // DEFINITIVE: once armed, the stop lives at entry and never re-widens.
+   508→      s.status === "ACTIVE" &&
+   509→      (isLong ? s.stopLoss < s.entryPrice : s.stopLoss > s.entryPrice) &&
+   510→      ((gate.beTrailPct > 0 && fb.netPct >= gate.beTrailPct) || (gate.beArmMovePct > 0 && movePct >= gate.beArmMovePct))
+   511→    ) {
+   512→      stopLossNext = s.entryPrice;
+   513→      const viaPrice = !(gate.beTrailPct > 0 && fb.netPct >= gate.beTrailPct) && gate.beArmMovePct > 0 && movePct >= gate.beArmMovePct;
+   514→      await fireEvent(s.id, s.symbol, "BE_TRAIL", "info", `${s.symbol} breakeven armed @ +${(viaPrice ? movePct : fb.netPct).toFixed(1)}% ${viaPrice ? "price (R2 arm)" : "NET"} (gate ≥ ${viaPrice ? `+${gate.beArmMovePct}% price` : `+${gate.beTrailPct}% NET`}) — stop moved to entry, −1R risk retired; runner rides to TP ladder risk-free`);
+   515→    } else if (
+   516→      // ── v8.4 R2/R7 EARLY TIME-EXIT (module-performance audit 2026-09-11) ──
+   517→      // EXPIRED closes averaged +$2.66 while SL closes averaged −$12.61: a
+   518→      // trade sliding toward the stop is better off closing at the mark than
+   519→      // riding to −1R, and a stalled trade only burns fees + a capacity slot.
+   520→      // After earlyExitFrac of the TTL, an UNBANKED trade (reachedTp 0 — once
+   521→      // a rung is banked the stop already trails at breakeven-or-better) may
+   522→      // exit early when:
+   523→      //   · ADVERSE — NET ≤ −earlyExitR × 1R (default −0.45R): cuts the SL tail
+   524→      //   · STALLED — |gross| ≤ 0.15R: no momentum in either direction
+   525→      // Early exits settle EXPIRED → 48h afterlife tracking validates the cut.
+   526→      gate.earlyExitGuard > 0 &&
+   527→      s.status === "ACTIVE" &&
+   528→      reachedTp === 0 &&
+   529→      now.getTime() <= s.expiresAt.getTime() && // v9.5.1 hotfix: early-exit window ends at natural TTL — past expiry the DYNAMIC EXPIRY GATE below owns the signal. The else-if chain previously starved branch 7 whenever an unbanked, non-adverse, non-stalled signal crossed earlyExitFrac (operator report 2026-09-13: NX-0174/NX-0183/NX-0199 immortal 00:00 cards).
+   530→      heldMinutes(s, now) >= gate.earlyExitFrac * s.ttlMinutes
+   531→    ) {
+   532→      const rAnchor = s.initialStopLoss ?? s.stopLoss; // immutable deploy-time risk anchor (fallback: legacy rows)
+   533→      const rGross = Math.abs(((rAnchor - s.entryPrice) / s.entryPrice) * (isLong ? 1 : -1) * 100) * s.leverage; // 1R in levered %
+   534→      const adverse = gate.earlyExitR > 0 && fb.netPct <= -(gate.earlyExitR * rGross);
+   535→      const stalled = Math.abs(gross) <= 0.15 * rGross;
+   536→      if (adverse || stalled) {
+   537→        status = "EXPIRED";
+   538→        closedAt = now;
+   539→        await fireEvent(s.id, s.symbol, "EARLY_EXIT", "warn", `EARLY TIME-EXIT (${adverse ? `ADVERSE — NET ${fb.netPct.toFixed(1)}% ≤ −${(gate.earlyExitR * rGross).toFixed(0)}% ≈ −${gate.earlyExitR.toFixed(2)}R` : `STALLED — |move| ≤ 0.15R after ${Math.round(gate.earlyExitFrac * 100)}% of TTL`}) — ${s.symbol} closed at mark ${gross >= 0 ? "+" : ""}${gross.toFixed(1)}% gross / ${fb.netPct >= 0 ? "+" : ""}${fb.netPct.toFixed(1)}% NET after ${heldMinutes(s, now).toFixed(0)}m, no rung banked · audit R2/R7: EXPIRED +$2.66 vs SL −$12.61 — exit before the stop · 48h afterlife tracking armed`);
+   540→      }
+   541→    } else if (now.getTime() > s.expiresAt.getTime()) {
+   542→      // ── v6.1 DYNAMIC EXPIRY GATE ─────────────────────────────
+   543→      // Post-expiry afterlife evidence showed most expiries reach TP afterwards
+   544→      // (64% would-have-won). Instead of a hard TTL cut, an automatic gate
+   545→      // evaluates each maturing signal: extension budget, risk distance,
+   546→      // TP proximity, profit state and live momentum. The governor (LLM)
+   547→      // owns the policy knobs — ttlExtendMax / ttlExtendMinutes / ttlNearTpPct.
+   548→      // v9.3: radar R6 cards (RADAR-TTL tag) NEVER get extensions — their short
+   549→      // explicit TTL is the informative-ratio lever; extending would reintroduce
+   550→      // exactly the EXPIRED censoring the R6 gate drowns in.
+   551→      const radarNoExtend = !!s.tags && s.tags.split(",").includes("RADAR-TTL");
+   552→      const ext: TtlDecision = gate.ttlExtendMax > 0 && !radarNoExtend ? await evaluateTtlExtension(s, price, movePct, gate, now) : { grant: false, nearTp: false, reason: radarNoExtend ? "radar R6 card — TTL extension disabled (informative-ratio mandate)" : "gate disabled by governor (ttlExtendMax 0)" };
+   553→      if (ext.grant) {
+   554→        const newExpiry = new Date(s.expiresAt.getTime() + gate.ttlExtendMinutes * 60_000);
+   555→        await db.signal.update({ where: { id: s.id }, data: { expiresAt: newExpiry, ttlExtensions: s.ttlExtensions + 1 } });
+   556→        await bumpTtlTelemetry({ extended: 1 });
+   557→        // v6.1.1: dedicated TTL_EXTENDED type — grants are ALERTABLE now (toast + sound),
+   558→        // previously silent ENGINE events the operator never saw ("سیستم هیچ واکنشی نداره")
+   559→        await fireEvent(s.id, s.symbol, "TTL_EXTENDED", "info", `DYNAMIC EXPIRY GATE — ${s.symbol} TTL extended +${gate.ttlExtendMinutes}m (grant #${s.ttlExtensions + 1}/${gate.ttlExtendMax}) · ${ext.reason} — auto-close deferred, mark now ${gross >= 0 ? "+" : ""}${gross.toFixed(1)}% gross / ${fb.netPct >= 0 ? "+" : ""}${fb.netPct.toFixed(1)}% NET`);
+   560→        leveled++;
+   561→        continue;
+   562→      }
+   563→      status = "EXPIRED";
+   564→      closedAt = now;
+   565→      await bumpTtlTelemetry({ denied: 1, deniedNearTp: ext.nearTp ? 1 : 0 });
+   566→      await fireEvent(s.id, s.symbol, "TTL_EXPIRED", "warn", `${s.symbol} TTL (${s.ttlMinutes}m${s.ttlExtensions ? ` +${s.ttlExtensions} ext` : ""}) elapsed — auto-closed at mark ${gross >= 0 ? "+" : ""}${gross.toFixed(1)}% gross / ${fb.netPct >= 0 ? "+" : ""}${fb.netPct.toFixed(1)}% NET · expiry gate: ${ext.reason} · entering 48h afterlife tracking`);
+   567→    }
+   568→
+   569→    // ── v6.6 TRANCHE-AWARE NET ACCOUNTING (operator-approved, both ledger bugs fixed) ──
+   570→    // Bug A: TP3 exits were priced off the CURRENT (trailed) stop, so any stop
+   571→    // move (BE-trail, TP1/TP2 trail) collapsed the risk distance and understated
+   572→    // every TP3 close (measured: NX-119/NX-127 under-booked +$4.71 combined).
+   573→    // Fix: the runner leg exits at the tp3 RUNG — a deploy-time price that stop
+   574→    // moves can never touch (moveAtPct(tp3) ≡ rr × ORIGINAL risk distance).
+   575→    // initialStopLoss stays captured at deploy as the immutable risk anchor for
+   576→    // forensics. Legacy rows keep the old numbers — only future closes re-price.
+   577→    // Bug B: banked rungs (TP1 50% / TP2 30%) were priced at the FINAL exit on
+   578→    // FULL margin — TP3 closes overstated, TP1→BE round-trips lost the banked
+   579→    // profit entirely. Settled pnl now weights every tranche at its real exit
+   580→    // (TP1 50% @ tp1 · TP2 30% @ tp2 · runner @ final exit), matching what the
+   581→    // ladder announces. Fees still accrue on the full notional (3 exit fills sum
+   582→    // to one position) — pnlPercent stays margin-relative, so every downstream
+   583→    // pnlUsd = margin × pnlPercent/100 consumer keeps its contract.
+   584→    const moveAtPct = (px: number) => ((px - s.entryPrice) / s.entryPrice) * (isLong ? 1 : -1) * 100; // UNLEVERED
+   585→    let finalMovePct: number;
+   586→    if (!closedAt) {
+   587→      finalMovePct = movePct;
+   588→    } else if (reachedTp >= 1) {
+   589→      // TRANCHES GO FIRST — any close after a banked rung is tranche-weighted no
+   590→      // matter how it ends, because 50%/30% already left the book at their rung
+   591→      // prices while the trade was still open. Runner leg by final status:
+   592→      //   TP3        → exits at tp3, a deploy-time rung — Bug A fixed by
+   593→      //                construction (stop moves can no longer touch the math:
+   594→      //                moveAtPct(tp3) ≡ rr × original-risk-distance × 100)
+   595→      //   SL         → exits at the EFFECTIVE (trailed) stop (v5.4 semantics)
+   596→      //   EXPIRED/…  → exits at the closing mark
+   597→      const runnerMove = status === "TP3" ? moveAtPct(s.tp3) : status === "SL" ? moveAtPct(s.stopLoss) : movePct;
+   598→      const tranches: Array<{ weight: number; movePct: number }> = [{ weight: LADDER_TRANCHES.tp1, movePct: moveAtPct(s.tp1) }];
+   599→      if (reachedTp >= 2) tranches.push({ weight: LADDER_TRANCHES.tp2, movePct: moveAtPct(s.tp2) });
+   600→      tranches.push({ weight: 1 - LADDER_TRANCHES.tp1 - LADDER_TRANCHES.tp2, movePct: runnerMove });
+   601→      finalMovePct = ladderWeightedMove(tranches);
+   602→    } else if (status === "SL") {
+   603→      finalMovePct = moveAtPct(s.stopLoss); // v5.4: EFFECTIVE (trailed) stop is the real exit — nothing was banked
+   604→    } else {
+   605→      finalMovePct = movePct; // EXPIRED / CLOSED without any banked rung — mark price on full margin
+   606→    }
+   607→    const finalFb = feeBreakdown(s.marginUsd, s.leverage, finalMovePct, heldMinutes(s, closedAt ?? now));
+   608→
+   609→    // ── v6.3 REGIME OUTCOME TELEMETRY — every close feeds the per-regime
+   610→    // ledger the governor reads each cycle (REGIME LEDGER context line) so
+   611→    // regimeGuard hardening is tuned from realized PNL evidence, not vibes.
+   612→    if (closedAt) {
+   613→      const rTag = regimeTagOf(s.tags);
+   614→      if (rTag) {
+   615→        const win = finalFb.netPct > 0 || reachedTp >= 1;
+   616→        void bumpRegimeTelemetry(rTag, win, Number(((s.marginUsd * finalFb.netPct) / 100).toFixed(2))).catch(() => undefined);
+   617→      }
+   618→      // ── v8.4 R5 RESEARCH-SHADOW SETTLE — close the deploy-time A/B pair with
+   619→      // a 1m-candle replay of both ladders (fire-and-forget, never blocks) ──
+   620→      if (gate.researchShadow > 0) {
+   621→        void settleResearchShadow({
+   622→          serial: s.serial,
+   623→          symbol: s.symbol,
+   624→          direction: s.direction as "LONG" | "SHORT",
+   625→          entry: s.entryPrice,
+   626→          createdAt: s.createdAt,
+   627→          closedAt,
+   628→          live: { stop: s.stopLoss, tp3: s.tp3, rr: s.riskReward },
+   629→          finalStatus: status,
+   630→        }).catch(() => undefined);
+   631→      }
+   632→    }
+   633→
+   634→    await db.signal.update({
+   635→      where: { id: s.id },
+   636→      data: {
+   637→        status,
+   638→        reachedTp,
+   639→        ...(stopLossNext !== null ? { stopLoss: Number(stopLossNext.toFixed(s.entryPrice > 100 ? 2 : 6)) } : {}),
+   640→        pnlPercent: Number(finalFb.netPct.toFixed(2)),
+   641→        maxPnlPercent: Number(Math.max(maxGross, finalFb.netPct).toFixed(2)),
+   642→        closedAt,
+   643→        feeUsd: closedAt ? finalFb.commissionUsd : s.feeUsd,
+   644→        swapUsd: closedAt ? finalFb.swapUsd : s.swapUsd,
+   645→        afterlife: status === "EXPIRED" ? "TRACKING" : s.afterlife,
+   646→      },
+   647→    });
+   648→
+   649→    if (closedAt) resolved++;
+   650→    else if (status !== s.status) leveled++;
+   651→
+   652→    // ── v6.1 TTL-GATE outcome telemetry — extended signals are followed to
+   653→    // their final resolution so the governor can tune the policy from evidence
+   654→    if (closedAt && s.ttlExtensions > 0) {
+   655→      if (status === "SL") await bumpTtlTelemetry({ slAfter: 1 });
+   656→      else if (status === "EXPIRED") await bumpTtlTelemetry({ reExpired: 1 });
+   657→      else await bumpTtlTelemetry({ tpAfter: 1, capturedUsd: Number(((s.marginUsd * finalFb.netPct) / 100).toFixed(2)) });
+   658→    }
+   659→  }
+   660→
+   661→  return { resolved, leveled, activeCount: active.length };
+   662→}
+   663→
+   664→// ── EXPIRED afterlife tracking (Bug 5 — شفافیت چرخه عمر EXPIRED) ──
+   665→async function trackAfterlife(assets: MarketAsset[]) {
+   666→  const priceMap = new Map(assets.map((a) => [a.symbol, a.price]));
+   667→  const tracking = await db.signal.findMany({ where: { afterlife: "TRACKING", status: "EXPIRED" } });
+   668→  for (const s of tracking) {
+   669→    if (s.closedAt && Date.now() - s.closedAt.getTime() > PURGE_HOURS * 3600_000) {
+   670→      await db.signal.update({ where: { id: s.id }, data: { afterlife: "FLAT", afterlifeAt: new Date() } });
+   671→      // v6.1: report window closure — the feed now says the follow-up ended, not silence
+   672→      await fireEvent(s.id, s.symbol, "ENGINE", "info", `${s.symbol} EXPIRED follow-up closed — 48h afterlife window ended with no TP/SL re-test (window verdict FLAT)`);
+   673→      continue;
+   674→    }
+   675→    const price = priceMap.get(s.symbol);
+   676→    if (!price) continue;
+   677→    const isLong = s.direction === "LONG";
+   678→    const movePct = ((price - s.entryPrice) / s.entryPrice) * (isLong ? 1 : -1) * 100; // UNLEVERED
+   679→    const maxPost = Math.max(s.maxPostPnlPercent, movePct * s.leverage);
+   680→
+   681→    let afterlife: string | null = s.afterlife;
+   682→    let afterlifeAt: Date | null = null;
+   683→    const hitTp = (t: number) => (isLong ? price >= t : price <= t);
+   684→    if (hitTp(s.tp3)) afterlife = "TP3_HIT";
+   685→    else if (hitTp(s.tp2)) afterlife = "TP2_HIT";
+   686→    else if (hitTp(s.tp1)) afterlife = "TP1_HIT";
+   687→    else if (isLong ? price <= s.stopLoss : price >= s.stopLoss) afterlife = "SL_HIT";
+   688→
+   689→    const update: Record<string, unknown> = { maxPostPnlPercent: Number(maxPost.toFixed(2)) };
+   690→    if (afterlife && afterlife !== s.afterlife) {
+   691→      update.afterlife = afterlife;
+   692→      update.afterlifeAt = afterlifeAt ?? new Date();
+   693→      await fireEvent(s.id, s.symbol, "AFTERLIFE", afterlife === "SL_HIT" ? "warn" : "info", `${s.symbol} EXPIRED follow-up: price would have hit ${afterlife.replace("_", " ")} after TTL (post-expiry MFE ${maxPost >= 0 ? "+" : ""}${maxPost.toFixed(1)}% levered) — TTL calibration data point`);
+   694→    }
+   695→    await db.signal.update({ where: { id: s.id }, data: update });
+   696→  }
+   697→}
+   698→
+   699→// ── v6.1 DYNAMIC EXPIRY GATE — policy evaluator + telemetry live in
+   700→// src/lib/ttl-gate.ts (shared with the governor without an import cycle).
+   701→// The gate is DETERMINISTIC (every input measured) while the POLICY (budget,
+   702→// window length, TP proximity band) is owned by the AI governor, which reads
+   703→// the ttl-gate telemetry + afterlife post-mortem each cycle and tunes the
+   704→// knobs via set_ttl_extend_max / set_ttl_extend_minutes. Zero manual modes.
+   705→
+   706→// v10.14 SQN telemetry (supervisor proposal msg 3920, operator APPROVE
+   707→// 2026-09-19T08:56Z msg 861802419): every realizedEdgeFilter evaluation
+   708→// records the SQN-style R-normalized statistic of the rolling window next to
+   709→// the legacy mean-% statistic. SQN = √N × mean(R)/std(R) on the same
+   710→// pnlPercent series — scale-free, outlier-discounted via std, √N-discounted
+   711→// by construction. DECISION RULES ARE UNCHANGED (the −3%/−2% floors still
+   712→// decide); the SQN column exists so the advisor's future KNOB_ADJUST
+   713→// (triggered by the GATE-NEAR-MISS cohort per msg 3920) compares both
+   714→// statistics on live data, not opinion. Restart-safe: in-memory mirror only,
+   715→// re-populated by the next real gate evaluation.
+   716→const mgSqnTelemetry = new Map<string, { sqn: number; sqnTrim: number; n: number; expPct: number; at: number }>();
+   717→
+   718→function sqnOf(pnls: number[]): { sqn: number; sqnTrim: number } {
+   719→  const n = pnls.length;
+   720→  const mean = pnls.reduce((a, b) => a + b, 0) / n;
+   721→  const sd = Math.sqrt(pnls.reduce((a, b) => a + (b - mean) * (b - mean), 0) / n); // population (ddof 0)
+   722→  const sqn = sd > 0 ? Math.sqrt(n) * (mean / sd) : 0;
+   723→  const sorted = [...pnls].sort((a, b) => a - b);
+   724→  const k = Math.floor(n * 0.1);
+   725→  const trim = k > 0 && n - 2 * k >= 5 ? sorted.slice(k, n - k) : sorted;
+   726→  const tm = trim.reduce((a, b) => a + b, 0) / trim.length;
+   727→  const tsd = Math.sqrt(trim.reduce((a, b) => a + (b - tm) * (b - tm), 0) / trim.length);
+   728→  const sqnTrim = tsd > 0 ? Math.sqrt(trim.length) * (tm / tsd) : 0;
+   729→  return { sqn: Number(sqn.toFixed(2)), sqnTrim: Number(sqnTrim.toFixed(2)) };
+   730→}
+   731→
+   732→/** v10.14 — live SQN-vs-legacy snapshot of the memory-gate rolling windows
+   733→ * (what the advisor KNOB_ADJUST will compare). Keys: strategy name; combo
+   734→ * windows under `symbol:strategy`. Read by /api/ai/near-miss (gateSqn block). */
+   735→export function memoryGateSqnSnapshot(): { strategies: { key: string; n: number; expPct: number; sqn: number; sqnTrim: number; ageMin: number }[]; note: string } {
+   736→  const strategies = [...mgSqnTelemetry.entries()].map(([key, v]) => ({ key, n: v.n, expPct: Number(v.expPct.toFixed(2)), sqn: v.sqn, sqnTrim: v.sqnTrim, ageMin: Math.round((Date.now() - v.at) / 60_000) })).sort((a, b) => a.ageMin - b.ageMin);
+   737→  return { strategies, note: "SQN = sqrt(N) x mean(R)/std(R) on the same rolling pnlPercent series the legacy mean-% gate reads — decision rules unchanged until the GATE-NEAR-MISS 30-settle cohort lands (msg 3920 rule)" };
+   738→}
+   739→
+   740→// ── deployment gates ──────────────────────────────────────────
+   741→async function realizedEdgeFilter(symbol: string, strategy: string): Promise<{ ok: boolean; reason?: string; probe?: boolean }> {
+   742→  // v6.3 PROFIT-FIRST MEMORY GATE (operator mandate: «معیار سود، نه تعداد برد»):
+   743→  // suppression now keys on NET EXPECTANCY (avg %/trade), not raw win rate.
+   744→  // Measured proof: BREAKOUT passed the old WR gate at 28% while bleeding
+   745→  // −13.1%/trade (−$564 over 43 trades) — a win-rate-only gate is blind to a
+   746→  // strategy that wins small and loses huge. Expectancy cannot be fooled.
+   747→  // v8.4.1 G5 (operator mandate «انجام بده» 2026-09-11): the memory gate had
+   748→  // the SAME cumulative-all-time flaw the learned gate had before G1 —
+   749→  // pre-R-package poison rows (SL −$12.61 era) suppressed a strategy forever
+   750→  // with no lift path (no deploys → no fresh settles → suppression never
+   751→  // re-evaluates): a THIRD deadlock path, discovered because G4 probe deploys
+   752→  // could never reach the learned gate (AI-SWING was suppressed upstream on
+   753→  // all-time n=13 / exp −11.4%). Scope BOTH ledgers to the EPOCH-2 book with
+   754→  // ROLLING windows (take 30 strategy / 20 combo): the gate judges the NEW
+   755→  // engine on the NEW book; old rows roll OUT as G4-probe and normal settles
+   756→  // land. Evidence floors unchanged (n≥8 combo · n≥12 strategy).
+   757→  const combo = await db.signal.findMany({ where: { symbol, strategy, status: { in: ["TP1", "TP2", "TP3", "SL", "EXPIRED", "CLOSED"] }, tags: { contains: "EPOCH-2" } }, select: { pnlPercent: true, reachedTp: true }, orderBy: { createdAt: "desc" }, take: 20 });
+   758→  if (combo.length >= 8) {
+   759→    const exp = combo.reduce((a, c) => a + c.pnlPercent, 0) / combo.length;
+   760→    const wr = (combo.filter((c) => c.pnlPercent > 0 || c.reachedTp >= 1).length / combo.length) * 100;
+   761→    const cSq = sqnOf(combo.map((c) => c.pnlPercent));
+   762→    mgSqnTelemetry.set(`${symbol}:${strategy}`, { ...cSq, n: combo.length, expPct: exp, at: Date.now() });
+   763→    if (exp < -3) return { ok: false, reason: `${symbol}+${strategy} realized expectancy ${exp.toFixed(1)}%/trade (n=${combo.length} EPOCH-2 rolling) < −3% — bleeding combo · SQN ${cSq.sqn}` };
+   764→    if (wr < 25 && exp < 0) return { ok: false, reason: `${symbol}+${strategy} realized WR ${wr.toFixed(0)}% with negative expectancy ${exp.toFixed(1)}%/trade (n=${combo.length} EPOCH-2 rolling) · SQN ${cSq.sqn}` };
+   765→  }
+   766→  const strat = await db.signal.findMany({ where: { strategy, status: { in: ["TP1", "TP2", "TP3", "SL", "EXPIRED", "CLOSED"] }, tags: { contains: "EPOCH-2" } }, select: { pnlPercent: true, reachedTp: true, createdAt: true }, orderBy: { createdAt: "desc" }, take: 30 });
+   767→  if (strat.length >= 12) {
+   768→    const exp = strat.reduce((a, c) => a + c.pnlPercent, 0) / strat.length;
+   769→    const sSq = sqnOf(strat.map((c) => c.pnlPercent));
+   770→    mgSqnTelemetry.set(strategy, { ...sSq, n: strat.length, expPct: exp, at: Date.now() });
+   771→    if (exp >= 0) return { ok: true };
+   772→    // v10.9.3 MEMORY-GATE RE-ENTRY HYSTERESIS WITH PROBE SIZING (operator APPROVE
+   773→    // 2026-09-16 «تایید پیشنهاد سوپروایزر کامل و مهندسی», SUPERVISOR proposal
+   774→    // cmu4858z001x1rj3e6g6njk49): a single −2% threshold has two failure modes —
+   775→    // chatter around the threshold, and an evidence-starvation loop (suppressed
+   776→    // → no new settles → the rolling-30 recovers on a CLOCK, not on regime
+   777→    // truth). Live proof 2026-09-16: AI-SWING suppressed SITEWIDE at −2.8..−3.0%
+   778→    // (n=30) while carrying 261/414 = 63% of the book. Schmitt-trigger fix:
+   779→    // negative-expectancy strategies admit HALF-SIZE probe deploys (tagged
+   780→    // MG-PROBE) instead of full-size trade-or-nothing; a 5-probe block with
+   781→    // expectancy ≥ 0 restores full size; a failed block re-suppresses with a
+   782→    // 48h cooldown (G5 anti-deadlock — a lift path must always exist); the
+   783→    // hard zone (< −2%) keeps its legacy reason string while the window is
+   784→    // still moving (fresh settles) and gains a 24h-frozen escape so a
+   785→    // suppressed strategy can always recharge its own window. Cycle state is
+   786→    // derived from the MG-PROBE ledger itself (gap-walk 48.5h) — restart-proof,
+   787→    // no extra state store.
+   788→    const probes = await db.signal.findMany({ where: { strategy, status: { in: ["TP1", "TP2", "TP3", "SL", "EXPIRED", "CLOSED"] }, tags: { contains: "MG-PROBE" }, createdAt: { gt: new Date(Date.now() - 7 * 24 * 3600_000) } }, select: { pnlPercent: true, createdAt: true }, orderBy: { createdAt: "desc" }, take: 12 });
+   789→    const cycle: typeof probes = [];
+   790→    for (const p of probes) {
+   791→      if (cycle.length === 0 || new Date(cycle[cycle.length - 1]!.createdAt).getTime() - new Date(p.createdAt).getTime() <= 48.5 * 3600_000) cycle.push(p);
+   792→      else break;
+   793→    }
+   794→    if (cycle.length >= 5) {
+   795→      const blockExp = cycle.slice(0, 5).reduce((a, c) => a + c.pnlPercent, 0) / 5;
+   796→      if (blockExp >= 0) return { ok: true }; // probe block PASSED — full size restored
+   797→      const newestProbeAgeMs = Date.now() - new Date(cycle[0]!.createdAt).getTime();
+   798→      if (newestProbeAgeMs < 48 * 3600_000) return { ok: false, reason: `${strategy} probe block FAILED (last-5 MG-PROBE expectancy ${blockExp.toFixed(1)}%/trade) — re-suppressed; fresh probe cycle re-arms in ${Math.ceil((48 * 3600_000 - newestProbeAgeMs) / 3600_000)}h (v10.9.3 hysteresis)` };
+   799→    }
+   800→    if (exp < -2) {
+   801→      const newestSettleAgeMs = Date.now() - new Date(strat[0]!.createdAt).getTime();
+   802→      if (newestSettleAgeMs < 24 * 3600_000) return { ok: false, reason: `${strategy} realized expectancy ${exp.toFixed(1)}%/trade (n=${strat.length} EPOCH-2 rolling) < −2% — strategy suppressed (profit-first gate) · SQN ${sSq.sqn}` };
+   803→      // window frozen ≥24h — starvation escape: bounded probes resume so the strategy can prove regime truth
+   804→    }
+   805→    return { ok: true, probe: true }; // bounded half-size probe (MG-PROBE ×0.5)
+   806→  }
+   807→  return { ok: true };
+   808→}
+   809→
+   810→// ── v8.2 SHADOW SWEEP — keeps the decision-border gauge LIVE between real
+   811→// gate evaluations (autoSpawn pauses at position capacity, but the operator's
+   812→// gauge must not freeze). A rotating batch runs the SAME scoring + surcharge
+   813→// chain as evaluate() (cache peeks only — getKlines is TTL-cached) and the
+   814→// verdicts are journaled with source "shadow": telemetry, never deploy
+   815→// attempts, never regime-veto fireEvents. Deduped inside gate-journal.
+   816→let shadowCursor = 0;
+   817→let shadowInFlight = false;
+   818→const lastShadowAt = new Map<string, number>();
+   819→const SHADOW_SPACING_MS = 150_000; // per symbol — keep the ring clean
+   820→async function shadowGateSweep(assets: MarketAsset[]): Promise<void> {
+   821→  if (shadowInFlight || assets.length === 0) return;
+   822→  shadowInFlight = true;
+   823→  try {
+   824→    const gate = await getGateSettings();
+   825→    const eff = await getEffectiveWeights();
+   826→    const weights = Object.keys(eff.weights).length ? (eff.weights as FactorWeights) : undefined;
+   827→    const BATCH = 6;
+   828→    const batch: MarketAsset[] = [];
+   829→    for (let i = 0; i < Math.min(BATCH, assets.length); i++) batch.push(assets[(shadowCursor + i) % assets.length]!);
+   830→    shadowCursor = (shadowCursor + batch.length) % assets.length;
+   831→    const now = Date.now();
+   832→    const fresh = batch.filter((a) => now - (lastShadowAt.get(a.symbol) ?? 0) > SHADOW_SPACING_MS);
+   833→    if (fresh.length === 0) return;
+   834→    const rows: Array<Omit<GateSample, "at" | "best" | "band" | "gap"> & { passed: boolean }> = [];
+   835→    await Promise.all(
+   836→      fresh.map(async (asset) => {
+   837→        try {
+   838→          const candles = await getKlines(asset.symbol);
+   839→          if (!candles) return;
+   840→          const snap = buildSnapshot(asset.symbol, candles);
+   841→          if (!snap) return;
+   842→          const conf = scoreConfluence(snap, weights);
+   843→          const regime = getRegimeCached(asset.symbol, candles);
+   844→          const ruling = regimeRuling(regime, conf.direction, conf.strategy, gate.regimeGuard);
+   845→          if (!ruling.ok) return; // the real gate refuses pre-score — nothing to gauge
+   846→          // same surcharge chain as evaluate() (mirrored; all cache reads)
+   847→          let thrAdj = ruling.thrAdj;
+   848→          const thr: ThrBreakdown = { regime: ruling.thrAdj, spill: 0, chase: 0, mtf: 0, liq: 0 };
+   849→          if (gate.regimeGuard >= 2) {
+   850→            const spill = btcSpilloverThrAdj(peekRegime("BTCUSDT"), asset.symbol, conf.direction);
+   851→            if (spill.adj !== 0) {
+   852→              thrAdj += spill.adj;
+   853→              thr.spill += spill.adj;
+   854→            }
+   855→          }
+   856→          if (gate.chaseThrAdj > 0 && conf.direction === "LONG" && candles.length >= 16) {
+   857→            const b5 = candles.slice(-5);
+   858→            const burstPct = ((b5[b5.length - 1]!.close - b5[0]!.open) / b5[0]!.open) * 100;
+   859→            let atrSum = 0;
+   860→            for (let i = candles.length - 14; i < candles.length; i++) {
+   861→              const c = candles[i]!, p = candles[i - 1]!;
+   862→              atrSum += Math.max(c.high - c.low, Math.abs(c.high - p.close), Math.abs(c.low - p.close));
+   863→            }
+   864→            const atrPctQuick = (atrSum / 14 / candles[candles.length - 1]!.close) * 100;
+   865→            if (burstPct >= Math.max(1.5, 1.5 * atrPctQuick)) {
+   866→              thrAdj += gate.chaseThrAdj;
+   867→              thr.chase += gate.chaseThrAdj;
+   868→            }
+   869→          }
+   870→          const mtf = peekSymbolFlow(asset.symbol);
+   871→          if (mtf && Math.abs(mtf.netScore) >= 40) {
+   872→            const aligned = Math.sign(mtf.netScore) === (conf.direction === "LONG" ? 1 : -1);
+   873→            if (!aligned) {
+   874→              thrAdj += 5;
+   875→              thr.mtf += 5;
+   876→            }
+   877→            // v8.4 R4 VETO-ONLY: the aligned −4 discount is retired here too —
+   878→            // the shadow sweep must mirror the live gate's threshold chain.
+   879→          }
+   880→          const volRow = peekVolForecast(asset.symbol);
+   881→          const heat = peekLiqHeat(asset.symbol);
+   882→          if (heat && heat.clusters.length > 0) {
+   883→            const reach = Math.max(0.5, (volRow?.atr15mPct ?? 1) * 0.5);
+   884→            const below = heat.nearestBelow;
+   885→            const above = heat.nearestAbove;
+   886→            if (conf.direction === "LONG" && below && Math.abs(below.distPct) <= reach) {
+   887→              thrAdj += 4;
+   888→              thr.liq += 4;
+   889→            } else if (conf.direction === "LONG" && above && Math.abs(above.distPct) <= reach) {
+   890→              thrAdj -= 3;
+   891→              thr.liq -= 3;
+   892→            } else if (conf.direction === "SHORT" && above && Math.abs(above.distPct) <= reach) {
+   893→              thrAdj += 4;
+   894→              thr.liq += 4;
+   895→            } else if (conf.direction === "SHORT" && below && Math.abs(below.distPct) <= reach) {
+   896→              thrAdj -= 3;
+   897→              thr.liq -= 3;
+   898→            }
+   899→          }
+
+[showing lines 450-899 of 2265; use offset=900 with limit to continue reading]

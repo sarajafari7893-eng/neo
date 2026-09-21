@@ -1,12 +1,19 @@
 #!/usr/bin/env python3
-# ── NEXUS//SIGNALS RECOVERY-RESTORE (v10.11, operator mandate 2026-09-17: «دستورات بازیابی
-# رو در جایی امن نگهدار تا با ریست شدن ویا پاک شدن سندباکس قابل استفاده و اجرای خودکار باشه») ──
-# Self-contained wipe-recovery: works on a FRESH sandbox (only python3 + internet required).
-#   MODE 1  local archive : recovery-restore.sh <snapshot.enc>
-#   MODE 2  from channel  : recovery-restore.sh --from-channel <RECOVERY-INDEX.txt> [part-dir]
+# ── NEXUS//SIGNALS RECOVERY-RESTORE (v10.16, audit task 4-g: FULL-TREE restore contract) ──
+# Self-contained wipe-recovery: works on a FRESH sandbox (only python3 + openssl + unzip + internet).
+#   MODE 1  local archive : recovery-restore.sh <snapshot.enc>      ← tokenless: needs ONLY BACKUP_PASSPHRASE
+#   MODE 2  from channel  : recovery-restore.sh --from-channel <RECOVERY-INDEX.txt>   (asks TELEGRAM_BOT_TOKEN)
 # Secrets (NEVER stored in the public channel, operator holds them):
-#   TELEGRAM_BOT_TOKEN  +  BACKUP_PASSPHRASE   → env vars or prompted.
-# Restore target: /home/z/my-project (backs aside any existing db/custom.db first).
+#   TELEGRAM_BOT_TOKEN  — MODE 2 only (channel re-download)
+#   BACKUP_PASSPHRASE   — both modes (AES-256-CBC/PBKDF2-200k decrypt)
+# v10.16 contract (audit P1: v10.11 restored only db/.env/journals/scripts → `bun install` could
+#   never work on the wiped tree): the snapshot zip carries the FULL environment (backup.sh v3.4
+#   inventory — src, prisma, mini-services, docs, scripts, .zscripts, assets, all root configs,
+#   Caddyfile), so the restore now rebuilds the WHOLE tree, guided by MANIFEST "expectInZip" +
+#   a static inventory union. Optional items absent from the zip → [WARN]; core items absent
+#   (src/prisma/scripts/package.json/next.config.ts/tsconfig.json) → [FAIL] + INCOMPLETE exit 1.
+# Restore target: ${NEXUS_ROOT:-/home/z/my-project} (backs aside any existing db/custom.db first).
+import glob
 import hashlib
 import json
 import os
@@ -17,9 +24,19 @@ import time
 import urllib.request
 import uuid
 
-ROOT = "/home/z/my-project"
-STAGE = "/home/z/my-project/restore-staging/recovery-" + time.strftime("%Y%m%d-%H%M%S")
+ROOT = os.environ.get("NEXUS_ROOT", "/home/z/my-project")
+STAGE = os.path.join(ROOT, "restore-staging", "recovery-" + time.strftime("%Y%m%d-%H%M%S"))
 CHUNK = 1 << 20
+
+# v10.16: core inventory — a tree missing any of these cannot `bun install && bunx prisma generate`
+CORE_DIRS = ("src", "prisma", "scripts")
+CORE_FILES = ("package.json", "next.config.ts", "tsconfig.json")
+# v10.16: static inventory (backup.sh v3.4 zip list) — unioned with MANIFEST expectInZip
+RESTORE_DIRS = ["src", "prisma", "scripts", "mini-services", "docs", "assets", ".zscripts", "public"]
+RESTORE_FILES = [
+    "package.json", "bun.lock", "next.config.ts", "tsconfig.json", "components.json",
+    "eslint.config.mjs", "postcss.config.mjs", "Caddyfile",
+]
 
 
 def ask(name: str) -> str:
@@ -100,10 +117,12 @@ def main() -> int:
     if len(sys.argv) < 2:
         print(__doc__)
         return 2
-    token = ask("TELEGRAM_BOT_TOKEN")
     enc_path = sys.argv[1]
     part_dir = os.path.join(os.path.dirname(os.path.abspath(enc_path)), "parts")
     if enc_path == "--from-channel":
+        # v10.16: the token ask lives ONLY in the channel branch — MODE 1 (local archive)
+        # must run fully tokenless (no TELEGRAM_BOT_TOKEN env, no prompt).
+        token = ask("TELEGRAM_BOT_TOKEN")
         idx_path = sys.argv[2] if len(sys.argv) > 2 else "RECOVERY-INDEX.txt"
         idx = latest_index_block(idx_path)
         print(f"index block: {idx['stamp']} · {idx['encFile']} ({idx.get('encBytes', '?')} bytes)")
@@ -147,6 +166,7 @@ def main() -> int:
     if not ok:
         return 1
 
+    # ── critical small files first (db aside-protected, secrets 0600) ──
     print("restoring into", ROOT)
     ts = time.strftime("%Y%m%d-%H%M%S")
     os.makedirs(f"{ROOT}/db", exist_ok=True)
@@ -155,33 +175,89 @@ def main() -> int:
     shutil.copy2(db_src, f"{ROOT}/db/custom.db")
     shutil.copy2(env_src, f"{ROOT}/.env")
     os.chmod(f"{ROOT}/.env", 0o600)
+    step(f"db/custom.db restored (pre-restore copy aside: custom.db.pre-recovery-{ts}) + .env 0600", True)
+
+    # ── v10.16 FULL-TREE RESTORE — guided by MANIFEST "expectInZip", unioned with the
+    # static backup.sh v3.4 inventory. dirs_exist_ok=True so it merges into (not nukes)
+    # any pre-existing tree; copy2 preserves mtimes/perms.
+    expect: list = []
+    try:
+        expect = json.load(open(man, encoding="utf-8")).get("expectInZip") or []
+    except Exception:
+        step("MANIFEST expectInZip unreadable — using static inventory only", True)
+    for e in expect:
+        e = e.replace("zscripts-marker:", "")  # hidden-dir marker convention in older manifests
+        if e in (".env", "db/custom.db", "worklog.md"):
+            continue  # already restored above / handled below explicitly
+        if e.startswith("backups/") or e in ("MANIFEST.json", "calibration-latest.json"):
+            continue  # manifests handled below explicitly
+        if e.endswith("/"):
+            d = e.rstrip("/")
+            if d not in RESTORE_DIRS:
+                RESTORE_DIRS.append(d)
+        elif "/" in e:
+            # relative-path file entry (e.g. prisma/schema.prisma) — restore at the same rel path
+            if e not in RESTORE_FILES:
+                RESTORE_FILES.append(e)
+        else:
+            f = os.path.basename(e)
+            if f not in RESTORE_FILES:
+                RESTORE_FILES.append(f)
+    incomplete: list = []
+    for d in RESTORE_DIRS:
+        srcd = os.path.join(STAGE, d)
+        if os.path.isdir(srcd):
+            shutil.copytree(srcd, os.path.join(ROOT, d), dirs_exist_ok=True)
+            n = sum(len(fn) for _, _, fn in os.walk(srcd))
+            step(f"restored dir {d}/ ({n} files)", True)
+        elif d in CORE_DIRS:
+            step(f"restored dir {d}/", False, "CORE dir absent from snapshot zip")
+            incomplete.append(d + "/")
+        else:
+            print(f"[WARN] {d}/ absent in snapshot zip — optional, skipped")
+    for f in RESTORE_FILES:
+        srcf = os.path.join(STAGE, f)
+        if os.path.isfile(srcf):
+            dst = os.path.join(ROOT, f)
+            os.makedirs(os.path.dirname(dst) or ROOT, exist_ok=True)
+            shutil.copy2(srcf, dst)
+            step(f"restored file {f}", True)
+        elif f in CORE_FILES:
+            step(f"restored file {f}", False, "CORE file absent from snapshot zip")
+            incomplete.append(f)
+        else:
+            print(f"[WARN] {f} absent in snapshot zip — optional, skipped")
+
+    # .data state journals — INCLUDING rotated .old / .old.<ts> rings (glob)
+    os.makedirs(f"{ROOT}/.data", exist_ok=True)
+    jrn = 0
+    for src in glob.glob(os.path.join(STAGE, ".data", "*")):
+        if os.path.isfile(src):
+            shutil.copy2(src, os.path.join(ROOT, ".data", os.path.basename(src)))
+            jrn += 1
+    if jrn > 0:
+        step(f".data journals restored ({jrn} files, incl. rotated .old rings)", True)
+    else:
+        print("[WARN] .data journals absent in snapshot zip — optional, skipped")
+
+    # manifests + calibration + worklog (evidence chain)
     for rel in ("backups/MANIFEST.json", "backups/calibration-latest.json", "worklog.md"):
         src = os.path.join(STAGE, rel)
         if os.path.isfile(src):
             dst = os.path.join(ROOT, rel)
             os.makedirs(os.path.dirname(dst), exist_ok=True)
             shutil.copy2(src, dst)
-    for rel in (
-        "shadow-veto.jsonl", "shadow-veto-latest.json", "shadow-veto-telemetry.json",
-        "shadow-veto-telemetry.jsonl", "fourpack-journal.jsonl", "fourpack-latest.json",
-        "gate-journal.jsonl", "rawcal-telemetry.jsonl", "rawcal-run-heartbeat.txt",
-        "sv-cohort-freeze.json",
-    ):
-        src = os.path.join(STAGE, ".data", rel)
-        if os.path.isfile(src):
-            shutil.copy2(src, os.path.join(ROOT, ".data", rel))
-    for ring in ("shadow-veto.jsonl.old", "fourpack-journal.jsonl.old"):
-        g = os.path.join(STAGE, ".data", ring)
-        for src in [g] + [os.path.join(STAGE, ".data", f) for f in os.listdir(os.path.join(STAGE, ".data")) if f.startswith(ring + ".")] if os.path.isdir(os.path.join(STAGE, ".data")) else []:
-            if os.path.isfile(src):
-                shutil.copy2(src, os.path.join(ROOT, ".data", os.path.basename(src)))
-    step("db + .env + .data journals + manifest restored", True)
+            step(f"restored {rel}", True)
+        else:
+            print(f"[WARN] {rel} absent in snapshot zip — optional, skipped")
 
-    if os.path.isdir(os.path.join(STAGE, "scripts")):
-        shutil.copytree(os.path.join(STAGE, "scripts"), os.path.join(ROOT, "scripts"), dirs_exist_ok=True)
-        step("scripts dir refreshed", True)
-    print("next steps (machine with bun): cd", ROOT, "&& bun install && bash scripts/dev-up.sh")
-    print("then verify canary: pulse/advisor/terminal/rawcal all 200 (see RECOVERY-RUNBOOK.md §5)")
+    if incomplete:
+        print(f"RESTORE INCOMPLETE — core items absent from snapshot zip: {', '.join(incomplete)}")
+        print(f"Everything else WAS restored; staging kept at {STAGE} — inspect the archive inventory. DO NOT boot this tree.")
+        return 1
+
+    print(f"next steps (machine with bun): cd {ROOT} && bun install && bunx prisma generate && bash scripts/dev-up.sh")
+    print("then verify canaries: /api/pulse /api/advisor /api/terminal /api/rawcal all 200 (see RECOVERY-RUNBOOK.md §5)")
     print("RECOVERY COMPLETE — staging kept at", STAGE)
     return 0
 

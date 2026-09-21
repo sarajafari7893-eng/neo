@@ -1,0 +1,646 @@
+     1→// ── v9.0 PUMP/DUMP RADAR — independent flow-tracking engine ──────────────
+     2→// Operator mandate 2026-09-12: «تحقیق و جستجوی عمیق ممیزی برای نحوه شناسایی
+     3→// و ردیابی جریانات پامپی و دامپی انجام بده، یک ماژول و موتور مستقل کامل و
+     4→// هوشمند براش بساز و تا زمانی که ۵ ردیابی موفق نداشته اجازه ارسال سیگنال
+     5→// ندارد، بعد از تایید میتواند سیگنال هایی با کارت اختصاصی pump با dump
+     6→// داشته باشد»
+     7→//
+     8→// RESEARCH SUMMARY (codebase audit + market microstructure literature):
+     9→//  · Pump/dump flows leave a measurable fingerprint chain: (1) velocity —
+    10→//    unlevered 1m/5m price displacement far above the symbol's own baseline;
+    11→//    (2) volume ignition — 1m quote-volume bursts ≥3× the rolling median;
+    12→//    (3) derivatives confirmation — OI delta (new money vs deleveraging
+    13→//    squeeze), CVD net-taker USD, taker buy/sell ratio, whale prints, and
+    14→//    forced-liquidation fuel (shorts liquidated fuel pumps, longs fuel dumps).
+    15→//  · The existing stack already measures every ingredient separately
+    16→//    (flow.ts, liquidations.ts, volOnset.ts, trigger bus L1/L3) but never
+    17→//    chained them into a pump/dump classifier with accountable tracking.
+    18→//
+    19→// ARCHITECTURE (independent module — zero coupling into scoring/gates):
+    20→//  STAGE 1 (every tick, in-memory): per-symbol tape of (t, price, quoteVol).
+    21→//    Computes vel1m/vel5m + 1m quote-volume burst vs the symbol's own median.
+    22→//  STAGE 2 (candidate only, 45s/symbol throttle): fetchFlowMetrics +
+    23→//    liquidationPressure → evidence-weighted conviction score 0..100.
+    24→//  DECLARE (score ≥ 62): PumpTrack row + the success criterion FIXED at
+    25→//    declaration (+2.0% unlevered MFE from anchor within 90min) — honest,
+    26→//    no post-hoc re-scoring. Event mirrors to Telegram (PUMP_RADAR).
+    27→//  TRACK (15s/track): MFE/MAE + phase machine ONSET→EXTENSION→EXHAUSTION;
+    28→//    resolves SUCCESS on criterion hit, FAILURE at horizon/collapse.
+    29→//  LEARNING GATE: signals FORBIDDEN until ≥5 tracks resolved SUCCESS
+    30→//    (operator's exact number). After unlock, fresh ONSET tracks with
+    31→//    score ≥ 78 propose deploys through deploySignal's FULL normal gate
+    32→//    stack — the radar only nominates, the engine still judges. Signals
+    33→//    carry the dedicated PUMP/DUMP card cohort tags.
+    34→//
+    35→// v9.2 UNFILTERED DIRECT EMISSION (operator mandate 2026-09-13 20:06Z:
+    36→// «من شرط ورود مستقیم رو دادم، بررسی کن و بدون هیچ فیلتری سیگنال را صادر کن»)
+    37→//  · Diagnosis: authority=direct was BANKED but v9.1 still filtered through
+    38→//    the radar's own 78-conviction deploy floor + 20min spacing + max-2-open
+    39→//    — of 17 declared tracks only 2 ever spawned a card (LSK 72 / VTHO 76
+    40→//    vetoed hours after the operator granted direct authority).
+    41→//  · Fix: authority="direct" → EVERY declared track (score ≥ 62 declare
+    42→//    floor = the detection itself) emits its dedicated card 1:1, immediately.
+    43→//    Learning gate, 78 floor, spacing and max-open are ALL bypassed.
+    44→//  · What stays HARD: deploySignal's honesty rails (feed-fresh guard,
+    45→//    sim-price ban) — a pump/dump card must never be born from stale or
+    46→//    invented prices (operator's own honesty doctrine). One card per track
+    47→//    (spawnedSignal flag) and the 45min per-symbol redeclare cooldown keep
+    48→//    the 1:1 detection→card mapping honest, not filtered.
+    49→import { db } from "./db";
+    50→import { fetchFlowMetrics } from "./flow";
+    51→import { liquidationPressure } from "./liquidations";
+    52→import type { PumpEngineStatus, PumpTrackDTO } from "./api-types";
+    53→
+    54→// ── rules (single source of truth — surfaced in status) ──────────────────
+    55→export const PUMP_RULES = {
+    56→  tapeWindowMs: 30 * 60_000, // in-memory tape length per symbol
+    57→  vel1mMinPct: 0.35, // fresh ignition — unlevered 1m velocity %
+    58→  vel5mMinPct: 1.1, // sustained displacement — unlevered 5m %
+    59→  volBurstMinX: 3, // 1m quote-vol ≥ 3× the symbol's own 30m median
+    60→  volFloorUsd1m: 30_000, // ignore micro-tape noise below $30k/min
+    61→  warmPoints: 55, // ≈4.5min of 5s ticks needed before vel5m is honest
+    62→  scoreDeclare: 62, // conviction floor to declare a track
+    63→  scoreDeploy: 78, // conviction floor to propose a signal (post-unlock)
+    64→  confirmTtlMs: 45_000, // stage-2 throttle per symbol
+    65→  horizonMin: 90, // track resolution window
+    66→  successMovePct: 2.0, // MFE from anchor ≥ +2.0% unlevered → SUCCESS
+    67→  collapseMaePct: 4.0, // MAE ≥ 4% against the thesis → early FAILURE
+    68→  extendPct: 1.2, // continuation beyond anchor → EXTENSION phase
+    69→  exhaustRetraceFrac: 0.5, // 50% retrace of the favorable leg → EXHAUSTION
+    70→  redeCooldownMs: 45 * 60_000, // per-symbol re-declaration cooldown
+    71→  activeCap: 12, // max concurrent open tracks
+    72→  signalSpacingMs: 20 * 60_000, // min spacing between radar-nominated signals
+    73→  signalMaxActive: 2, // max concurrent OPEN radar-spawned signals
+    74→  requiredSuccesses: 5, // operator learning gate — the exact number mandated
+    75→  trackUpdateMs: 15_000, // DB write throttle per open track
+    76→} as const;
+    77→
+    78→// ── in-memory tape ────────────────────────────────────────────────────────
+    79→interface TapePoint {
+    80→  t: number;
+    81→  p: number;
+    82→  qv: number; // cumulative 24h quote volume (USD)
+    83→}
+    84→const tape = new Map<string, TapePoint[]>();
+    85→const volSamples = new Map<string, Array<{ t: number; dv: number }>>(); // 1m quote-vol deltas
+    86→
+    87→const lastConfirmAt = new Map<string, number>(); // stage-2 throttle
+    88→const lastResolveAt = new Map<string, number>(); // re-declaration cooldown
+    89→const lastSignalAt = { v: 0 }; // global radar-signal spacing
+    90→let openTracks = new Map<string, TrackState>(); // symbol → live track
+    91→let lastTrackSweepAt = 0;
+    92→let lastSyncAt = 0; // DB reconcile cursor — heals multi-bundle/restart divergence
+    93→let memo: { at: number; v: PumpEngineStatus } | null = null;
+    94→let booted = false;
+    95→
+    96→interface TrackState {
+    97→  id: string;
+    98→  symbol: string;
+    99→  kind: "PUMP" | "DUMP";
+   100→  phase: string;
+   101→  anchor: number;
+   102→  peak: number;
+   103→  mfe: number;
+   104→  mae: number;
+   105→  score: number;
+   106→  detectedAt: number;
+   107→  lastWriteAt: number;
+   108→  spawnedSignal: boolean;
+   109→}
+   110→
+   111→export interface PumpCandidate {
+   112→  symbol: string;
+   113→  kind: "PUMP" | "DUMP";
+   114→  vel1m: number;
+   115→  vel5m: number;
+   116→  burstX: number;
+   117→  price: number;
+   118→}
+   119→
+   120→const median = (xs: number[]): number => {
+   121→  if (!xs.length) return 0;
+   122→  const s = [...xs].sort((a, b) => a - b);
+   123→  return s[Math.floor(s.length / 2)]!;
+   124→};
+   125→
+   126→/** Stage 1 — feed the tape + screen for velocity/volume candidates. Cheap. */
+   127→export function pumpScreen(assets: Array<{ symbol: string; price: number; volume24h: number }>): PumpCandidate[] {
+   128→  const now = Date.now();
+   129→  const out: PumpCandidate[] = [];
+   130→  for (const a of assets) {
+   131→    if (!a.price || a.price <= 0) continue;
+   132→    let ring = tape.get(a.symbol);
+   133→    if (!ring) {
+   134→      ring = [];
+   135→      tape.set(a.symbol, ring);
+   136→    }
+   137→    ring.push({ t: now, p: a.price, qv: a.volume24h });
+   138→    while (ring.length && now - ring[0]!.t > PUMP_RULES.tapeWindowMs) ring.shift();
+   139→
+   140→    // 1m quote-volume delta samples (minute-bucketed) for the burst baseline
+   141→    let vs = volSamples.get(a.symbol);
+   142→    if (!vs) {
+   143→      vs = [];
+   144→      volSamples.set(a.symbol, vs);
+   145→    }
+   146→    const lastS = vs[vs.length - 1];
+   147→    if (!lastS || now - lastS.t >= 55_000) {
+   148→      const ref = ring.find((pt) => now - pt.t <= 65_000) ?? ring[0]!;
+   149→      const dv = Math.max(0, a.volume24h - ref.qv);
+   150→      vs.push({ t: now, dv });
+   151→      while (vs.length > 32) vs.shift();
+   152→    }
+   153→
+   154→    if (ring.length < PUMP_RULES.warmPoints) continue; // honest warmup after restart
+   155→
+   156→    const at = (ms: number): TapePoint | null => {
+   157→      let best: TapePoint | null = null;
+   158→      let bestDev = Number.POSITIVE_INFINITY;
+   159→      for (const pt of ring!) {
+   160→        const dev = Math.abs(pt.t - (now - ms));
+   161→        if (dev < bestDev) {
+   162→          bestDev = dev;
+   163→          best = pt;
+   164→        }
+   165→      }
+   166→      return bestDev <= 15_000 ? best : null;
+   167→    };
+   168→    const p1 = at(60_000);
+   169→    const p5 = at(300_000);
+   170→    if (!p1 || !p5) continue;
+   171→
+   172→    const vel1m = ((a.price - p1.p) / p1.p) * 100;
+   173→    const vel5m = ((a.price - p5.p) / p5.p) * 100;
+   174→    const dvNow = Math.max(0, a.volume24h - p1.qv);
+   175→    const base = median(vs.map((s) => s.dv).slice(0, -1));
+   176→    const burstX = base >= 1_000 ? dvNow / base : 0;
+   177→    if (dvNow < PUMP_RULES.volFloorUsd1m) continue;
+   178→
+   179→    const kind: "PUMP" | "DUMP" = vel5m > 0 ? "PUMP" : "DUMP";
+   180→    const av1 = Math.abs(vel1m);
+   181→    const av5 = Math.abs(vel5m);
+   182→    if (av5 < PUMP_RULES.vel5mMinPct || av1 < PUMP_RULES.vel1mMinPct || burstX < PUMP_RULES.volBurstMinX) continue;
+   183→    if (openTracks.has(a.symbol)) continue;
+   184→    if (now - (lastResolveAt.get(a.symbol) ?? 0) < PUMP_RULES.redeCooldownMs) continue;
+   185→    out.push({ symbol: a.symbol, kind, vel1m, vel5m, burstX, price: a.price });
+   186→  }
+   187→  // strongest first (5m displacement × burst)
+   188→  return out.sort((a, b) => Math.abs(b.vel5m) * b.burstX - Math.abs(a.vel5m) * a.burstX).slice(0, 3);
+   189→}
+   190→
+   191→// ── stage 2 — evidence-weighted conviction ───────────────────────────────
+   192→export interface PumpEvidence {
+   193→  oiDelta10m: number | null;
+   194→  cvdUsd60s: number | null;
+   195→  takerRatio: number | null;
+   196→  funding8h: number | null;
+   197→  whaleUsd5m: number | null;
+   198→  whaleSideAligned: boolean;
+   199→  liqUsd10m: number | null;
+   200→  liqSideAligned: boolean;
+   201→}
+   202→
+   203→export async function gatherEvidence(c: PumpCandidate): Promise<{ score: number; ev: PumpEvidence }> {
+   204→  const sign = c.kind === "PUMP" ? 1 : -1;
+   205→  let score = 0;
+   206→  // velocity core (≤45)
+   207→  score += Math.min(27, (Math.abs(c.vel5m) / PUMP_RULES.vel5mMinPct) * 12);
+   208→  score += Math.min(18, (Math.abs(c.vel1m) / PUMP_RULES.vel1mMinPct) * 9);
+   209→  // volume burst (≤15)
+   210→  score += Math.min(15, (c.burstX / PUMP_RULES.volBurstMinX) * 8);
+   211→
+   212→  const ev: PumpEvidence = {
+   213→    oiDelta10m: null, cvdUsd60s: null, takerRatio: null, funding8h: null,
+   214→    whaleUsd5m: null, whaleSideAligned: false, liqUsd10m: null, liqSideAligned: false,
+   215→  };
+   216→  try {
+   217→    const [flow, liq] = await Promise.all([fetchFlowMetrics(c.symbol), liquidationPressure(c.symbol)]);
+   218→    if (flow) {
+   219→      ev.oiDelta10m = flow.oiDelta10m;
+   220→      ev.cvdUsd60s = flow.cvdUsd60s;
+   221→      ev.takerRatio = flow.takerRatio;
+   222→      ev.funding8h = flow.funding8h;
+   223→      if (flow.oiDelta10m !== null) {
+   224→        // OI rising WITH the move = fresh money (strongest); falling = deleveraging squeeze (real, weaker)
+   225→        if (flow.oiDelta10m * sign > 0) score += 12;
+   226→        else if (flow.oiDelta10m < 0) score += 6;
+   227→      }
+   228→      if (flow.cvdUsd60s !== null && flow.cvdUsd60s * sign > 0) {
+   229→        score += flow.cvdUsd60s * sign >= 200_000 ? 15 : 12;
+   230→      }
+   231→      if (flow.takerRatio !== null && flow.takerRatio * sign > 1) score += flow.takerRatio * sign >= 1.15 ? 8 : 5;
+   232→      if (flow.whalePrint5m && flow.whalePrint5m.totalUsd >= 250_000) {
+   233→        ev.whaleUsd5m = flow.whalePrint5m.totalUsd;
+   234→        ev.whaleSideAligned = flow.whalePrint5m.buyUsd >= flow.whalePrint5m.sellUsd ? sign > 0 : sign < 0;
+   235→        if (ev.whaleSideAligned) score += 8;
+   236→      }
+   237→      // funding tailwind: not already paying the crowd to be on our side's neck
+   238→      if (flow.funding8h !== null && flow.funding8h * sign <= 0.02) score += 4;
+   239→    }
+   240→    if (liq) {
+   241→      ev.liqUsd10m = liq.usd10m;
+   242→      // forced-liquidation fuel: shorts liquidated → pump fuel; longs → dump fuel
+   243→      const fuel = sign > 0 ? liq.shortsUsd10m : liq.longsUsd10m;
+   244→      ev.liqSideAligned = fuel >= 100_000;
+   245→      if (ev.liqSideAligned) score += 6;
+   246→    }
+   247→  } catch {
+   248→    /* evidence unavailable — velocity/volume core still stands, honest score */
+   249→  }
+   250→  return { score: Math.min(100, Math.round(score)), ev };
+   251→}
+   252→
+   253→// ── module lifecycle ─────────────────────────────────────────────────────
+   254→
+   255→async function ensureBooted(): Promise<void> {
+   256→  if (booted) return;
+   257→  booted = true;
+   258→  try {
+   259→    const rows = await db.pumpTrack.findMany({ where: { phase: { not: "RESOLVED" } } });
+   260→    openTracks = new Map(
+   261→      rows.map((r) => [
+   262→        r.symbol,
+   263→        {
+   264→          id: r.id, symbol: r.symbol, kind: r.kind as "PUMP" | "DUMP", phase: r.phase,
+   265→          anchor: r.anchorPrice, peak: r.peakPrice, mfe: r.mfePct, mae: r.maePct,
+   266→          score: r.score, detectedAt: r.detectedAt.getTime(), lastWriteAt: 0, spawnedSignal: !!r.signalId,
+   267→        },
+   268→      ]),
+   269→    );
+   270→  } catch {
+   271→    /* first boot — empty */
+   272→  }
+   273→}
+   274→
+   275→const fmtEvidence = (ev: PumpEvidence): string => {
+   276→  const parts: string[] = [];
+   277→  if (ev.oiDelta10m !== null) parts.push(`OI ${ev.oiDelta10m >= 0 ? "+" : ""}${ev.oiDelta10m.toFixed(2)}%/10m`);
+   278→  if (ev.cvdUsd60s !== null) parts.push(`CVD ${ev.cvdUsd60s >= 0 ? "+" : ""}$${Math.round(Math.abs(ev.cvdUsd60s) / 1000)}K/60s`);
+   279→  if (ev.takerRatio !== null) parts.push(`taker ${ev.takerRatio.toFixed(2)}`);
+   280→  if (ev.whaleSideAligned) parts.push(`whale $${Math.round((ev.whaleUsd5m ?? 0) / 1000)}K/5m`);
+   281→  if (ev.liqSideAligned) parts.push(`liq-fuel $${Math.round((ev.liqUsd10m ?? 0) / 1000)}K/10m`);
+   282→  return parts.join(" · ");
+   283→};
+   284→
+   285→/** Reconcile in-memory open tracks with the DB (1/min — heal for restarts
+   286→ *  and Next dev's per-route module bundles: a track created in one instance
+   287→ *  must be tracked by every instance that runs the tick). */
+   288→async function syncOpenTracks(now: number): Promise<void> {
+   289→  if (now - lastSyncAt < 60_000) return;
+   290→  lastSyncAt = now;
+   291→  try {
+   292→    const rows = await db.pumpTrack.findMany({ where: { phase: { not: "RESOLVED" } } });
+   293→    const rowIds = new Set(rows.map((r) => r.id));
+   294→    for (const [sym, t] of [...openTracks.entries()]) {
+   295→      if (!rowIds.has(t.id)) openTracks.delete(sym); // resolved elsewhere
+   296→    }
+   297→    for (const r of rows) {
+   298→      if (openTracks.has(r.symbol)) continue; // memory copy is fresher
+   299→      openTracks.set(r.symbol, {
+   300→        id: r.id, symbol: r.symbol, kind: r.kind as "PUMP" | "DUMP", phase: r.phase,
+   301→        anchor: r.anchorPrice, peak: r.peakPrice, mfe: r.mfePct, mae: r.maePct,
+   302→        score: r.score, detectedAt: r.detectedAt.getTime(), lastWriteAt: 0, spawnedSignal: !!r.signalId,
+   303→      });
+   304→    }
+   305→  } catch {
+   306→    /* reconcile is best-effort */
+   307→  }
+   308→}
+   309→
+   310→/** Main entry — called from the engine tick with fresh asset prices. */
+   311→export async function pumpTick(assets: Array<{ symbol: string; price: number; volume24h: number }>): Promise<void> {
+   312→  await ensureBooted();
+   313→  const now = Date.now();
+   314→
+   315→  // 0) reconcile memory ↔ DB (1/min)
+   316→  await syncOpenTracks(now);
+   317→
+   318→  // 1) track maintenance first — MFE/MAE + phase machine + resolution
+   319→  if (now - lastTrackSweepAt >= 5_000 && openTracks.size > 0) {
+   320→    lastTrackSweepAt = now;
+   321→    const priceMap = new Map(assets.map((a) => [a.symbol, a.price]));
+   322→    for (const t of [...openTracks.values()]) {
+   323→      const price = priceMap.get(t.symbol);
+   324→      if (!price) continue;
+   325→      await updateTrack(t, price, now);
+   326→    }
+   327→  }
+   328→
+   329→  // 2) stage-1 screen
+   330→  if (openTracks.size >= PUMP_RULES.activeCap) return;
+   331→  const cands = pumpScreen(assets);
+   332→  if (!cands.length) return;
+   333→
+   334→  // 3) stage-2 confirm + declare
+   335→  for (const c of cands) {
+   336→    if (openTracks.has(c.symbol)) continue;
+   337→    const lc = lastConfirmAt.get(c.symbol) ?? 0;
+   338→    if (now - lc < PUMP_RULES.confirmTtlMs) continue;
+   339→    lastConfirmAt.set(c.symbol, now);
+   340→    const { score, ev } = await gatherEvidence(c);
+   341→    if (score < PUMP_RULES.scoreDeclare) continue;
+   342→    await declareTrack(c, score, ev, now);
+   343→  }
+   344→}
+   345→
+   346→async function declareTrack(c: PumpCandidate, score: number, ev: PumpEvidence, now: number): Promise<void> {
+   347→  const row = await db.pumpTrack.create({
+   348→    data: {
+   349→      symbol: c.symbol,
+   350→      kind: c.kind,
+   351→      phase: "ONSET",
+   352→      anchorPrice: c.price,
+   353→      peakPrice: c.price,
+   354→      vel1mPct: Number(c.vel1m.toFixed(3)),
+   355→      vel5mPct: Number(c.vel5m.toFixed(3)),
+   356→      volBurstX: Number(c.burstX.toFixed(2)),
+   357→      oiDelta10m: ev.oiDelta10m,
+   358→      cvdUsd60s: ev.cvdUsd60s,
+   359→      takerRatio: ev.takerRatio,
+   360→      funding8h: ev.funding8h,
+   361→      whaleUsd5m: ev.whaleUsd5m,
+   362→      liqUsd10m: ev.liqUsd10m,
+   363→      score,
+   364→      metricsJson: JSON.stringify({ ev, rules: { successMovePct: PUMP_RULES.successMovePct, horizonMin: PUMP_RULES.horizonMin } }),
+   365→    },
+   366→  });
+   367→  openTracks.set(c.symbol, {
+   368→    id: row.id, symbol: c.symbol, kind: c.kind, phase: "ONSET",
+   369→    anchor: c.price, peak: c.price, mfe: 0, mae: 0, score,
+   370→    detectedAt: now, lastWriteAt: 0, spawnedSignal: false,
+   371→  });
+   372→  const engine = await import("./engine");
+   373→  await engine.fireEvent(
+   374→    null,
+   375→    c.symbol,
+   376→    "PUMP_RADAR",
+   377→    "ai",
+   378→    `${c.kind} TRACK DECLARED — ${c.symbol} @ ${c.price} · conviction ${score}/100 · vel5m ${c.vel5m >= 0 ? "+" : ""}${c.vel5m.toFixed(2)}% · vel1m ${c.vel1m >= 0 ? "+" : ""}${c.vel1m.toFixed(2)}% · vol-burst ${c.burstX.toFixed(1)}× · ${fmtEvidence(ev) || "flow evidence warming"} — SUCCESS criterion fixed NOW: +${PUMP_RULES.successMovePct}% MFE from anchor within ${PUMP_RULES.horizonMin}min · gate ${await gateLine()}`,
+   379→  );
+   380→  // v9.2 — every declared track proposes its card; maybeSpawnSignal applies
+   381→  // the 78-floor ONLY in gated mode (direct = unfiltered emission).
+   382→  await maybeSpawnSignal(c.kind, c.symbol, score, row.id, now, c.price);
+   383→}
+   384→
+   385→async function gateLine(): Promise<string> {
+   386→  const g = await pumpGateAllows();
+   387→  return g.unlocked
+   388→    ? `UNLOCKED (${g.successful}/${g.total} successes)`
+   389→    : `LOCKED ${g.successful}/${PUMP_RULES.requiredSuccesses} successes — signals forbidden`;
+   390→}
+   391→
+   392→async function updateTrack(t: TrackState, price: number, now: number): Promise<void> {
+   393→  const sign = t.kind === "PUMP" ? 1 : -1;
+   394→  const fav = ((price - t.anchor) / t.anchor) * 100 * sign;
+   395→  t.mfe = Math.max(t.mfe, fav);
+   396→  t.mae = Math.max(t.mae, -fav);
+   397→  if (sign > 0) t.peak = Math.max(t.peak, price);
+   398→  else t.peak = Math.min(t.peak, price);
+   399→
+   400→  // phase machine
+   401→  let phase = t.phase;
+   402→  if (t.phase === "ONSET" && t.mfe >= PUMP_RULES.extendPct) phase = "EXTENSION";
+   403→  else if (t.phase === "EXTENSION") {
+   404→    const leg = Math.max(t.mfe, 0.01);
+   405→    const retrace = ((sign > 0 ? t.peak - price : price - t.peak) / (t.peak || price)) * 100;
+   406→    if (retrace >= PUMP_RULES.exhaustRetraceFrac * leg) phase = "EXHAUSTION";
+   407→  }
+   408→
+   409→  // resolution
+   410→  let outcome: "SUCCESS" | "FAILURE" | null = null;
+   411→  let note = "";
+   412→  const ageMin = (now - t.detectedAt) / 60_000;
+   413→  if (t.mfe >= PUMP_RULES.successMovePct) {
+   414→    outcome = "SUCCESS";
+   415→    note = `MFE +${t.mfe.toFixed(2)}% ≥ +${PUMP_RULES.successMovePct}% in ${ageMin.toFixed(0)}min — continuation validated`;
+   416→  } else if (t.mae >= PUMP_RULES.collapseMaePct) {
+   417→    outcome = "FAILURE";
+   418→    note = `collapsed — MAE ${t.mae.toFixed(2)}% against the thesis (MFE was +${t.mfe.toFixed(2)}%)`;
+   419→  } else if (ageMin >= PUMP_RULES.horizonMin) {
+   420→    outcome = "FAILURE";
+   421→    note = `horizon ${PUMP_RULES.horizonMin}min elapsed — MFE +${t.mfe.toFixed(2)}% never reached +${PUMP_RULES.successMovePct}%`;
+   422→  }
+   423→
+   424→  const dirty = phase !== t.phase || now - t.lastWriteAt >= PUMP_RULES.trackUpdateMs || outcome;
+   425→  if (!dirty) return;
+   426→  t.phase = outcome ? "RESOLVED" : phase;
+   427→  t.lastWriteAt = now;
+   428→  try {
+   429→    await db.pumpTrack.update({
+   430→      where: { id: t.id },
+   431→      data: {
+   432→        phase: t.phase,
+   433→        mfePct: Number(t.mfe.toFixed(3)),
+   434→        maePct: Number(t.mae.toFixed(3)),
+   435→        peakPrice: t.peak,
+   436→        ...(outcome
+   437→          ? { outcome, resolvedAt: new Date(), successNote: note }
+   438→          : {}),
+   439→      },
+   440→    });
+   441→  } catch (e) {
+   442→    console.error("[pump-radar] track update failed:", e);
+   443→    return;
+   444→  }
+   445→  if (outcome) {
+   446→    openTracks.delete(t.symbol);
+   447→    lastResolveAt.set(t.symbol, now);
+   448→    const engine = await import("./engine");
+   449→    await engine.fireEvent(
+   450→      null,
+   451→      t.symbol,
+   452→      outcome === "SUCCESS" ? "PUMP_RADAR" : "ENGINE",
+   453→      outcome === "SUCCESS" ? "success" : "info",
+   454→      `${t.kind} TRACK ${outcome} — ${t.symbol} ${outcome === "SUCCESS" ? "✓" : "✕"} · ${note} (MAE ${t.mae.toFixed(2)}%) · gate ${await gateLine()}`,
+   455→    );
+   456→  }
+   457→}
+   458→
+   459→// ── LEARNING GATE (operator: 5 successful tracks before any signal) ──────
+   460→let gateMemo: { at: number; successful: number; failed: number; total: number } | null = null;
+   461→
+   462→export async function pumpGateAllows(): Promise<{ unlocked: boolean; successful: number; failed: number; total: number; required: number; reason: string }> {
+   463→  if (!gateMemo || Date.now() - gateMemo.at >= 30_000) {
+   464→    const groups = await db.pumpTrack.groupBy({ by: ["outcome"], _count: { _all: true } });
+   465→    const get = (k: string) => groups.find((g) => g.outcome === k)?._count._all ?? 0;
+   466→    gateMemo = { at: Date.now(), successful: get("SUCCESS"), failed: get("FAILURE"), total: get("SUCCESS") + get("FAILURE") };
+   467→    if (gateMemo.successful >= PUMP_RULES.requiredSuccesses) {
+   468→      const cur = await db.engineSetting.findUnique({ where: { key: "pump.gate.unlockedAt" } }).catch(() => null);
+   469→      if (!cur) {
+   470→        await db.engineSetting.upsert({
+   471→          where: { key: "pump.gate.unlockedAt" },
+   472→          create: { key: "pump.gate.unlockedAt", value: new Date().toISOString() },
+   473→          update: { value: new Date().toISOString() },
+   474→        }).catch(() => undefined);
+   475→        const engine = await import("./engine");
+   476→        await engine
+   477→          .fireEvent(null, null, "PUMP_RADAR", "success", `PUMP/DUMP RADAR UNLOCKED — ${gateMemo.successful} successful tracks confirmed the detector; dedicated PUMP/DUMP signal cards now ARMED (all normal engine gates still apply to every deploy)`)
+   478→          .catch(() => undefined);
+   479→      }
+   480→    }
+   481→  }
+   482→  const unlocked = gateMemo.successful >= PUMP_RULES.requiredSuccesses;
+   483→  return {
+   484→    unlocked,
+   485→    successful: gateMemo.successful,
+   486→    failed: gateMemo.failed,
+   487→    total: gateMemo.total,
+   488→    required: PUMP_RULES.requiredSuccesses,
+   489→    reason: unlocked
+   490→      ? `radar confirmed — ${gateMemo.successful} successful tracks (≥${PUMP_RULES.requiredSuccesses})`
+   491→      : `signals forbidden until ${PUMP_RULES.requiredSuccesses} successful tracks — ${gateMemo.successful} so far (${gateMemo.total} resolved)`,
+   492→  };
+   493→}
+   494→
+   495→// ── v9.1 DIRECT AUTHORITY (operator mandate 2026-09-13: «اجازه مستقیم برای
+   496→// صدور سیگنال داشته باشه») — the 5-success learning gate is BANKED (5/5 on
+   497→// 2026-09-12), and the operator now grants the radar DIRECT signal authority:
+   498→// EngineSetting "pump.authority" = "direct" → a conviction-≥78 nomination
+   499→// deploys through deploySignal with authorityBypass — the radar's own
+   500→// evidence stack (velocity + volume burst + OI/CVD/taker/whale/liq layers)
+   501→// IS the quality judgment; the generic engine gates no longer re-judge it.
+   502→// "gated" → the pre-v9.1 behavior (nominate, engine disposes). Radar's own
+   503→// risk rails (20min spacing, max 2 open radar signals) stay HARD either way.
+   504→const AUTHORITY_KEY = "pump.authority";
+   505→
+   506→export async function getPumpAuthority(): Promise<"direct" | "gated"> {
+   507→  try {
+   508→    const row = await db.engineSetting.findUnique({ where: { key: AUTHORITY_KEY } });
+   509→    return row?.value === "direct" ? "direct" : "gated";
+   510→  } catch {
+   511→    return "gated";
+   512→  }
+   513→}
+   514→
+   515→export async function setPumpAuthority(mode: "direct" | "gated"): Promise<void> {
+   516→  await db.engineSetting.upsert({
+   517→    where: { key: AUTHORITY_KEY },
+   518→    create: { key: AUTHORITY_KEY, value: mode },
+   519→    update: { value: mode },
+   520→  });
+   521→}
+   522→
+   523→async function maybeSpawnSignal(kind: "PUMP" | "DUMP", symbol: string, score: number, trackId: string, now: number, anchorPrice: number): Promise<void> {
+   524→  const authority = await getPumpAuthority();
+   525→  const engine = await import("./engine");
+   526→  if (authority !== "direct") {
+   527→    // v9.0 gated path — learning gate + 78 deploy floor + spacing + max-open
+   528→    const gate = await pumpGateAllows();
+   529→    if (!gate.unlocked) {
+   530→      await engine.fireEvent(null, symbol, "ENGINE", "info", `PUMP/DUMP RADAR: ${kind} ${symbol} scored ${score}/100 (deploy-grade) but the learning gate holds — ${gate.reason}`);
+   531→      return;
+   532→    }
+   533→    if (score < PUMP_RULES.scoreDeploy) return;
+   534→    const now_ = Date.now();
+   535→    if (now_ - lastSignalAt.v < PUMP_RULES.signalSpacingMs) return;
+   536→    const openRadar = await db.signal.count({ where: { tags: { contains: kind }, status: { in: ["ACTIVE", "TP1", "TP2"] } } });
+   537→    if (openRadar >= PUMP_RULES.signalMaxActive) return;
+   538→    lastSignalAt.v = now_;
+   539→  }
+   540→  // v9.2 DIRECT — unfiltered: every declared track emits its card 1:1, no
+   541→  // learning gate, no 78 floor, no spacing, no max-open (operator mandate).
+   542→  // deploySignal's honesty rails (feed-fresh, sim-price ban) stay HARD.
+   543→  // v9.3 R6-INFORMATIVE PACKAGE (operator mandate الف + anti-late-entry):
+   544→  //   · ttlMinutes 60–75 (vs the 180–300 AI-SWING default these cards inherit)
+   545→  //     → cards RESOLVE fast: fewer EXPIRED-no-touch censors, higher R6
+   546→  //     informative ratio, faster capital cycle.
+   547→  //   · ttlNoExtend → the dynamic expiry gate may NOT re-extend radar cards
+   548→  //     (an extension would reintroduce exactly the censoring R6 suffers from).
+   549→  //   · refPrice = track anchorPrice + chaseCapPct 1.5 → the deploy is refused
+   550→  //     if price already ran >1.5% past DETECTION — execution can no longer
+   551→  //     enter later than the radar saw the move (Duration-Lab: the fast-kill
+   552→  //     cohort never went green; they were cascade chases).
+   553→  // v9.3.1 ROUTING FIX (independent audit 2026-09-13 18:05 +08, DB evidence):
+   554→  //   focusSymbol was MISSING here — deploySignal ran a FULL-UNIVERSE scan and
+   555→  //   the authorityBypass fallback picked the strongest candidate of the WHOLE
+   556→  //   market, so cards were born on a DIFFERENT symbol than the detected flow
+   557→  //   (proven pairs: VTHOUSDT track → AAVEUSDT card NX-0129, STEEMUSDT track →
+   558→  //   ZECUSDT card NX-0136, METUSDT track → SOLUSDT card NX-0123). That is the
+   559→  //   literal "execution enters later (and elsewhere) than detection" defect,
+   560→  //   AND it poisoned the anchor-referenced chase cap: refPrice(anchor of X)
+   561→  //   vs entry(price of Y) is a cross-symbol ratio — nonsense drift that would
+   562→  //   either refuse every radar deploy or bless a wrong-symbol chase. With
+   563→  //   focusSymbol the pool IS the radar symbol, the 1:1 detection→card mapping
+   564→  //   holds on the right market, and chase-cap 1.5% measures the TRUE
+   565→  //   detection→fill drift of the detected flow.
+   566→  const res = await engine.deploySignal(symbol, kind === "PUMP" ? "LONG" : "SHORT", {
+   567→    triggerTag: "PUMP-RADAR",
+   568→    extraTags: [kind],
+   569→    ...(authority === "direct" ? { authorityBypass: true } : {}),
+   570→    focusSymbol: symbol,
+   571→    ttlMinutes: 60 + Math.round(Math.random() * 15),
+   572→    ttlNoExtend: true,
+   573→    refPrice: anchorPrice,
+   574→    chaseCapPct: 1.5,
+   575→  });
+   576→  if (res.signal) {
+   577→    await db.pumpTrack.update({ where: { id: trackId }, data: { signalId: res.signal.id } }).catch(() => undefined);
+   578→    await engine.fireEvent(null, symbol, "PUMP_RADAR", "success", `${kind} RADAR DEPLOY — ${symbol} declared at conviction ${score}/100 → NX-${String(res.signal.serial).padStart(4, "0")} deployed ${authority === "direct" ? "under DIRECT AUTHORITY (unfiltered emission — operator mandate; honesty rails only)" : "through the full gate stack"} with the dedicated ${kind} card`);
+   579→  } else if (res.error) {
+   580→    await engine.fireEvent(null, symbol, "ENGINE", "info", `PUMP/DUMP RADAR: ${kind} ${symbol} nomination VETOED${authority === "direct" ? " (rails only — feed/sim/risk-cluster)" : " by the engine gates"} — ${res.error.slice(0, 160)}`);
+   581→  }
+   582→}
+   583→
+   584→// ── status for the dashboard radar panel ─────────────────────────────────
+   585→const toDTO = (r: {
+   586→  id: string; symbol: string; kind: string; phase: string; outcome: string | null;
+   587→  anchorPrice: number; mfePct: number; maePct: number; score: number;
+   588→  vel5mPct: number | null; volBurstX: number | null;
+   589→  detectedAt: Date; resolvedAt: Date | null; successNote: string | null;
+   590→}): PumpTrackDTO => ({
+   591→  id: r.id,
+   592→  symbol: r.symbol,
+   593→  kind: r.kind === "PUMP" ? "PUMP" : "DUMP",
+   594→  phase: r.phase,
+   595→  outcome: r.outcome,
+   596→  anchorPrice: r.anchorPrice,
+   597→  mfePct: r.mfePct,
+   598→  maePct: r.maePct,
+   599→  score: r.score,
+   600→  vel5mPct: r.vel5mPct,
+   601→  volBurstX: r.volBurstX,
+   602→  detectedAt: r.detectedAt.toISOString(),
+   603→  resolvedAt: r.resolvedAt?.toISOString() ?? null,
+   604→  successNote: r.successNote,
+   605→});
+   606→
+   607→export async function getPumpEngineStatus(): Promise<PumpEngineStatus> {
+   608→  if (memo && Date.now() - memo.at < 15_000) return memo.v;
+   609→  try {
+   610→    await ensureBooted();
+   611→    const gate = await pumpGateAllows();
+   612→    const authority = await getPumpAuthority();
+   613→    const [active, recent] = await Promise.all([
+   614→      db.pumpTrack.findMany({ where: { phase: { not: "RESOLVED" } }, orderBy: { detectedAt: "desc" }, take: 8 }),
+   615→      db.pumpTrack.findMany({ where: { outcome: { not: null } }, orderBy: { resolvedAt: "desc" }, take: 6 }),
+   616→    ]);
+   617→    const unlockedRow = await db.engineSetting.findUnique({ where: { key: "pump.gate.unlockedAt" } }).catch(() => null);
+   618→    const v: PumpEngineStatus = {
+   619→      gate: {
+   620→        unlocked: gate.unlocked,
+   621→        successful: gate.successful,
+   622→        failed: gate.failed,
+   623→        total: gate.total,
+   624→        required: gate.required,
+   625→        unlockedAt: unlockedRow?.value ?? null,
+   626→      },
+   627→      authority,
+   628→      active: active.map(toDTO),
+   629→      recent: recent.map(toDTO),
+   630→      tapeSymbols: tape.size,
+   631→      warm: tape.size > 0 && [...tape.values()].every((r) => r.length >= PUMP_RULES.warmPoints || r.length === 0),
+   632→    };
+   633→    memo = { at: Date.now(), v };
+   634→    return v;
+   635→  } catch {
+   636→    return {
+   637→      gate: { unlocked: false, successful: 0, failed: 0, total: 0, required: PUMP_RULES.requiredSuccesses, unlockedAt: null },
+   638→      authority: "gated",
+   639→      active: [],
+   640→      recent: [],
+   641→      tapeSymbols: tape.size,
+   642→      warm: false,
+   643→    };
+   644→  }
+   645→}
+   646→

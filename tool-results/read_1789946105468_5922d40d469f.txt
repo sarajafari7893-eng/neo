@@ -1,0 +1,574 @@
+     1→     1→// ── FlowRadar Neo replayed-history performance learner (v5.0, server-only) ──
+     2→     2→// FORCES the engine to learn from PAST data instead of staying static:
+     3→     3→//   1. REPLAY  — real Binance klines candle-by-candle through the exact
+     4→     4→//      confluence+gate scorer with the real deployment ladder + fee NET math.
+     5→     5→//   2. AUTO-TUNE — coordinate sweep over factor weights around the current
+     6→     6→//      baseline; adopts the best combo ONLY when it genuinely improves the
+     7→     7→//      objective (Wilson-LB + expectancy) — otherwise the baseline stands.
+     8→     8→//   3. LEARNING PROGRESS — every run is appended to a persistent runs ring so
+     9→     9→//      the operator can watch WR/expectancy/Wilson-LB evolve run over run.
+    10→    10→//   4. SCHEDULER — re-runs itself every LEARNER_AUTO_H (default 6h), so the
+    11→    11→//      learned mean keeps moving as new history accrues.
+    12→    12→// Its verdicts feed the LEARNED GATE that decides when live auto-signals start.
+    13→    13→
+    14→    14→import { db } from "@/lib/db";
+    15→    15→import { fetchFuturesKlines, type Candle } from "./market-feed";
+    16→    16→import { buildSnapshot, scoreConfluence, type Confluence, type FactorWeights } from "./indicators";
+    17→    17→import { feeBreakdown, confidenceMargin, ACCOUNT_START_USD } from "./accounting";
+    18→    18→import { computeCalibration, type CalibrationState } from "./calibration";
+    19→    19→import { getGateSettings } from "./gate-settings";
+    20→    20→import type { FlowAssessment } from "./flow";
+    21→    21→
+    22→    22→export interface BacktestTrade {
+    23→    23→  symbol: string;
+    24→    24→  openedAt: number;
+    25→    25→  direction: "LONG" | "SHORT";
+    26→    26→  score: number;
+    27→    27→  strategy: string;
+    28→    28→  confidence: number;
+    29→    29→  outcome: "SL" | "TP3" | "EXPIRED";
+    30→    30→  grossPct: number;
+    31→    31→  netPct: number;
+    32→    32→  netUsd: number;
+    33→    33→  heldMin: number;
+    34→    34→  votes: Array<{ factor: string; vote: number }>;
+    35→    35→}
+    36→    36→
+    37→    37→export interface BacktestResult {
+    38→    38→  ranAt: string;
+    39→    39→  engine: string;
+    40→    40→  label: string;
+    41→    41→  symbolsScanned: string[];
+    42→    42→  candlesPerSymbol: number;
+    43→    43→  spanHours: number;
+    44→    44→  candidatesEvaluated: number;
+    45→    45→  n: number;
+    46→    46→  wins: number;
+    47→    47→  losses: number;
+    48→    48→  winRate: number;
+    49→    49→  wilsonLB: number;
+    50→    50→  avgNetPct: number;
+    51→    51→  expectancyR: number;
+    52→    52→  totalNetUsd: number;
+    53→    53→  equityEnd: number;
+    54→    54→  byStrategy: Array<{ strategy: string; n: number; wins: number; avgNetPct: number }>;
+    55→    55→  factorLessons: Array<{ factor: string; n: number; winRate: number }>;
+    56→    56→  equityCurve: Array<{ i: number; equity: number }>;
+    57→    57→  trades: BacktestTrade[];
+    58→    58→  verdict: string;
+    59→    59→  calibration: Pick<CalibrationState, "status" | "settled" | "target">;
+    60→    60→  weightsUsed: Record<string, number> | null;
+    61→    61→  minScoreAdj: number;
+    62→    62→  objective: number;
+    63→    63→}
+    64→    64→
+    65→    65→export interface AutoTuneState {
+    66→    66→  adoptedAt: string | null;
+    67→    67→  adoptedWeights: Record<string, number> | null;
+    68→    68→  baselineObjective: number;
+    69→    69→  bestObjective: number;
+    70→    70→  bestCombo: Record<string, number> | null;
+    71→    71→  trials: number;
+    72→    72→  adopted: boolean;
+    73→    73→  lastRunAt: string | null;
+    74→    74→  history: Array<{ at: string; adopted: boolean; baseline: number; best: number; delta: number; summary: string }>;
+    75→    75→}
+    76→    76→
+    77→    77→export interface BacktestRunRow {
+    78→    78→  ranAt: string;
+    79→    79→  label: string;
+    80→    80→  n: number;
+    81→    81→  winRate: number;
+    82→    82→  wilsonLB: number;
+    83→    83→  avgNetPct: number;
+    84→    84→  equityEnd: number;
+    85→    85→  objective: number;
+    86→    86→  adopted: boolean | null;
+    87→    87→}
+    88→    88→
+    89→    89→export interface BacktestBundle {
+    90→    90→  result: BacktestResult | null;
+    91→    91→  runs: BacktestRunRow[];
+    92→    92→  autotune: AutoTuneState | null;
+    93→    93→}
+    94→    94→
+    95→    95→const INTERVAL = "15m";
+    96→    96→const CANDLES = 500; // ~5.2 days per symbol
+    97→    97→const WARMUP = 60;
+    98→    98→const BASE_STEP = 2; // baseline evaluates every 2nd candle (30min grid)
+    99→    99→const SWEEP_STEP = 4; // sweeps use a coarser grid (60min) for speed
+   100→   100→const TTL_MIN: Record<string, number> = { "AI-SCALP": 75, BREAKOUT: 120, MOMENTUM: 150, "MEAN-REVERT": 90, "AI-SWING": 240 };
+   101→   101→
+   102→   102→const KEY_BT = "backtest";
+   103→   103→const KEY_RUNS = "backtest.runs";
+   104→   104→const KEY_AT = "backtest.autotune";
+   105→   105→
+   106→   106→// ── kline cache: every sweep reuses ONE fetch per symbol ──────
+   107→   107→const klineCache = new Map<string, { at: number; candles: Candle[] }>();
+   108→   108→const KLINE_TTL = 10 * 60_000;
+   109→   109→
+   110→   110→async function primeKlines(symbols: string[]): Promise<string[]> {
+   111→   111→  const ok: string[] = [];
+   112→   112→  for (const s of symbols) {
+   113→   113→    const hit = klineCache.get(s);
+   114→   114→    if (hit && Date.now() - hit.at < KLINE_TTL) {
+   115→   115→      ok.push(s);
+   116→   116→      continue;
+   117→   117→    }
+   118→   118→    try {
+   119→   119→      const candles = await fetchFuturesKlines(s, INTERVAL, CANDLES);
+   120→   120→      klineCache.set(s, { at: Date.now(), candles });
+   121→   121→      ok.push(s);
+   122→   122→    } catch {
+   123→   123→      /* skip symbol this run */
+   124→   124→    }
+   125→   125→  }
+   126→   126→  return ok;
+   127→   127→}
+   128→   128→
+   129→   129→function wilsonLowerBound(wins: number, n: number, z = 1.96): number {
+   130→   130→  if (n === 0) return 0;
+   131→   131→  const p = wins / n;
+   132→   132→  const denom = 1 + (z * z) / n;
+   133→   133→  const centre = p + (z * z) / (2 * n);
+   134→   134→  const margin = z * Math.sqrt((p * (1 - p)) / n + (z * z) / (4 * n * n));
+   135→   135→  return Math.max(0, (centre - margin) / denom) * 100;
+   136→   136→}
+   137→   137→
+   138→   138→/** learner objective: Wilson-LB dominates, expectancy breaks ties, small-n disqualified. */
+   139→   139→function objectiveOf(res: BacktestResult): number {
+   140→   140→  if (res.n < 12) return -999;
+   141→   141→  return res.wilsonLB + Math.max(-15, Math.min(20, res.avgNetPct * 10));
+   142→   142→}
+   143→   143→
+   144→   144→interface SimResult {
+   145→   145→  outcome: BacktestTrade["outcome"];
+   146→   146→  movePct: number; // UNLEVERED price move %
+   147→   147→  lev: number;
+   148→   148→  heldMin: number;
+   149→   149→}
+   150→   150→
+   151→   151→/** Walk forward candles with engine-consistent resolution math (stop → full SL loss, mirroring live engine). */
+   152→   152→function simulate(candles: Candle[], entryIdx: number, dir: "LONG" | "SHORT", entry: number, sl: number, tp1: number, tp2: number, tp3: number, ttlCandles: number): SimResult {
+   153→   153→  const isLong = dir === "LONG";
+   154→   154→  const slDist = Math.abs(entry - sl) / entry;
+   155→   155→  const lev = Math.round(Math.min(20, Math.max(5, 60 / Math.max(0.7, slDist * 100)))); // mirror engine leverage pick
+   156→   156→
+   157→   157→  for (let j = entryIdx + 1; j < candles.length && j <= entryIdx + ttlCandles; j++) {
+   158→   158→    const c = candles[j]!;
+   159→   159→    const hitTp = (t: number) => (isLong ? c.high >= t : c.low <= t);
+   160→   160→    const hitStop = isLong ? c.low <= sl : c.high >= sl;
+   161→   161→
+   162→   162→    if (hitStop) return { outcome: "SL", movePct: -slDist * 100, lev, heldMin: (j - entryIdx) * 15 };
+   163→   163→    if (hitTp(tp3)) return { outcome: "TP3", movePct: 2.6 * slDist * 100, lev, heldMin: (j - entryIdx) * 15 };
+   164→   164→    if (hitTp(tp2) || hitTp(tp1)) continue; // levels book narrative only — final resolution unchanged (engine-consistent)
+   165→   165→  }
+   166→   166→  // TTL expiry — mark at last candle close
+   167→   167→  const endIdx = Math.min(candles.length - 1, entryIdx + ttlCandles);
+   168→   168→  const close = candles[endIdx]!.close;
+   169→   169→  const movePct = ((close - entry) / entry) * (isLong ? 1 : -1) * 100;
+   170→   170→  return { outcome: "EXPIRED", movePct, lev, heldMin: (endIdx - entryIdx) * 15 };
+   171→   171→}
+   172→   172→
+   173→   173→export interface BacktestOpts {
+   174→   174→  symbolsOverride?: string[];
+   175→   175→  weights?: FactorWeights | null;
+   176→   176→  minScoreAdj?: number;
+   177→   177→  step?: number;
+   178→   178→  label?: string;
+   179→   179→  persist?: boolean;
+   180→   180→}
+   181→   181→
+   182→   182→export async function runBacktest(opts: BacktestOpts = {}): Promise<BacktestResult> {
+   183→   183→  const t0 = Date.now();
+   184→   184→  const persist = opts.persist !== false;
+   185→   185→  const step = opts.step ?? BASE_STEP;
+   186→   186→  const gate = await getGateSettings();
+   187→   187→  const cal = await computeCalibration();
+   188→   188→
+   189→   189→  const assets = await db.marketAsset.findMany({ orderBy: { volume24h: "desc" }, take: 12 });
+   190→   190→  const wanted = (opts.symbolsOverride?.length ? opts.symbolsOverride : assets.map((a) => a.symbol)).slice(0, 12);
+   191→   191→  const symbols = await primeKlines(wanted);
+   192→   192→
+   193→   193→  const weights: FactorWeights | null = opts.weights ?? (Object.keys(cal.weights).length ? cal.weights : null);
+   194→   194→  const minScore = Math.max(15, Math.min(65, gate.minScore + (opts.minScoreAdj ?? 0)));
+   195→   195→
+   196→   196→  const trades: BacktestTrade[] = [];
+   197→   197→  let candidatesEvaluated = 0;
+   198→   198→  let equity = ACCOUNT_START_USD;
+   199→   199→  const equityCurve: Array<{ i: number; equity: number }> = [{ i: 0, equity }];
+   200→   200→  const factorAcc = new Map<string, { wins: number; n: number }>();
+   201→   201→  let candlesPerSymbol = 0;
+   202→   202→  let spanHours = 0;
+   203→   203→  const cooldowns = new Map<string, number>();
+   204→   204→
+   205→   205→  for (const symbol of symbols) {
+   206→   206→    const candles = klineCache.get(symbol)?.candles;
+   207→   207→    if (!candles || candles.length < WARMUP + 30) continue;
+   208→   208→    candlesPerSymbol = candles.length;
+   209→   209→    spanHours = Math.max(spanHours, (candles[candles.length - 1]!.openTime - candles[0]!.openTime) / 3600_000);
+   210→   210→
+   211→   211→    for (let i = WARMUP; i < candles.length - 5; i += step) {
+   212→   212→      const c = candles[i]!;
+   213→   213→      if (c.openTime < (cooldowns.get(symbol) ?? 0)) continue;
+   214→   214→      const snap = buildSnapshot(symbol, candles.slice(0, i + 1));
+   215→   215→      if (!snap) continue;
+   216→   216→      const conf: Confluence = scoreConfluence(snap, weights ?? undefined);
+   217→   217→      candidatesEvaluated++;
+   218→   218→      if (Math.abs(conf.score) < minScore) continue;
+   219→   219→
+   220→   220→      // simulate the ladder
+   221→   221→      const isLong = conf.direction === "LONG";
+   222→   222→      const entry = c.close;
+   223→   223→      const slDistPct = Math.min(4.5, Math.max(0.7, 1.5 * snap.atrPct)) / 100;
+   224→   224→      const sl = entry * (isLong ? 1 - slDistPct : 1 + slDistPct);
+   225→   225→      const risk = Math.abs(entry - sl);
+   226→   226→      const tp1 = isLong ? entry + risk : entry - risk;
+   227→   227→      const tp2 = isLong ? entry + risk * 1.8 : entry - risk * 1.8;
+   228→   228→      const tp3 = isLong ? entry + risk * 2.6 : entry - risk * 2.6;
+   229→   229→      const ttlCandles = Math.round((TTL_MIN[conf.strategy] ?? 120) / 15);
+   230→   230→      const sim = simulate(candles, i, conf.direction, entry, sl, tp1, tp2, tp3, ttlCandles);
+   231→   231→
+   232→   232→      // fee-aware NET on a running $100 equity account (grossPct = UNLEVERED move)
+   233→   233→      const margin = confidenceMargin(conf.confidence, equity, equity * 0.9);
+   234→   234→      const lev = sim.lev;
+   235→   235→      const fb = feeBreakdown(margin, lev, sim.movePct, sim.heldMin);
+   236→   236→      equity += fb.netUsd;
+   237→   237→      equityCurve.push({ i: trades.length + 1, equity: Number(equity.toFixed(2)) });
+   238→   238→
+   239→   239→      const win = fb.netPct > 0;
+   240→   240→      for (const v of conf.votes) {
+   241→   241→        if (Math.abs(v.vote) < 8) continue;
+   242→   242→        const cell = factorAcc.get(v.factor) ?? { wins: 0, n: 0 };
+   243→   243→        cell.n++;
+   244→   244→        if (win) cell.wins++;
+   245→   245→        factorAcc.set(v.factor, cell);
+   246→   246→      }
+   247→   247→
+   248→   248→      trades.push({
+   249→   249→        symbol,
+   250→   250→        openedAt: c.openTime,
+   251→   251→        direction: conf.direction,
+   252→   252→        score: conf.score,
+   253→   253→        strategy: conf.strategy,
+   254→   254→        confidence: conf.confidence,
+   255→   255→        outcome: sim.outcome,
+   256→   256→        grossPct: Number((sim.movePct * sim.lev).toFixed(2)),
+   257→   257→        netPct: Number(fb.netPct.toFixed(2)),
+   258→   258→        netUsd: Number(fb.netUsd.toFixed(3)),
+   259→   259→        heldMin: sim.heldMin,
+   260→   260→        votes: conf.votes.map((v) => ({ factor: v.factor, vote: v.vote })),
+   261→   261→      });
+   262→   262→
+   263→   263→      // 24h per-symbol cooldown from this candle (mirror engine behavior)
+   264→   264→      cooldowns.set(symbol, Math.max(cooldowns.get(symbol) ?? 0, c.openTime + 24 * 3600_000));
+   265→   265→    }
+   266→   266→  }
+   267→   267→
+   268→   268→  const n = trades.length;
+   269→   269→  const wins = trades.filter((t) => t.netPct > 0).length;
+   270→   270→  const losses = n - wins;
+   271→   271→  const winRate = n ? (wins / n) * 100 : 0;
+   272→   272→  const avgNetPct = n ? trades.reduce((a, t) => a + t.netPct, 0) / n : 0;
+   273→   273→  const expectancyR = n ? trades.reduce((a, t) => a + t.netPct / 100, 0) / n : 0;
+   274→   274→  const wilsonLB = wilsonLowerBound(wins, n);
+   275→   275→
+   276→   276→  const stratAcc = new Map<string, { n: number; wins: number; net: number }>();
+   277→   277→  for (const t of trades) {
+   278→   278→    const cell = stratAcc.get(t.strategy) ?? { n: 0, wins: 0, net: 0 };
+   279→   279→    cell.n++;
+   280→   280→    if (t.netPct > 0) cell.wins++;
+   281→   281→    cell.net += t.netPct;
+   282→   282→    stratAcc.set(t.strategy, cell);
+   283→   283→  }
+   284→   284→
+   285→   285→  const factorLessons = [...factorAcc.entries()]
+   286→   286→    .filter(([, c]) => c.n >= 5)
+   287→   287→    .map(([factor, c]) => ({ factor, n: c.n, winRate: Number(((c.wins / c.n) * 100).toFixed(1)) }))
+   288→   288→    .sort((a, b) => b.winRate - a.winRate);
+   289→   289→
+   290→   290→  const byStrategy = [...stratAcc.entries()].map(([strategy, c]) => ({ strategy, c0: c.n, c1: c.wins, c2: Number((c.net / c.n).toFixed(2)) })).sort((a, b) => b.c0 - a.c0).map(({ strategy, c0, c1, c2 }) => ({ strategy, n: c0, wins: c1, avgNetPct: c2 }));
+   291→   291→
+   292→   292→  const verdict =
+   293→   293→    n === 0
+   294→   294→      ? `NO QUALIFYING SETUPS in the replayed window — minScore ${minScore} too strict for this volatility regime`
+   295→   295→      : wilsonLB >= 45 && avgNetPct > 0
+   296→   296→        ? `LEARNED EDGE CONFIRMED — WR ${winRate.toFixed(0)}% (Wilson-LB ${wilsonLB.toFixed(0)}%) · expectancy ${avgNetPct.toFixed(2)}%/trade NET — live auto-deployment UNLOCKED by the learned gate`
+   297→   297→        : wilsonLB >= 40
+   298→   298→          ? `MARGINAL — WR ${winRate.toFixed(0)}% (LB ${wilsonLB.toFixed(0)}%), expectancy ${avgNetPct.toFixed(2)}%/trade — auto-deploy stays gated, keep observing`
+   299→   299→          : `NO LEARNED EDGE — WR ${winRate.toFixed(0)}% (LB ${wilsonLB.toFixed(0)}%), expectancy ${avgNetPct.toFixed(2)}%/trade NET — live auto-deployment stays SUPPRESSED until recalibration`;
+   300→   300→
+   301→   301→  const objective = objectiveOf({ n, wilsonLB, avgNetPct } as BacktestResult);
+   302→   302→
+   303→   303→  const result: BacktestResult = {
+   304→   304→    ranAt: new Date().toISOString(),
+   305→   305→    engine: "FLOWRADAR-NEO v5.1 BACKTEST & LEARNER",
+   306→   306→    label: opts.label ?? (persist ? "REPLAY" : "sweep"),
+   307→   307→    symbolsScanned: symbols,
+   308→   308→    candlesPerSymbol,
+   309→   309→    spanHours: Number(spanHours.toFixed(1)),
+   310→   310→    candidatesEvaluated,
+   311→   311→    n,
+   312→   312→    wins,
+   313→   313→    losses,
+   314→   314→    winRate: Number(winRate.toFixed(1)),
+   315→   315→    wilsonLB: Number(wilsonLB.toFixed(1)),
+   316→   316→    avgNetPct: Number(avgNetPct.toFixed(2)),
+   317→   317→    expectancyR: Number(expectancyR.toFixed(3)),
+   318→   318→    totalNetUsd: Number((equity - ACCOUNT_START_USD).toFixed(2)),
+   319→   319→    equityEnd: Number(equity.toFixed(2)),
+   320→   320→    byStrategy,
+   321→   321→    factorLessons,
+   322→   322→    equityCurve: equityCurve.slice(-64),
+   323→   323→    trades: persist ? trades.slice(-24).reverse() : [],
+   324→   324→    verdict,
+   325→   325→    calibration: { status: cal.status, settled: cal.settled, target: cal.target },
+   326→   326→    weightsUsed: weights ? Object.fromEntries(Object.entries(weights).map(([k, v]) => [k, Number(v.toFixed(3))])) : null,
+   327→   327→    minScoreAdj: opts.minScoreAdj ?? 0,
+   328→   328→    objective: Number(objective.toFixed(1)),
+   329→   329→  };
+   330→   330→
+   331→   331→  if (persist) {
+   332→   332→    await db.engineSetting.upsert({ where: { key: KEY_BT }, create: { key: KEY_BT, value: JSON.stringify(result) }, update: { value: JSON.stringify(result) } });
+   333→   333→    const runs = await getRuns();
+   334→   334→    runs.unshift({ ranAt: result.ranAt, label: result.label, n, winRate: result.winRate, wilsonLB: result.wilsonLB, avgNetPct: result.avgNetPct, equityEnd: result.equityEnd, objective: result.objective, adopted: null });
+   335→   335→    await db.engineSetting.upsert({ where: { key: KEY_RUNS }, create: { key: KEY_RUNS, value: JSON.stringify(runs.slice(0, 14)) }, update: { value: JSON.stringify(runs.slice(0, 14)) } });
+   336→   336→  }
+   337→   337→
+   338→   338→  console.log(`[backtest] v5.1 ${result.label} done in ${Date.now() - t0}ms — ${n} sim trades from ${candidatesEvaluated} candidates (step=${step}, minScore=${minScore}) · objective ${result.objective}`);
+   339→   339→  return result;
+   340→   340→}
+   341→   341→
+   342→   342→// ── AUTO-TUNE: coordinate sweep that can actually IMPROVE the engine ──
+   343→   343→const TUNED_FACTORS = ["EMA STACK", "MACD MOMENTUM", "RANGE BREAKOUT", "RSI POSITION"];
+   344→   344→const SWEEP_VALUES = [0.75, 0.9, 1.1, 1.25];
+   345→   345→const ADOPT_MARGIN = 3; // best must beat baseline objective by ≥3
+   346→   346→let autotuneInFlight = false;
+   347→   347→
+   348→   348→export function isAutotuneRunning(): boolean {
+   349→   349→  return autotuneInFlight;
+   350→   350→}
+   351→   351→
+   352→   352→export async function runAutotune(): Promise<{ baseline: BacktestResult; best: BacktestResult | null; adopted: boolean; trials: number; delta: number }> {
+   353→   353→  if (autotuneInFlight) throw new Error("auto-tune already running");
+   354→   354→  autotuneInFlight = true;
+   355→   355→  try {
+   356→   356→    // baseline on the full grid with current effective weights
+   357→   357→    const baseline = await runBacktest({ label: "AUTO-TUNE BASELINE", persist: true });
+   358→   358→    const baseWeights: FactorWeights = baseline.weightsUsed ?? {};
+   359→   359→    const baseObj = objectiveOf(baseline);
+   360→   360→
+   361→   361→    let best: BacktestResult | null = null;
+   362→   362→    let bestCombo: Record<string, number> | null = null;
+   363→   363→    let trials = 0;
+   364→   364→
+   365→   365→    for (const factor of TUNED_FACTORS) {
+   366→   366→      for (const val of SWEEP_VALUES) {
+   367→   367→        // skip combos that equal the untouched baseline weight (1.0 excluded by grid)
+   368→   368→        const combo: FactorWeights = { ...baseWeights, [factor]: val };
+   369→   369→        const res = await runBacktest({ label: `SWEEP ${factor}×${val}`, weights: combo, step: SWEEP_STEP, persist: false });
+   370→   370→        trials++;
+   371→   371→        if (!best || objectiveOf(res) > objectiveOf(best)) {
+   372→   372→          best = res;
+   373→   373→          bestCombo = combo;
+   374→   374→        }
+   375→   375→      }
+   376→   376→    }
+   377→   377→
+   378→   378→    const bestObj = best ? objectiveOf(best) : -999;
+   379→   379→    const delta = Number((bestObj - baseObj).toFixed(1));
+   380→   380→    const adopt = best !== null && bestObj >= baseObj + ADOPT_MARGIN && best.n >= baseline.n * 0.8;
+   381→   381→
+   382→   382→    let at = await getAutotune();
+   383→   383→    if (!at) {
+   384→   384→      at = { adoptedAt: null, adoptedWeights: null, baselineObjective: baseObj, bestObjective: bestObj, bestCombo: null, trials, adopted: false, lastRunAt: new Date().toISOString(), history: [] };
+   385→   385→    }
+   386→   386→    at.baselineObjective = Number(baseObj.toFixed(1));
+   387→   387→    at.bestObjective = Number(bestObj.toFixed(1));
+   388→   388→    at.bestCombo = adopt ? Object.fromEntries(Object.entries(bestCombo!).map(([k, v]) => [k, Number(v.toFixed(3))])) : at.bestCombo;
+   389→   389→    at.trials = trials;
+   390→   390→    at.adopted = adopt;
+   391→   391→    at.lastRunAt = new Date().toISOString();
+   392→   392→    if (adopt) at.adoptedAt = at.lastRunAt;
+   393→   393→    if (adopt && bestCombo) at.adoptedWeights = Object.fromEntries(Object.entries(bestCombo).map(([k, v]) => [k, Number(v.toFixed(3))]));
+   394→   394→    at.history.unshift({
+   395→   395→      at: at.lastRunAt,
+   396→   396→      adopted: adopt,
+   397→   397→      baseline: at.baselineObjective,
+   398→   398→      best: at.bestObjective,
+   399→   399→      delta,
+   400→   400→      summary: adopt
+   401→   401→        ? `ADOPTED — ${TUNED_FACTORS.filter((f) => at!.adoptedWeights?.[f] !== undefined && at!.adoptedWeights![f] !== baseWeights[f]).map((f) => `${f}×${at!.adoptedWeights![f]!.toFixed(2)}`).join(" ")} — objective ${baseObj.toFixed(1)}→${bestObj.toFixed(1)}`
+   402→   402→        : `NO ADOPTION — best sweep objective ${bestObj.toFixed(1)} < baseline ${baseObj.toFixed(1)} + ${ADOPT_MARGIN} margin; baseline stands`,
+   403→   403→    });
+   404→   404→    at.history = at.history.slice(0, 8);
+   405→   405→
+   406→   406→    await db.engineSetting.upsert({ where: { key: KEY_AT }, create: { key: KEY_AT, value: JSON.stringify(at) }, update: { value: JSON.stringify(at) } });
+   407→   407→
+   408→   408→    // mark the adopted flag on the newest runs rows
+   409→   409→    const runs = await getRuns();
+   410→   410→    if (runs[0]) runs[0].adopted = adopt;
+   411→   411→    await db.engineSetting.upsert({ where: { key: KEY_RUNS }, create: { key: KEY_RUNS, value: JSON.stringify(runs.slice(0, 14)) }, update: { value: JSON.stringify(runs.slice(0, 14)) } });
+   412→   412→
+   413→   413→    console.log(`[backtest:autotune] trials=${trials} baseline=${baseObj.toFixed(1)} best=${bestObj.toFixed(1)} adopted=${adopt}`);
+   414→   414→    return { baseline, best, adopted: adopt, trials, delta };
+   415→   415→  } finally {
+   416→   416→    autotuneInFlight = false;
+   417→   417→  }
+   418→   418→}
+   419→   419→
+   420→   420→export async function getAutotune(): Promise<AutoTuneState | null> {
+   421→   421→  try {
+   422→   422→    const row = await db.engineSetting.findUnique({ where: { key: KEY_AT } });
+   423→   423→    return row ? (JSON.parse(row.value) as AutoTuneState) : null;
+   424→   424→  } catch {
+   425→   425→    return null;
+   426→   426→  }
+   427→   427→}
+   428→   428→
+   429→   429→export async function getRuns(): Promise<BacktestRunRow[]> {
+   430→   430→  try {
+   431→   431→    const row = await db.engineSetting.findUnique({ where: { key: KEY_RUNS } });
+   432→   432→    return row ? (JSON.parse(row.value) as BacktestRunRow[]) : [];
+   433→   433→  } catch {
+   434→   434→    return [];
+   435→   435→  }
+   436→   436→}
+   437→   437→
+   438→   438→export async function getBacktestBundle(): Promise<BacktestBundle> {
+   439→   439→  const [result, runs, autotune] = await Promise.all([getBacktest(), getRuns(), getAutotune()]);
+   440→   440→  return { result, runs, autotune };
+   441→   441→}
+   442→   442→
+   443→   443→export async function getBacktest(): Promise<BacktestResult | null> {
+   444→   444→  try {
+   445→   445→    const row = await db.engineSetting.findUnique({ where: { key: KEY_BT } });
+   446→   446→    return row ? (JSON.parse(row.value) as BacktestResult) : null;
+   447→   447→  } catch {
+   448→   448→    return null;
+   449→   449→  }
+   450→   450→}
+   451→   451→
+   452→   452→// ── SCHEDULER: the learner re-runs itself so the mean never goes stale ──
+   453→   453→// v6.0 FULL AUTONOMY: the scheduler is ALWAYS ON — the pre-v6 manual
+   454→   454→// enable/disable toggle (`setLearnerAuto`) was removed with the operator
+   455→   455→// mandate «هیچ حالت دستی برای یادگیری و استقرار نباید باشه». Only the cadence
+   456→   456→// (intervalHours) is configurable, and the stored config can never disable it.
+   457→   457→const AUTO_KEY = "learner.auto";
+   458→   458→const KEY_BASELINE = "learner.baseline"; // v8.4.1 G2 — frozen-mode baseline replay clock
+   459→   459→let autoInFlight = false;
+   460→   460→let autoLastAt = 0;
+   461→   461→const AUTO_MIN_INTERVAL_MS = 60_000; // DB guard between checks
+   462→   462→
+   463→   463→export interface LearnerAutoState {
+   464→   464→  enabled: boolean;
+   465→   465→  intervalHours: number;
+   466→   466→  lastRunAt: string | null;
+   467→   467→  nextRunAt: string | null;
+   468→   468→  running: boolean;
+   469→   469→}
+   470→   470→
+   471→   471→async function getAutoCfg(): Promise<{ enabled: true; intervalHours: number }> {
+   472→   472→  try {
+   473→   473→    const row = await db.engineSetting.findUnique({ where: { key: AUTO_KEY } });
+   474→   474→    if (row) {
+   475→   475→      const v = JSON.parse(row.value) as { enabled: boolean; intervalHours: number };
+   476→   476→      // enabled is FORCED true — a stale persisted pause can never freeze learning
+   477→   477→      return { enabled: true, intervalHours: Math.min(24, Math.max(1, Number(v.intervalHours) || 6)) };
+   478→   478→    }
+   479→   479→  } catch {
+   480→   480→    /* defaults */
+   481→   481→  }
+   482→   482→  return { enabled: true, intervalHours: 6 };
+   483→   483→}
+   484→   484→
+   485→   485→export async function getLearnerAutoState(): Promise<LearnerAutoState> {
+   486→   486→  const cfg = await getAutoCfg();
+   487→   487→  const at = await getAutotune();
+   488→   488→  const last = at?.lastRunAt ?? null;
+   489→   489→  const next = last ? new Date(new Date(last).getTime() + cfg.intervalHours * 3600_000).toISOString() : null;
+   490→   490→  return { ...cfg, lastRunAt: last, nextRunAt: next, running: autoInFlight };
+   491→   491→}
+   492→   492→
+   493→   493→/** Called by the engine tick — throttled; fires a full baseline+autotune in the background. */
+   494→   494→export async function maybeAutoLearner(): Promise<void> {
+   495→   495→  if (autoInFlight) return;
+   496→   496→  if (Date.now() - autoLastAt < AUTO_MIN_INTERVAL_MS) return;
+   497→   497→  autoLastAt = Date.now();
+   498→   498→  const cfg = await getAutoCfg();
+   499→   499→  if (!cfg.enabled) return;
+   500→   500→  const at = await getAutotune();
+   501→   501→  if (at?.lastRunAt && Date.now() - new Date(at.lastRunAt).getTime() < cfg.intervalHours * 3600_000) return;
+   502→   502→
+   503→   503→  autoInFlight = true;
+   504→   504→  void (async () => {
+   505→   505→    try {
+   506→   506→      // v9.0 LIFECYCLE LEARNING (operator request 2026-09-12): TTL-extension,
+   507→   507→      // BE-trail and afterlife outcomes are now measured + persisted on every
+   508→   508→      // learner cadence — the evidence the governor/advisor read. Self-throttled
+   509→   509→      // inside the module (5h floor); failure never blocks the learner.
+   510→   510→      void import("./lifecycle-learning").then((m) => m.recordLifecycleLearning()).catch((e) => console.error("[lifecycle-learning]", e));
+   511→   511→
+   512→   512→      // v8.4 R6 + v8.4.1 G2 (operator mandate 2026-09-11): while the calibration
+   513→   513→      // freeze is ON, autotune ADOPTION stays pointless — getEffectiveWeights
+   514→   514→      // ignores adopted weights until the epoch-2 book reaches n≥100. BUT the
+   515→   515→      // baseline backtest REPLAY must keep running: learnedGateAllows() consumes
+   516→   516→      // it as the second gate-evidence path, and a stale replay froze that path
+   517→   517→      // shut too (the deadlock). Decoupled: frozen → baseline replay refreshes
+   518→   518→      // on its own 6h clock (KEY_BASELINE), sweep+adoption stay suspended.
+   519→   519→      const frozen = await db.engineSetting.findUnique({ where: { key: "calibration.frozen" } }).then((r) => (r ? (JSON.parse(r.value) as { frozen: boolean }).frozen : false)).catch(() => false);
+   520→   520→      if (frozen) {
+   521→   521→        const lastBase = await db.engineSetting.findUnique({ where: { key: KEY_BASELINE } }).then((r) => (r ? (JSON.parse(r.value) as { at: string }).at : null)).catch(() => null);
+   522→   522→        if (lastBase && Date.now() - new Date(lastBase).getTime() < cfg.intervalHours * 3600_000) return;
+   523→   523→        const baseline = await runBacktest({ label: "AUTO-BASELINE (FROZEN)", persist: true });
+   524→   524→        await db.engineSetting.upsert({ where: { key: KEY_BASELINE }, create: { key: KEY_BASELINE, value: JSON.stringify({ at: new Date().toISOString() }) }, update: { value: JSON.stringify({ at: new Date().toISOString() }) } });
+   525→   525→        await import("./engine").then((m) =>
+   526→   526→          m.fireEvent(null, null, "ENGINE", "info", `AUTO-LEARNER (frozen, R6/G2): baseline replay refreshed — ${baseline.n} sim trades, objective ${baseline.objective}, WR ${baseline.winRate}% (LB ${baseline.wilsonLB?.toFixed(0) ?? "--"}%) — sweep + weight adoption stay SUSPENDED until n≥100; gate evidence stays live.`),
+   527→   527→        );
+   528→   528→        return;
+   529→   529→      }
+   530→   530→      const { baseline, adopted, delta } = await runAutotune();
+   531→   531→      await import("./engine").then((m) =>
+   532→   532→        m.fireEvent(null, null, "ENGINE", "ai", `AUTO-LEARNER (6h cycle): replay ${baseline.n} sim trades — objective ${baseline.objective}; auto-tune ${adopted ? `ADOPTED improved weights (Δ+${delta})` : `kept baseline (best sweep Δ${delta >= 0 ? "+" : ""}${delta})`} — learned mean refreshed`),
+   533→   533→      );
+   534→   534→    } catch (err) {
+   535→   535→      console.error("[auto-learner]", err);
+   536→   536→    } finally {
+   537→   537→      autoInFlight = false;
+   538→   538→    }
+   539→   539→  })();
+   540→   540→}
+   541→   541→
+   542→   542→/** Learned gate: does past performance justify live auto-deployment?
+   543→   543→ * v8.4.1 G1 (operator mandate 2026-09-11 «اقدامات بعدی رو کامل و مهندسی انجام بده»):
+   544→   544→ * realized WR is now measured over the CURRENT ledger epoch (EPOCH-2 tags) with
+   545→   545→ * a ROLLING window of the last 30 settles. The old cumulative all-time book
+   546→   546→ * mixed pre-audit geometry (WR poison) into the gate and — combined with the
+   547→   547→ * R6 freeze skipping autotune sweeps — deadlocked auto-deployment forever
+   548→   548→ * (no deploys → WR can never rise → no deploys). The gate must judge the NEW
+   549→   549→ * engine on the NEW book; old rows roll OUT of the window as new ones land. */
+   550→   550→const LEARNED_GATE_WINDOW = 30;
+   551→   551→const SETTLED_IN = ["TP1", "TP2", "TP3", "SL", "EXPIRED", "CLOSED"] as const;
+   552→   552→
+   553→   553→export async function learnedGateAllows(): Promise<{ allowed: boolean; reason: string }> {
+   554→   554→  const bt = await getBacktest();
+   555→   555→  const rows = await db.signal.findMany({
+   556→   556→    where: { status: { in: [...SETTLED_IN] }, tags: { contains: "EPOCH-2" } },
+   557→   557→    orderBy: { createdAt: "desc" },
+   558→   558→    take: LEARNED_GATE_WINDOW,
+   559→   559→    select: { pnlPercent: true },
+   560→   560→  });
+   561→   561→  const settled = rows.length;
+   562→   562→  const wins = rows.filter((r) => r.pnlPercent > 0).length;
+   563→   563→  const realizedWr = settled >= 1 ? (wins / settled) * 100 : 0;
+   564→   564→  if (settled >= 8 && realizedWr >= 25)
+   565→   565→    return { allowed: true, reason: `realized WR ${realizedWr.toFixed(0)}% over ${settled} EPOCH-2 settles (rolling window ${LEARNED_GATE_WINDOW}) — above 25% floor` };
+   566→   566→  if (bt && bt.n >= 20 && bt.wilsonLB >= 45 && bt.avgNetPct > 0)
+   567→   567→    return { allowed: true, reason: `backtest learner: WR ${bt.winRate}% (Wilson-LB ${bt.wilsonLB}%, n=${bt.n}) — learned edge confirmed` };
+   568→   568→  if (settled < 8 && (!bt || bt.n < 20))
+   569→   569→    return { allowed: false, reason: `insufficient evidence — ${settled}/8 EPOCH-2 settles, ${bt?.n ?? 0}/20 backtest trades` };
+   570→   570→  return { allowed: false, reason: `learned performance below threshold — realized WR ${realizedWr.toFixed(0)}% (${settled} EPOCH-2 rolling), backtest LB ${bt?.wilsonLB.toFixed(0) ?? "--"}%` };
+   571→   571→}
+   572→   572→
+   573→   573→export type { FlowAssessment };
+   574→   574→

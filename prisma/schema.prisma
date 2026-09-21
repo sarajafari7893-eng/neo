@@ -1,9 +1,3 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
-// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -13,20 +7,253 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model User {
+// ─────────────────────────────────────────────────────────────
+// NEXUS//SIGNALS — AI Trading Signal Terminal
+// ─────────────────────────────────────────────────────────────
+
+model Signal {
+  id            String    @id @default(cuid())
+  symbol        String
+  direction     String // LONG | SHORT
+  entryPrice    Float
+  entryZoneLow  Float
+  entryZoneHigh Float
+  tp1           Float
+  tp2           Float
+  tp3           Float
+  stopLoss      Float
+  initialStopLoss Float? // v6.6: ORIGINAL stop at deploy — immutable risk anchor for forensics (settlement prices TP3 at the tp3 rung itself, so the math no longer depends on any stop move; legacy rows keep null)
+  leverage      Int
+  marginUsd     Float
+  confidence    Int // 0-100 AI confidence
+  riskReward    Float
+  timeframe     String // 5m | 15m | 1h | 4h
+  strategy      String // AI-SCALP | AI-SWING | BREAKOUT | MEAN-REVERT | MOMENTUM
+  status        String    @default("ACTIVE") // ACTIVE | TP1 | TP2 | TP3 | SL | EXPIRED | CLOSED
+  reachedTp     Int       @default(0) // highest TP level proven hit (0..3) — survives EXPIRED/SL, feeds TP-proven win accounting
+  pnlPercent    Float     @default(0)
+  maxPnlPercent Float     @default(0)
+  analysis      String
+  tags          String // comma separated
+  operatorNotes String    @default("") // operator journal — free-text trade notes
+  notesUpdatedAt DateTime? // last journal edit (drives "UPDATED x AGO")
+  engine        String    @default("NEXUS-LIVE v4.8")
+  serial        Int       @unique @default(0) // human identity NX-0001… (UNIQUE backstop for nextSerial race — v10.16 audit fix)
+  feeUsd        Float     @default(0) // realized taker commission (entry+exit)
+  swapUsd       Float     @default(0) // realized funding swap (pro-rated 8h)
+  factorsJson   String? // JSON FactorVote[] — indicator votes at deploy (audit)
+  flowJson      String? // JSON FlowAssessment — order-flow snapshot at deploy
+  mtfJson       String? // JSON MtfRollup — v8.0 multi-TF flow board at deploy (per-TF scores + netBias)
+  afterlife     String? // EXPIRED follow-up state: TRACKING | TP1_HIT | TP2_HIT | TP3_HIT | SL_HIT | FLAT
+  afterlifeAt   DateTime? // when the afterlife outcome was confirmed
+  maxPostPnlPercent Float @default(0) // best levered NET pnl AFTER expiry (post-expiry MFE)
+  ttlMinutes    Int
+  ttlExtensions Int       @default(0) // dynamic expiry gate — how many TTL extensions were granted (v6.1)
+  expiresAt     DateTime
+  createdAt     DateTime  @default(now())
+  closedAt      DateTime?
+  events        SignalEvent[]
+
+  @@index([status])
+  @@index([symbol])
+  @@index([createdAt])
+  @@index([expiresAt]) // v10.16 audit fix — expiry sweeps
+}
+
+// ── v6.6 AI ADVISOR LOOP (operator mandate 2026-09-07, Q3) ──
+// The engine core cannot create new policy on its own — the governor only tunes
+// existing numeric knobs. The advisor closes that gap: on a fixed cadence it
+// reads the realized ledger (strategies, regimes, TTL telemetry, guard trials),
+// derives EVIDENCE-GROUNDED proposals (existing knobs only, inside hard clamps),
+// and queues them here as PENDING. Execution happens ONLY after the operator
+// approves — via the AI CORE advisor panel or Telegram. Every decision is
+// audited: REJECTED proposals feed a cooldown so the same idea cannot nag.
+model AdvisorProposal {
+  id            String    @id @default(cuid())
+  createdAt     DateTime  @default(now())
+  cycle         Int // advisor cycle that produced this proposal
+  kind          String    @default("KNOB_ADJUST") // KNOB_ADJUST | REPORT (future)
+  knob          String // GateSettings key, e.g. "minScore"
+  currentValue  Float
+  proposedValue Float
+  direction     String // TIGHTEN | LOOSEN
+  rationale     String // one-line human-readable reason
+  evidence      String // JSON snapshot of the measured stats backing it
+  status        String    @default("PENDING") // PENDING | APPROVED | REJECTED | APPLIED | EXPIRED
+  decidedAt     DateTime?
+  appliedAt     DateTime?
+  applyNote     String? // gate line after apply (audit)
+
+  @@index([status, createdAt])
+  @@index([knob, createdAt])
+}
+
+model SignalEvent {
   id        String   @id @default(cuid())
-  email     String   @unique
-  name      String?
+  signalId  String?
+  signal    Signal?  @relation(fields: [signalId], references: [id], onDelete: SetNull)
+  type      String // CREATED | TP1 | TP2 | TP3 | SL | TTL_EXPIRED | CLOSED | ENGINE | SYSTEM
+  symbol    String?
+  message   String
+  level     String   @default("info") // info | success | warn | error | ai
   createdAt DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([signalId, createdAt]) // v10.16 audit fix — per-signal timeline + BE_TRAIL groupBy
+}
+
+// ── v10.5 ENGINE TERMINAL — resident-agent thought log ─────────────────────
+// Every sandbox agent (run-watch, pace-watch, bridge-watch, SUPERVISOR) can
+// append its structured reasoning here so the terminal carries not just what
+// happened (SignalEvent) but WHY the supervising layer judged it that way.
+model AgentThought {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  agent     String // SUPERVISOR | RUN-WATCH | PACE-WATCH | BRIDGE-WATCH | ENGINE
+  phase     String   @default("observe") // observe | diagnose | propose | decide | act
+  thought   String
+  evidence  String   @default("{}") // JSON payload backing the thought
+
+  @@index([createdAt])
+  @@index([agent, createdAt])
+}
+
+model MarketAsset {
+  id        String   @id @default(cuid())
+  symbol    String   @unique
+  name      String
+  price     Float
+  prevPrice Float
+  change24h Float
+  high24h   Float
+  low24h    Float
+  volume24h Float
+  sparkline String // JSON number[]
+  exchanges String? // JSON per-venue quotes {venue,price,latencyMs}[]
+  maxDevBps Float  @default(0) // worst cross-venue deviation (bps)
+  source    String @default("live") // live | sim
   updatedAt DateTime @updatedAt
 }
 
-model Post {
-  id        String   @id @default(cuid())
-  title     String
-  content   String?
-  published Boolean  @default(false)
-  authorId  String
-  createdAt DateTime @default(now())
+model EngineSetting {
+  key       String   @id
+  value     String // JSON or scalar string
   updatedAt DateTime @updatedAt
+}
+
+model PricePoint {
+  id        String   @id @default(cuid())
+  symbol    String
+  price     Float
+  createdAt DateTime @default(now())
+
+  @@index([symbol, createdAt])
+}
+
+// ── v8.0 MULTI-TF FLOW SCANNER (operator mandate 2026-09-08, EPOCH-2) ──
+// One upserted row per (symbol, tf) — no write-churn, no races. Holds the
+// scanner's per-timeframe read: CVD, trend, structure (BOS/CHoCH/sweep),
+// volume ignition — the measurable vector documented in
+// docs/RESEARCH-FLOW-DETECTION.md. The rollup (weights 4h .35 / 1h .30 /
+// 15m .20 / 5m .15) lives in EngineSetting "flowscan.board" + memory.
+model FlowScan {
+  id        String   @id @default(cuid())
+  symbol    String
+  tf        String // 5m | 15m | 1h | 4h
+  score     Int // −100..+100 along the TF's own read
+  bias      String // LONG | SHORT | NEUTRAL (score ±25)
+  cvdPct    Float? // net taker delta, % of volume, last 12 closed bars
+  trend     String // UP | DOWN | FLAT (EMA20 vs EMA50)
+  structure String // BOS_UP | BOS_DOWN | CHOH_UP | CHOH_DOWN | SWEEP_HIGH | SWEEP_LOW | RANGE
+  sweep     Boolean // last closed bar grabbed liquidity and rejected
+  volZ      Float? // last-bar volume z-score (ignition > 2)
+  atrPct    Float?
+  funding8h Float? // TF-agnostic derivatives context (shared with flow.ts)
+  oiDelta1h Float?
+  updatedAt DateTime @updatedAt
+
+  @@unique([symbol, tf])
+  @@index([updatedAt])
+}
+
+// ── VOL-CAUSE forensics (operator request 2026-09-07) ──
+// When a symbol ENTERS the MARKET MATRIX top-volatility board (top |Δ24h|),
+// we snapshot the measurable market state and attribute causes with transparent
+// rules. Events settle forward returns (2h/6h) and a learning loop aggregates
+// per-cause expectancy — the engine consumes it ONLY after the learned gate
+// passes (n ≥ 30 · positive aligned mean fwd6h), otherwise telemetry-only.
+model VolCauseEvent {
+  id           String    @id @default(cuid())
+  symbol       String
+  detectedAt   DateTime
+  rank         Int // rank in the top-|Δ24h| board at capture (1-based)
+  direction    String // UP | DOWN
+  change24h    Float
+  price        Float
+  // measured factor snapshot (null = instrument unavailable — honest)
+  oiDelta10m   Float?
+  oiDelta1h    Float?
+  oiValueUsd   Float?
+  cvdPct       Float?
+  takerRatio   Float?
+  crowdLS      Float?
+  funding8h    Float?
+  liqUsd1h     Float?
+  onsetScore   Int? // VOL-ONSET score at capture (null = no eruption)
+  hourUtc      Int
+  session      String // ASIA | EUROPE | US | WEEKEND
+  // attribution
+  causesJson   String // JSON Array<{cause: string, weight: number, note: string}>
+  primaryCause String
+  // forward returns — settled lazily after the horizon elapses
+  fwd2hPct     Float?
+  fwd6hPct     Float?
+  settledAt    DateTime?
+  createdAt    DateTime  @default(now())
+
+  @@index([symbol, detectedAt])
+  @@index([settledAt])
+}
+
+// ── v9.0 PUMP/DUMP RADAR (operator mandate 2026-09-12) ──
+// Independent intelligent engine that identifies and TRACKS pump/dump flows:
+// stage-1 velocity screen (in-memory, every tick) → stage-2 flow confirmation
+// (OI/CVD/taker/whale/liq evidence, throttled) → declared track with the
+// success criterion FIXED AT DECLARATION (honest — no post-hoc re-scoring).
+// LEARNING GATE (operator): the radar may NOT spawn signals until 5 tracks
+// resolved SUCCESS; after confirmation, deploys carry the dedicated PUMP/DUMP
+// card cohort tags. Every track is an auditable row — success is measured, not
+// asserted.
+model PumpTrack {
+  id           String    @id @default(cuid())
+  symbol       String
+  kind         String // PUMP | DUMP
+  phase        String    @default("ONSET") // ONSET | EXTENSION | EXHAUSTION | RESOLVED
+  outcome      String? // SUCCESS | FAILURE | EXPIRED (null while tracking)
+  // detection snapshot (levered-neutral, UNLEVERED %)
+  anchorPrice  Float // price at declaration — the reference for MFE/MAE
+  peakPrice    Float // best price in the track direction so far
+  vel1mPct     Float? // 1m velocity at detection
+  vel5mPct     Float? // 5m velocity at detection
+  volBurstX    Float? // quote-volume burst multiple vs own baseline
+  oiDelta10m   Float?
+  cvdUsd60s    Float?
+  takerRatio   Float?
+  funding8h    Float?
+  whaleUsd5m   Float?
+  liqUsd10m    Float?
+  score        Int // conviction 0..100 at declaration
+  metricsJson  String? // full stage-2 evidence snapshot (audit)
+  // tracking lifecycle
+  mfePct       Float     @default(0) // max favorable excursion from anchor (%)
+  maePct       Float     @default(0) // max adverse excursion (%)
+  detectedAt   DateTime  @default(now())
+  resolvedAt   DateTime?
+  successNote  String?
+  signalId     String? // signal spawned from this track (post-unlock deploys)
+
+  @@index([symbol, detectedAt])
+  @@index([outcome])
+  @@index([phase])
+  @@index([signalId]) // v10.16 audit fix — track→signal linkage
 }

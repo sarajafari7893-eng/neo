@@ -1,0 +1,15 @@
+const { Database } = require("bun:sqlite");
+const db = new Database("/home/z/my-project/db/custom.db", { readonly: true });
+const now = Date.now();
+console.log("=== total ===", JSON.stringify(db.prepare("SELECT COUNT(*) n FROM Signal").all()));
+console.log("=== last 10 signals ===");
+for (const r of db.prepare("SELECT serial, symbol, direction, status, confidence, substr(createdAt,1,16) c FROM Signal ORDER BY createdAt DESC LIMIT 10").all() as any[]) console.log(JSON.stringify(r));
+console.log("=== per day last 5d (UTC+3.5 Tehran approx) ===");
+for (const r of db.prepare(`SELECT date(createdAt,'+210 minutes') d, COUNT(*) n FROM Signal WHERE createdAt > datetime('now','-5 days') GROUP BY d ORDER BY d`).all() as any[]) console.log(JSON.stringify(r));
+console.log("=== SignalEvent types last 24h ===");
+for (const r of db.prepare("SELECT type, COUNT(*) n FROM SignalEvent WHERE createdAt > datetime('now','-1 day') GROUP BY type ORDER BY n DESC").all() as any[]) console.log(JSON.stringify(r));
+console.log("=== last 15 SignalEvents ===");
+for (const r of db.prepare("SELECT signalId, type, substr(message,1,90) m, substr(createdAt,1,16) c FROM SignalEvent ORDER BY createdAt DESC LIMIT 15").all() as any[]) console.log(JSON.stringify(r));
+console.log("=== guard-tagged signals (RETEST/RISK-CAP) ===");
+for (const r of db.prepare("SELECT serial, symbol, direction, status, substr(tags,1,60) t, substr(createdAt,1,16) c FROM Signal WHERE tags LIKE '%RETEST%' OR tags LIKE '%RISK-CAP%' ORDER BY createdAt DESC LIMIT 10").all() as any[]) console.log(JSON.stringify(r));
+db.close();

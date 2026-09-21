@@ -1,0 +1,190 @@
+{
+  "generatedAt": "2026-09-08T11:40:48.634Z",
+  "doctrine": "docs/RESEARCH-FLOW-DETECTION.md §3/§5/§6 (EPOCH-2, directive 4)",
+  "dataSource": "Binance Vision S3 MONTHLY spot kline archives (YM=2026-08, 12-col payload incl. taker_buy_volume) — WAF-free REAL data. Proxy note: fapi+spot REST were IP-banned 2026-09-08 (rate budget: live engine flow-warmup cadence + lab burst). 5m TF omitted → doctrine weights renormalized by wSum (Σ=0.85).",
+  "universe": [
+    "BTCUSDT",
+    "ETHUSDT",
+    "ZECUSDT",
+    "SOLUSDT",
+    "SOPHUSDT",
+    "XRPUSDT",
+    "DOGEUSDT",
+    "WLDUSDT",
+    "BNBUSDT",
+    "SUIUSDT",
+    "PUMPUSDT",
+    "UNIUSDT",
+    "LINKUSDT",
+    "ADAUSDT",
+    "AVAXUSDT",
+    "NEARUSDT",
+    "LTCUSDT",
+    "TRXUSDT",
+    "BIOUSDT",
+    "ENAUSDT"
+  ],
+  "symbolsUsed": 20,
+  "window": {
+    "bars15m": 2976,
+    "approxDays": 31,
+    "split": "2026-08-22T21:30:00.000Z",
+    "trainFrac": 0.7
+  },
+  "grid": {
+    "minScore": [
+      20,
+      25,
+      30,
+      35,
+      40,
+      45
+    ],
+    "alignMode": [
+      "ALL",
+      "ALIGN3",
+      "HTF-CONFIRM",
+      "HTF-DOM"
+    ],
+    "slAtrMult": [
+      1.2,
+      1.5,
+      2
+    ],
+    "rrScale": [
+      0.9,
+      1,
+      1.15
+    ],
+    "beTrail": [
+      0,
+      10
+    ]
+  },
+  "baseline": {
+    "cfg": {
+      "minScore": 35,
+      "alignMode": "ALL",
+      "slAtrMult": 1.5,
+      "rrScale": 1,
+      "beTrail": 10
+    },
+    "train": {
+      "n": 1153,
+      "wr": 24.4,
+      "wilsonLB": 22.4,
+      "expNetPct": -3.46,
+      "expUsd": -0.055,
+      "pf": 0.35,
+      "maxDD": 65.66,
+      "finalEquity": 36.41
+    },
+    "test": {
+      "n": 150,
+      "wr": 16,
+      "wilsonLB": 11.7,
+      "expNetPct": -5.09,
+      "expUsd": -0.084,
+      "pf": 0.25,
+      "maxDD": 12.6,
+      "finalEquity": 87.43
+    }
+  },
+  "best": {
+    "cfg": {
+      "minScore": 45,
+      "alignMode": "HTF-CONFIRM",
+      "slAtrMult": 1.2,
+      "rrScale": 1,
+      "beTrail": 0
+    },
+    "train": {
+      "n": 245,
+      "wr": 77.1,
+      "wilsonLB": 72.4,
+      "expNetPct": 5.33,
+      "expUsd": 0.19,
+      "pf": 2.33,
+      "maxDD": 6.67,
+      "finalEquity": 146.5
+    },
+    "test": {
+      "n": 33,
+      "wr": 54.5,
+      "wilsonLB": 40.5,
+      "expNetPct": -3.03,
+      "expUsd": -0.113,
+      "pf": 0.61,
+      "maxDD": 3.74,
+      "finalEquity": 96.26
+    },
+    "adoptionMarginVsBaseline": 50,
+    "adoptionOk": false
+  },
+  "verdict": "FAIL",
+  "family": {
+    "robustFamilies": [
+      "30|HTF-CONFIRM|1.2|0",
+      "30|HTF-CONFIRM|1.5|0",
+      "30|HTF-CONFIRM|2|0",
+      "35|HTF-CONFIRM|1.2|0",
+      "35|HTF-CONFIRM|2|0",
+      "40|ALL|1.2|0",
+      "40|ALIGN3|1.2|0",
+      "40|ALIGN3|1.5|0",
+      "45|ALIGN3|1.2|0"
+    ],
+    "chosen": {
+      "cfg": {
+        "minScore": 45,
+        "alignMode": "ALIGN3",
+        "slAtrMult": 1.2,
+        "rrScale": 1.15,
+        "beTrail": 0
+      },
+      "train": {
+        "n": 223,
+        "wr": 76.2,
+        "wilsonLB": 71.2,
+        "expNetPct": 6.05,
+        "expUsd": 0.223,
+        "pf": 2.78,
+        "maxDD": 4.04,
+        "finalEquity": 149.8
+      },
+      "test": {
+        "n": 24,
+        "wr": 79.2,
+        "wilsonLB": 63,
+        "expNetPct": 3.01,
+        "expUsd": 0.109,
+        "pf": 1.71,
+        "maxDD": 2.41,
+        "finalEquity": 102.61
+      }
+    },
+    "verdict": "CONDITIONAL-PASS",
+    "note": "family-level robustness (3/3 rrScale siblings train-positive with WLB plateau ≥60; ≥2 members pass the activation rule on the unseen TEST window) — the honest selection unit under 432-config multiple-comparison risk. Activation still requires the live shadow A/B re-verification (cohort tags) per doc §5."
+  },
+  "activationRule": "n≥20 · Wilson-LB ≥45% · NET expectancy > 0 · pf > 1 (TEST window) — doc §5.5",
+  "verification": {
+    "recomputedTest": {
+      "n": 34,
+      "wr": 50,
+      "wilsonLB": 36.4,
+      "expNetPct": -3.61,
+      "expUsd": -0.137,
+      "pf": 0.56,
+      "maxDD": 4.76,
+      "finalEquity": 95.33
+    },
+    "physicsBounds": {
+      "upperBoundOK": true,
+      "lowerBoundOK": true
+    },
+    "thresholdMonotone": true,
+    "noLookahead": "structural: closed bars only (tfIndexAtTime cutoff = t − tfMs; master decided at bar close)",
+    "intrabarOrdering": "conservative: SL evaluated before TP within each bar"
+  },
+  "elapsedSec": 8
+}

@@ -1,0 +1,19 @@
+{
+  "$note": "R18 factor candidates — reconstructed after sandbox rollback. Phase P0 items marked live are implemented in engine v4.8. Adopt-rule: OBSERVING (record-only) until n>=30 settled live signals AND Wilson-LB > 50%, then SCORED.",
+  "version": "v4.8-reconstructed",
+  "factors": [
+    { "id": "F01", "name": "taker_aggressor_ratio_cvd", "phase": "P0", "status": "live", "source": "futures/data/takerlongshortRatio + klines takerBuyBaseVolume", "score_band": "+-9", "notes": "CVD valuable as divergence-only; raw level weak" },
+    { "id": "F02", "name": "open_interest_delta_velocity", "phase": "P0", "status": "live", "source": "futures/data/openInterestHist 5m x13", "score_band": "+-7 (LPOC matrix)", "notes": "fastest confirmation axis" },
+    { "id": "F03", "name": "funding_directional_extreme", "phase": "P0", "status": "live", "source": "fapi/v1/premiumIndex lastFundingRate", "score_band": "+-5 contrarian", "notes": ">0.05%/8h crowded longs; <-0.05% squeeze fuel" },
+    { "id": "F04", "name": "retail_crowd_long_short", "phase": "P0", "status": "live", "source": "futures/data/globalLongShortAccountRatio", "score_band": "+-4 contrarian", "notes": "fade >2.2:1 / <0.5:1" },
+    { "id": "F05", "name": "real_liquidation_cascade", "phase": "P0", "status": "live", "source": "mini-services/liq-service !forceOrder@arr :3010", "score_band": "+-3 exhaustion", "notes": ">=400K/10m wrecking opposing side; stall watchdog honest" },
+    { "id": "F06", "name": "cross_exchange_dislocation", "phase": "P0", "status": "live", "source": "src/lib/multi-exchange.ts median sweep", "score_band": "event >=12bps", "notes": "terminal price = consensus median" },
+    { "id": "F07", "name": "oi_notional_flow_weighting", "phase": "P0", "status": "live", "source": "scoreFlow oiWeight = clamp(sqrt(OI$/50M), 0.5, 1.2)", "score_band": "multiplier", "notes": "deep-book flow trusted" },
+    { "id": "F08", "name": "replayed_history_backtest_learner", "phase": "P1", "status": "live", "source": "src/lib/backtest.ts + LEARNED GATE", "score_band": "gate", "notes": "Wilson-LB >=45% unlocks auto-deploy" },
+    { "id": "F09", "name": "smoothed_obi_anti_spoof", "phase": "P2", "status": "planned", "source": "fapi depth w/ EMA smoothing + cancel-flash guard", "score_band": "+-6", "notes": "never score single snapshot" },
+    { "id": "F10", "name": "cvd_price_divergence", "phase": "P2", "status": "planned", "source": "klines takerBuyVolume series vs price slope", "score_band": "+-6 divergence-only", "notes": "fires only on divergence" },
+    { "id": "F11", "name": "vpin_toxic_flow_suppressor", "phase": "P2", "status": "planned", "source": "bucketed volume probability of informed trading", "score_band": "veto-only", "notes": "suppressor, never directional" },
+    { "id": "F12", "name": "flow_history_persistence", "phase": "P2", "status": "planned", "source": "DB ring table (survives restarts)", "score_band": "infra", "notes": "replaces in-memory history ring" }
+  ],
+  "adopt_rule": { "min_settled": 30, "min_wilson_lb": 0.5, "calibration_active_at": 30, "weight_formula": "clamp(0.5 + winRate, 0.75, 1.25)" }
+}
