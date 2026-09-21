@@ -29078,3 +29078,20 @@ Stage Summary:
 - The false-narrative sentinel bug is re-fixed at the source (live-first). Arms: 69/120 reachable.
 - Resilience rails shipped today: env-guard + daily-scheduler + sentinel v1.1.1 + CHANGELOG-human + week-0 research scaffolding — all fail-soft, hot-path untouched, changelog-recorded per operator rule #3.
 - OPEN ITEMS for operator: (1) confirm Z.ai billing rules to parameterize credit-budget.json; (2) approve the v10.17/Task-7 code rebuild package (top priority next); (3) re-provide the passphrase file for the off-site channel decrypt path if desired (local ring no longer needs it for env recovery).
+
+---
+Task ID: ADVISORY-20260924-matrix-radar
+Agent: Z.ai Code (lead)
+Task: Operator proposal «اجرای کل سیستم فقط بر پایه MARKET MATRIX و PUMP/DUMP RADAR» — engineering opinion (advisory only, READ-ONLY run, zero mutations).
+
+Work Log:
+- Ground-truth mapping: MARKET MATRIX = MarketMovers.tsx view (top-|Δ24h| over MarketAsset) — a VIEW, not an engine; PUMP/DUMP RADAR = pump-dump.ts (692 lines, 522 PumpTrack rows, 37 tracks/24h) — detector journal whose deployments ride the SAME deploySignal path as all strategies.
+- Weight audit (ps): total RSS 2,913MB — next-server 2,368MB (dev-mode), postcss 327MB, ALL 5 bun mini-services combined ≈163MB. Conclusion: strategy-lib removal cannot materially lighten the system; dev-server dominates.
+- Ledger forensics (bun:sqlite STRICT readonly): 7d settled = 190 SL / 13 TP3 / 155 EXPIRED → headline WR ≈3.6%. Investigation of SL anatomy found avgMaxFav +27% (levered) on losers → degenerate births discovered: 200 lifetime SL rows with entryPrice == stopLoss EXACTLY (129 settled inside recent 7d; 110 stamped FLOWRADAR-NEO v10.6 legacy + restore catch-up artifact; 11 from current v10.16 — deploy path engine.ts:1642 stopLoss=entry*(1∓slDistPct) can degenerate when slDistPct→0). Plus 31 recent SL rows carrying POSITIVE pnl (settlement labeling defect, e.g. ONEUSDT SL +73.61%).
+- CLEAN-cohort recompute (excluding degenerate SL births), 7d: pump 37 settled / WR 10.8% / avg −13.82% vs other 37 / WR 24.3% / avg +8.66% → pump cohort WEAKER even on clean data. Consistent with 2026-09-21 audit (pump ≈ book baseline ~30% on older window; recent window regime-broken by restore catch-up).
+- Spawn liveness: 0 ACTIVE signals explained — GOVERNOR-HYSTERESIS active (min_score 35, set_rr_scale 0.8, set_regime_guard 2, cycle #1298) gating spawns, not engine death. Radar alive (37 tracks/24h).
+- Delivered opinion: proposal REJECTED as big-bang (MARKET MATRIX is already the shared data plane; radar-as-sole-source contradicted by clean ledger; layer amputation removes the diagnostic instruments needed for the SL anomaly; R1-R6 doctrine + 3× platform-erasure history forbid destructive rewrites) but ADOPTED as phased product consolidation: Phase-0 fix ledger defects (slDistPct floor guard + settlement relabel + RESTORE_CATCHUP tagging) → Phase-1 demote peripheral sensors to dormant (true "lighter") → Phase-2 make MATRIX+RADAR the product spine, radar as primary source WITH gates (remove pump authorityBypass) → Phase-3 archive non-core strategies to research/ behind auditor gate. Decision requested from operator (A phased / B hard cut / C diagnose-first).
+
+Stage Summary:
+- No code or data changed (advisory run). Decision-grade evidence: contaminated ledger (200 degenerate entry==SL rows, 31 misclassified SLs), pump cohort underperformance on clean data (10.8% vs 24.3% WR 7d), weight concentrated in next-server (2.37GB) not strategy libs.
+- NEW P1 findings filed for next work package: (1) deploy-path slDistPct floor guard (engine.ts:1642), (2) settlement label integrity (SL rows with positive pnl), (3) legacy catch-up rows need RESTORE_CATCHUP annotation to keep analytics honest.
