@@ -469,7 +469,7 @@ export default function ShadowVetoCard() {
                   <span className={tel.wiring.llm.ok ? "text-neon" : "text-amber-neon"} title={tel.wiring.llm.detail}>
                     {tel.wiring.llm.ok ? "✓" : "~"} LLM
                   </span>
-                  <span className="tabular-nums text-ink-3" title={`${tel.wiring.pipeline.unlinkedPassStale} stale unlinked PASS verdicts · ${tel.wiring.pipeline.pendingRealOutcomes} awaiting closure · ${tel.wiring.pipeline.verdicts24h} verdicts/24h · ${tel.wiring.pipeline.pendingPapers} papers open`}>
+                  <span className="tabular-nums text-ink-3" title={`${tel.wiring.pipeline.unlinkedPassStale} ACTIVE link leak(s) (swept orphans ${tel.wiring.pipeline.unlinkedPassOrphan} · aged out ${tel.wiring.pipeline.unlinkedPassAged}) · ${tel.wiring.pipeline.pendingRealOutcomes} awaiting closure · ${tel.wiring.pipeline.verdicts24h} verdicts/24h · ${tel.wiring.pipeline.pendingPapers} papers open`}>
                     leak {tel.wiring.pipeline.unlinkedPassStale} · closing {tel.wiring.pipeline.pendingRealOutcomes} · v24h {tel.wiring.pipeline.verdicts24h}
                   </span>
                   {tel.alerts.length > 0 && (

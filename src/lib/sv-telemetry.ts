@@ -222,10 +222,11 @@ function evaluateAlerts(prev: SvTelemetrySnapshot | null, next: SvTelemetrySnaps
         push(`arm-idle:${a.id}`, "info", `SHADOW-VETO arm idle — ${a.id} never fed, yet ${next.wiring.pipeline.verdicts24h} verdicts in 24h. Feed is wired; qualifying records (fence events) just have not occurred.`);
       }
     }
-    // REAL-arm link leak — stale unlinked PASS verdicts grew vs previous capture
+    // REAL-arm link leak — v10.19: ACTIVE leaks only (stale unlinked, not swept
+    // orphan, within reach). Orphans/aged are structural, promotion-inert.
     const prevStale = prev?.wiring.pipeline.unlinkedPassStale ?? 0;
     if (next.wiring.pipeline.unlinkedPassStale > prevStale) {
-      push("link-leak", "warn", `SHADOW-VETO REAL-arm feed leak — ${next.wiring.pipeline.unlinkedPassStale} PASS verdicts older than 24h never linked to a real trade (was ${prevStale}). Evidence leaking past retro-link window.`);
+      push("link-leak", "warn", `SHADOW-VETO REAL-arm ACTIVE link leak — ${next.wiring.pipeline.unlinkedPassStale} unlinked PASS verdict(s) within link reach (was ${prevStale}). Evidence may be under-linked; retro-link sweep + orphan stamping (v10.19) keep this count honest.`);
     }
     // closure backlog — linked verdicts waiting for the settlement sweep
     if (next.wiring.pipeline.pendingRealOutcomes > 5) {
@@ -287,8 +288,8 @@ export async function captureSvTelemetry(force = false): Promise<SvTelemetrySnap
         realLink: {
           ok: pipeline.unlinkedPassStale === 0,
           detail: pipeline.unlinkedPassStale === 0
-            ? `link integrity OK — ${pipeline.unlinkedPass24h} recent PASS verdict(s) within retro-link reach, 0 stale leaks`
-            : `${pipeline.unlinkedPassStale} stale unlinked PASS verdict(s) — REAL-arm evidence leaking past the 24h retro-link window`,
+            ? `link integrity OK — ${pipeline.unlinkedPass24h} recent within reach · ${pipeline.unlinkedPassOrphan} swept orphan(s) · ${pipeline.unlinkedPassAged} aged out (v10.19)`
+            : `${pipeline.unlinkedPassStale} ACTIVE link leak(s) — stale unlinked PASS verdict(s) with reachable deploys (orphans swept: ${pipeline.unlinkedPassOrphan} · aged out: ${pipeline.unlinkedPassAged})`,
         },
         outcomeClosure: {
           ok: pipeline.pendingRealOutcomes <= 5,
@@ -367,9 +368,9 @@ function emptyShell(): SvTelemetrySnapshot {
       outcomeClosure: { ok: true, detail: "" },
       paperSweep: { ok: true, detail: "" },
       llm: { ok: true, cooling: false, consecutive429: 0, detail: "" },
-      pipeline: { unlinkedPass24h: 0, unlinkedPassStale: 0, pendingRealOutcomes: 0, pendingPapers: 0, lastVerdictAt: 0, lastPaperOpenAt: 0, verdicts24h: 0, papers24h: 0 },
+      pipeline: { unlinkedPass24h: 0, unlinkedPassStale: 0, unlinkedPassOrphan: 0, unlinkedPassAged: 0, pendingRealOutcomes: 0, pendingPapers: 0, lastVerdictAt: 0, lastPaperOpenAt: 0, verdicts24h: 0, papers24h: 0 },
     },
-    promotion: { ready: false, criteria: [], revocation: { pressure: false, detail: "" } },
+    promotion: { ready: false, criteria: [], revocation: { pressure: false, detail: "" }, sequential: { state: "CONTINUE" as const, z: null, boundary: null, infoFrac: null, alphaSpent: null, dPct: null, minNMet: false, detail: "", checkedAt: 0 } },
     health: { verdicts: 0, papers: 0, fileKB: 0, pending: 0, callsLastHour: 0, auditViolations: 0, hydratedAt: 0 },
     store: { file: TEL_FILE, fileKB: 0, historySamples: 0, lastCaptureAt: 0, writes: 0 },
     alerts: [],

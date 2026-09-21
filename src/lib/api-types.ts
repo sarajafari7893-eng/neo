@@ -807,6 +807,8 @@ export interface SvTelemetryDTO {
     pipeline: {
       unlinkedPass24h: number;
       unlinkedPassStale: number;
+      unlinkedPassOrphan: number; // v10.19 — swept structural orphans (promotion-inert)
+      unlinkedPassAged: number; // v10.19 — beyond the 7-day link reach, never linkable again
       pendingRealOutcomes: number;
       pendingPapers: number;
       lastVerdictAt: number;

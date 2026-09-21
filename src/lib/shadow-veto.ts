@@ -23,6 +23,22 @@
 // writes for records (memory rings + .data/shadow-veto.jsonl); only the
 // rarely-written config persists in EngineSetting (verdictcore.state pattern).
 // Fail-open everywhere: this module must never throw into the deploy path.
+//
+// v10.19 FULL ACTIVATION (operator mandate 2026-09-24 «Shadow veto را کامل فعال کن»):
+//   (1) LINK-DELTA REBUILD (lost v10.17, restored): hydration now MERGES
+//       duplicate verdict records — the JSONL re-persists a verdict when its
+//       state upgrades (serial bind / outcome closure / orphan sweep), but the
+//       old first-record-wins hydration silently reverted linked verdicts to
+//       unlinked on every restart (the real-veto 17→12 regression).
+//   (2) ORPHAN SWEEP: the retro-link sweep now stamps verdicts whose fence
+//       window closed with NO bindable deploy as swept orphans (sweptAt).
+//       Forensic 2026-09-24: 84% of the stale backlog was structural orphan
+//       (candidate adjudicated, deploy refused downstream) — counting them as
+//       leaks DEADLOCKED the v10.16 promotion gate forever. The gate now
+//       counts ACTIVE leaks only.
+//   (3) mode=veto activated by OPERATOR MANDATE (audited force — arms were
+//       27/30 + 12/30, evidence not yet full; veto stays fail-open, MODEL-
+//       verdict-only, revocable, paper-tracked).
 
 import { appendFile, mkdir, open, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { seqStopEvaluate, type SeqStopResult } from "./seq-stop"; // v10.11 SEQ-STOP (operator APPROVE 2026-09-17)
@@ -88,6 +104,7 @@ export interface ShadowVerdict {
   outcome: ShadowOutcome | null; // settled real outcome
   epoch?: string; // v10.7 ARM-EPOCH — regime stamp; legacy (un-stamped) records stay audit-only
   origin?: "capture" | "fence"; // v10.16 PROVENANCE (audit 4-f) — "capture" = RAW-CAL capture-observe adjudication (observe-only instrumentation, NEVER fence evidence); "fence" = normal gate-fence adjudication. Legacy records predate the stamp and are identified by their [CAPTURE-OBSERVE] reason suffix (see isCaptureOrigin).
+  sweptAt?: number; // v10.19 ORPHAN SWEEP — timestamp the retro-link sweep confirmed this verdict's fence window closed with NO bindable deploy (structural orphan: candidate adjudicated, deploy refused downstream by max-open/spacing/governor/risk gates). Swept orphans are honest non-evidence, promotion-inert — NOT active leaks.
 }
 
 export interface PaperTrade {
@@ -179,7 +196,22 @@ function maxIdSeq(list: Array<{ id: string }>): number {
 
 function ingestVerdict(v: ShadowVerdict): boolean {
   if (!v || typeof v.id !== "string") return false;
-  if (seenIds.has(v.id)) return false;
+  // v10.19 LINK-DELTA REBUILD (restored lost v10.17): the JSONL re-persists a
+  // verdict whenever its state UPGRADES (linkRealDeploy binds the serial, the
+  // outcome sweep closes it, the orphan sweep stamps it). First-record-wins
+  // hydration silently DROPPED those upgrades — every restart reverted linked-
+  // but-unsettled verdicts back to unlinked (the real-veto 17→12 regression
+  // after the 2026-09-21 restarts). Duplicate ids now MERGE their upgrade
+  // fields into the already-ingested record, order-independent.
+  if (seenIds.has(v.id)) {
+    const ex = verdicts.find((x) => x.id === v.id);
+    if (ex) {
+      if (ex.serial === null && v.serial !== null) ex.serial = v.serial;
+      if (!ex.outcome && v.outcome) ex.outcome = v.outcome;
+      if (ex.sweptAt === undefined && v.sweptAt !== undefined) ex.sweptAt = v.sweptAt;
+    }
+    return false;
+  }
   v.audit = v.audit ?? null; // normalize legacy records
   // collapse cross-instance duplicate adjudications of the same candidate —
   // scan backwards to the candidate's latest record; inside the window = dupe
@@ -831,15 +863,24 @@ export async function retroLinkRealDeploys(): Promise<number> {
       take: 400,
     });
     let bound = 0;
+    // v10.19 ORPHAN SWEEP — coverage bounds of the fetch (take-400 desc): when
+    // the query returns its FULL take, the oldest fetched row bounds coverage;
+    // otherwise the query reaches sinceMs. A verdict is only stampable as an
+    // orphan when its ENTIRE ±90min fence window lies inside covered ground —
+    // absence is then PROOF no deploy ever existed, not a fetch artifact.
+    const coverageLower = sigs.length === 400 && sigs.length > 0 ? sigs[sigs.length - 1]!.createdAt.getTime() : sinceMs;
+    let swept = 0;
     for (const v of unlinked) {
+      let anyInWindow = false; // v10.19 — a matching deploy exists (even if claimed)
       let best: { serial: number; dt: number } | null = null;
       for (const s of sigs) {
-        if (taken.has(s.serial!)) continue;
         if (s.symbol !== v.symbol || s.direction !== v.direction) continue;
         const dt = v.at - s.createdAt.getTime(); // <0 = verdict pre-warmed the deploy, >0 = fence batch after it
         // v10.16 — match window widened 15min→90min (both sides) so edge-born
         // verdicts and the >24h stale backlog can bind their own trades.
         if (dt < -90 * 60_000 || dt > 90 * 60_000) continue;
+        anyInWindow = true;
+        if (taken.has(s.serial!)) continue;
         if (!best || Math.abs(dt) < Math.abs(best.dt)) best = { serial: s.serial!, dt };
       }
       if (best) {
@@ -847,8 +888,18 @@ export async function retroLinkRealDeploys(): Promise<number> {
         taken.add(best.serial);
         void persist({ k: "v", v });
         bound++;
+      } else if (
+        v.sweptAt === undefined &&
+        v.at + 90 * 60_000 < Date.now() && // fence window fully closed — a late deploy can no longer arrive
+        v.at - 90 * 60_000 >= coverageLower && // window fully inside the query reach
+        !anyInWindow // no same-symbol|direction deploy existed at all → structural orphan, promotion-inert
+      ) {
+        v.sweptAt = Date.now();
+        void persist({ k: "v", v });
+        swept++;
       }
     }
+    if (swept > 0) console.log(`[shadow-veto] retro-link: bound=${bound} swept-orphans=${swept}`);
     return bound;
   } catch {
     return 0; // evidence plumbing must never throw into the tick
@@ -1345,16 +1396,18 @@ export async function maybeAutoPromote(): Promise<{ promoted: boolean; detail: s
   await syncCohortFreeze(); // v10.11 — freeze decision-grade evidence before judging; read frozen when present
   const ev = promotionEvidence(shadowArms());
   if (!ev.ready) return { promoted: false, detail: `evidence not ready (${ev.criteria.map((c) => `${c.id}:${c.ok ? "✓" : "✗"}`).join(" ")})` };
-  // ── v10.16 PROMOTION BACKLOG GATE (audit 4-f) — evidence-ready is not enough
-  // while the REAL-arm feed is leaking: unlinkedPassStale counts PASS verdicts
-  // older than 24h that never bound to a real trade (the same number the
-  // sv-telemetry "link-leak" alert reports). A large backlog means the evidence
-  // window may be systematically under-linked — promotion must wait until the
-  // retro-link sweep drains it. Block >10, audited via the existing fireEvent
-  // pattern (rate-limited — the block can persist for hours).
+  // ── v10.16 PROMOTION BACKLOG GATE (audit 4-f) → v10.19 ACTIVE-LEAK SCOPING —
+  // evidence-ready is not enough while the REAL-arm feed is under-linked.
+  // v10.19: unlinkedPassStale counts ACTIVE leaks only (stale unlinked, not
+  // swept-orphan, within link reach). Structural orphans (fence candidates
+  // whose deploy was refused downstream — 84% of the historic backlog per the
+  // 2026-09-24 forensic) and aged-out verdicts are promotion-inert; counting
+  // them deadlocked this gate permanently (201 “stale” → never clearable).
+  // Block >10 ACTIVE leaks, audited via the existing fireEvent pattern
+  // (rate-limited — the block can persist for hours).
   const backlog = shadowPipelineDiag().unlinkedPassStale;
   if (backlog > 10) {
-    const blockDetail = `SHADOW-VETO AUTO-PROMOTION BLOCKED (v10.16 backlog gate) — REAL-arm feed leak: ${backlog} PASS verdict(s) older than 24h never linked (> 10). Evidence could be reading an under-linked cohort; promotion deferred until retro-link drains the backlog.`;
+    const blockDetail = `SHADOW-VETO AUTO-PROMOTION BLOCKED (v10.19 backlog gate) — REAL-arm ACTIVE feed leak: ${backlog} unlinked PASS verdict(s) within link reach (> 10). Evidence could be reading an under-linked cohort; promotion deferred until retro-link drains the backlog.`;
     if (Date.now() - lastBacklogBlockLogAt > 30 * 60_000) {
       lastBacklogBlockLogAt = Date.now();
       await import("@/lib/engine")
@@ -1550,7 +1603,9 @@ function agoShort(ms: number): string {
  * backlog visibility the telemetry hub reports on every capture. */
 export interface ShadowPipelineDiag {
   unlinkedPass24h: number; // PASS verdicts still serial=null within retro-link reach
-  unlinkedPassStale: number; // PASS verdicts older than 24h, never linked — permanent leak
+  unlinkedPassStale: number; // v10.19 ACTIVE LEAKS ONLY — stale unlinked PASS verdicts, not swept as orphans, still within the 7-day link reach (the promotion backlog gate + sv-telemetry alert read THIS)
+  unlinkedPassOrphan: number; // v10.19 — swept: fence window closed with no bindable deploy; structural non-evidence, promotion-inert
+  unlinkedPassAged: number; // v10.19 — stale unlinked, unswept, but OLDER than the 7-day link reach; can never link again (historic residue, counted separately)
   pendingRealOutcomes: number; // linked but not yet settled
   pendingPapers: number; // paper positions awaiting sweep
   lastVerdictAt: number;
@@ -1562,10 +1617,18 @@ export interface ShadowPipelineDiag {
 export function shadowPipelineDiag(): ShadowPipelineDiag {
   const now = Date.now();
   const d24 = now - 24 * 3600_000;
+  const REACH_MS = 7 * 24 * 3600_000 + 90 * 60_000; // retro-link query reach (7d bound + 90min pre-warm margin)
   const unlinked = verdicts.filter((v) => v.side === "PASS" && v.serial === null);
   return {
     unlinkedPass24h: unlinked.filter((v) => now - v.at <= 24 * 3600_000).length,
-    unlinkedPassStale: unlinked.filter((v) => now - v.at > 24 * 3600_000).length,
+    // v10.19 — ACTIVE leak = stale, unlinked, NOT swept-orphan, still within
+    // link reach. Structural orphans and aged-out verdicts are counted
+    // separately so the promotion backlog gate measures UNDER-LINKING (fixable
+    // evidence loss), not the inherent orphan rate of fence adjudication
+    // (2026-09-24 forensic: 235 orphans vs 44 true leaks in the stale backlog).
+    unlinkedPassStale: unlinked.filter((v) => now - v.at > 24 * 3600_000 && v.sweptAt === undefined && now - v.at <= REACH_MS).length,
+    unlinkedPassOrphan: unlinked.filter((v) => v.sweptAt !== undefined).length,
+    unlinkedPassAged: unlinked.filter((v) => now - v.at > 24 * 3600_000 && v.sweptAt === undefined && now - v.at > REACH_MS).length,
     pendingRealOutcomes: verdicts.filter((v) => v.serial !== null && v.outcome === null).length,
     pendingPapers: papers.filter((p) => !p.outcome).length,
     lastVerdictAt: verdicts.reduce((a, v) => Math.max(a, v.at), 0),
