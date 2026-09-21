@@ -20,7 +20,12 @@ export const dynamic = "force-dynamic";
  *                               health (per-sample scores, R6 gate verdict,
  *                               warnings) so the R6 calibration rests on
  *                               healthy data.
- * POST /api/rawcal            → { action: "arm" | "disarm", reason?: string }
+ * POST /api/rawcal            → { action: "arm" | "disarm", reason?: string,
+ *                               by?: string } — v10.20: `by` (≤220 chars)
+ *                               carries the audited attribution narrative for
+ *                               programmatic re-arms (E-20260921 EVID-BUDGET
+ *                               pattern); it is stamped into armedBy and the
+ *                               audited ENGINE event + Telegram card.
  *                               Arm: unfiltered signal issuance for data
  *                               capture only (spacing + open-cap rails).
  *                               Disarm: return to filtered operation under
@@ -47,9 +52,11 @@ export async function GET() {
 
 export async function POST(req: Request) {
   try {
-    const body = (await req.json().catch(() => ({}))) as { action?: string; reason?: string };
+    const body = (await req.json().catch(() => ({}))) as { action?: string; reason?: string; by?: string };
     if (body.action === "arm") {
-      const state = await armRawCal("OPERATOR (dashboard/API)");
+      // v10.20 — audited attribution: programmatic re-arms (EVID-BUDGET pattern)
+      // carry their mandate narrative in `by`; dashboard/API default unchanged.
+      const state = await armRawCal(body.by?.trim().slice(0, 220) || "OPERATOR (dashboard/API)");
       return NextResponse.json({ ok: true, state }, { headers: { "Cache-Control": "no-store" } });
     }
     if (body.action === "disarm") {

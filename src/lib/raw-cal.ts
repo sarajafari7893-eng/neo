@@ -31,6 +31,7 @@
 
 import { db } from "./db";
 import { recordRawcalSnapshot } from "./rawcal-telemetry"; // v9.2 pace monitor (no cycle: telemetry imports raw-cal only dynamically)
+import { touchRawcalHeartbeat } from "./rawcal-heartbeat"; // v10.20 engine-native run heartbeat (sentinel-compatible)
 
 export const RAWCAL_KEY = "rawcal.state";
 export const RAWCAL_TARGET = 100; // the R6 calibration-lift bar (calibration.ts)
@@ -54,6 +55,7 @@ export interface RawCalState {
   spacingMin: number;
   maxOpen: number;
   autoLiftAt: string | null; // set when the mode auto-canceled itself
+  retargetNote?: string; // v10.6.1+ — EVID-BUDGET re-arm narrative (E-20260919 pattern); extra JSON field, survives state spread
 }
 
 const DEFAULT_STATE: RawCalState = {
@@ -130,6 +132,7 @@ export async function armRawCal(by = "OPERATOR"): Promise<RawCalState> {
     autoLiftAt: null,
   };
   await writeState(state);
+  touchRawcalHeartbeat(`ARMED by ${by.slice(0, 70)}`); // v10.20 — transition write (throttle bypassed on state change)
   const settledN = await epoch2SettledCount();
   const { fireEvent } = await import("./engine");
   await fireEvent(
@@ -159,6 +162,7 @@ export async function disarmRawCal(reason: string, auto = false): Promise<RawCal
     ...(auto ? { autoLiftAt: new Date().toISOString() } : {}),
   };
   await writeState(state);
+  touchRawcalHeartbeat(`IDLE ${auto ? "AUTO-LIFT" : "disarmed"} — ${reason.slice(0, 60)}`); // v10.20 — transition write
   const { fireEvent } = await import("./engine");
   await fireEvent(
     null,
@@ -184,6 +188,13 @@ export async function disarmRawCal(reason: string, auto = false): Promise<RawCal
  */
 export async function maybeRawCalDeploy(): Promise<{ issued: boolean; serial?: number; note?: string }> {
   const state = await getRawCalState();
+  // v10.20 — engine-native run heartbeat: the tick proves the run loop is ALIVE
+  // every 10 ticks (idle/armed steady-state throttled to 1 line / 30min inside).
+  touchRawcalHeartbeat(
+    state.armed
+      ? `ARMED issued=${state.issued}/${state.issuedTotal} target=${state.target}`
+      : `IDLE disarmed by policy (target ${state.target})`,
+  );
   if (!state.armed) {
     noteRawCalBlock("not armed");
     return { issued: false, note: "not armed" };
@@ -245,6 +256,7 @@ export async function maybeRawCalDeploy(): Promise<{ issued: boolean; serial?: n
     lastIssueSerial: res.signal.serial,
   };
   await writeState(next);
+  touchRawcalHeartbeat(`ISSUE NX-${String(res.signal.serial).padStart(4, "0")} raw open ${openRaw + 1}/${state.maxOpen}`); // v10.20 — always written (state change)
   void recordRawcalSnapshot(`ISSUE NX-${String(res.signal.serial).padStart(4, "0")}`, true).catch(() => undefined); // v9.2 — instant book-curve reaction
   const { fireEvent } = await import("./engine");
   const milestone = next.issued % 5 === 0 || settledN + 1 >= state.target;
