@@ -29139,3 +29139,19 @@ Work Log:
 Stage Summary:
 - SHADOW-VETO is now FULLY ACTIVE (v10.19): AI veto authority live at the deploy gate under explicit operator mandate, evidence loop un-deadlocked (promotion gate reads honest active-leak count), restart link-loss bug class eliminated, telemetry/UI/sentinel all reporting veto with live numbers.
 - Watch items: first real VETO block will open the first paper-veto row (revocation monitor becomes live); real arms keep filling via fence+observe; autoPromote stays armed (no-op while veto; honest gate if operator ever demotes).
+---
+Task ID: SENTINEL-20260921-M4
+Agent: NEXUS-SENTINEL (Z.ai Code)
+Task: «چرا سیگنالی صادر نمی‌شود؟ دلیل خشکسالی چیست؟» — Mission M4 intelligence-integrity diagnosis of the signal drought.
+
+Work Log:
+- Read shadow-veto-latest.json (mode=veto, 600 adjudications, veto 153/25.5%, gateAgreement 74), /api/rawcal (armed=false, disarmReason "target reached — 576 EPOCH-2 settled ≥ 576" at 2026-09-19T08:32Z, settledN 632, issueRate3h 0, cadenceGrade OFF), rawcal-run-heartbeat.txt (stale since 2026-09-19T11:33Z).
+- SQLite readonly: 28 spawns/24h, 8/6h, last spawn 118min ago, ACTIVE=0 now, byStatus SL 307 / EXPIRED 301 / TP3 31, eventsLast1h 1175, createdEvents24h 28.
+- Radar alive: 45 PumpTracks/24h (21/6h), last detection 6min ago, 4 open. Flow sweeps every ~3min ("deployments are flow-gated (CVD/OI/funding/crowd)").
+- Confirmed policy root cause: src/config/engine-flags.json legacyAutoSpawn=false + radarPrimary=true (v10.18 operator option A — quality>quantity doctrine, engine.ts:2285); v10.19 mode=veto adds AI veto at deploy gate (fail-open, audited).
+- dev.log: "[calibration] R6 lift BLOCKED by rawcal quality gate — status AMBER, informative 43.4% (need GREEN or ≥50%) — weights stay frozen (v10.16)" → learning gates cannot honestly loosen yet.
+- No code or data mutated (observer mandate). Worklog-only append.
+
+Stage Summary:
+- Drought is BY DESIGN, not a failure: v10.18 retired random auto-spawn → only radar nominations passing the full gate stack (conviction ≥78 + learning gate + flow gate + spacing + radar max-open 2 + DEGEN-STOP guard) or trigger-bus events spawn; v10.19 veto fence additionally vetoes ~25%. Current spawn rate ~1.2/h with fast resolutions → 0 active windows read as "drought" on the dashboard.
+- Honest levers (operator decisions): (1) radar-probation evidence ≥30 v10.18 settles → relax conviction/max-open on PASS; (2) re-arm RAWCAL EVID-BUDGET to push informative ≥50% → unfreeze R6 calibration; (3) quality-neutral: review EXPIRED dominance (301) for TTL sizing; (4) cosmetic: idle heartbeat for RAWCAL run loop when disarmed.
