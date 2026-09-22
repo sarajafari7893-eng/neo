@@ -470,8 +470,13 @@ function logLine(lvl: "info" | "warn" | "crit", ev: string, det: Record<string, 
 }
 
 // ── control gate (P0-1 contract — same as p0-watchdog) ───────────────────────
-const CONTROL_KEY = process.env.NEXUS_CONTROL_KEY ?? envFromDotenv("NEXUS_CONTROL_KEY") ?? "";
+// v1.x (task 17, 2026-09-22 canary incident): key resolution moved INSIDE
+// controlOk — the boot-once const froze pre-restore values whenever this
+// service booted before env-guard restored a rotated .env (stale-env class,
+// same root cause as the bridge-relay BRIDGE(HTTP 401)). envFromDotenv() already
+// re-reads per call, so the gate now self-heals after any .env restore.
 function controlOk(req: Request): boolean {
+  const CONTROL_KEY = process.env.NEXUS_CONTROL_KEY ?? envFromDotenv("NEXUS_CONTROL_KEY") ?? "";
   if (!CONTROL_KEY) return false; // fail-closed
   const provided = req.headers.get("x-nexus-key") ?? "";
   if (provided.length !== CONTROL_KEY.length) return false;

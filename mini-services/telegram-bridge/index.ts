@@ -1,4 +1,14 @@
-// ── NEXUS-LIVE TELEGRAM BRIDGE RELAY v1.2 — operator round 2026-09-11
+// ── NEXUS-LIVE TELEGRAM BRIDGE RELAY v1.2.1 — operator round 2026-09-11
+// v1.2.1 (task 17, 2026-09-22 canary incident): STALE-ENV CLASS FIX. The relay
+//   boots ~4s BEFORE env-guard restores an erased/rotated .env, so the
+//   boot-once CONTROL_KEY/TOKEN froze pre-restore values → fail-closed 401 on
+//   every gated route (UI-CANARY went AMBER "BRIDGE(HTTP 401)"; the watchdog
+//   could never see it because /health is open). TOKEN + CONTROL_KEY are now
+//   resolved LAZILY per use: process.env first, then .env re-read only when
+//   its mtime changed (mtime-cached — zero steady-state cost). After any
+//   env-guard restore or key rotation the relay self-heals on the next
+//   request, no restart needed. Fail-closed semantics unchanged; key value is
+//   never echoed/logged.
 // v1.2 (task 4-b · audit P0-1): control gate — `x-nexus-key` header (matching
 //   NEXUS_CONTROL_KEY from env/.env) is now REQUIRED on POST /send, POST /read
 //   and GET /inbox (privacy-sensitive). GET /health stays open (probes).
@@ -36,7 +46,7 @@ const APP_STATE = path.join(ROOT, "db", "bridge", "state.json");
 const PORT = 3005;
 fs.mkdirSync(STATE, { recursive: true });
 
-// ── env bootstrap ──
+// ── env bootstrap (boot seed; v1.2.1 makes resolution lazy below) ──
 if (!process.env.TELEGRAM_BOT_TOKEN) {
   try {
     for (const line of fs.readFileSync(path.join(ROOT, ".env"), "utf8").split("\n")) {
@@ -45,21 +55,40 @@ if (!process.env.TELEGRAM_BOT_TOKEN) {
     }
   } catch { /* no .env — stay dormant */ }
 }
-const TOKEN = process.env.TELEGRAM_BOT_TOKEN ?? "";
-const BOT_ID = TOKEN ? TOKEN.split(":")[0] : "";
+
+// ── lazy env resolution (v1.2.1 stale-env fix) ──
+// process.env wins (env-guard heals the spawner's children when present);
+// .env is re-read only when its mtime changed, so a boot that raced an
+// env-guard restore picks up the restored file on the very next use.
+const ENV_PATH = path.join(ROOT, ".env");
+let dotenvCache: { mtimeMs: number; values: Map<string, string> } | null = null;
+function dotenvValues(): Map<string, string> {
+  try {
+    const st = fs.statSync(ENV_PATH);
+    if (!dotenvCache || dotenvCache.mtimeMs !== st.mtimeMs) {
+      const values = new Map<string, string>();
+      for (const line of fs.readFileSync(ENV_PATH, "utf8").split("\n")) {
+        const m = line.match(/^([A-Z_]+)=(.*)$/);
+        if (m && m[1] && m[2]) values.set(m[1], m[2].trim());
+      }
+      dotenvCache = { mtimeMs: st.mtimeMs, values };
+    }
+  } catch { dotenvCache = null; /* erased mid-restore → fail-closed */ }
+  return dotenvCache ? dotenvCache.values : new Map();
+}
+function envGet(key: string): string {
+  const v = process.env[key];
+  if (v && v.length > 0) return v;
+  return dotenvValues().get(key) ?? "";
+}
+const TOKEN = (): string => envGet("TELEGRAM_BOT_TOKEN");
+const BOT_ID = (): string => (TOKEN() ? TOKEN().split(":")[0]! : "");
 
 // ── control gate (task 4-b · audit P0-1) ──
-// Parse NEXUS_CONTROL_KEY the same way the bot token is resolved above
-// (process.env first, then /home/z/my-project/.env). Fail-closed: if the key
+// NEXUS_CONTROL_KEY resolved lazily (see above). Fail-closed: if the key
 // cannot be resolved, every gated route returns 401.
-function controlKeyFromDotenv(): string {
-  try {
-    const m = fs.readFileSync(path.join(ROOT, ".env"), "utf8").match(/^NEXUS_CONTROL_KEY=(.*)$/m);
-    return m ? m[1]!.trim().replace(/^["']|["']$/g, "") : "";
-  } catch { return ""; }
-}
-const CONTROL_KEY = process.env.NEXUS_CONTROL_KEY || controlKeyFromDotenv();
 function controlOk(req: Request): boolean {
+  const CONTROL_KEY = envGet("NEXUS_CONTROL_KEY");
   if (!CONTROL_KEY) return false; // fail-closed
   const provided = req.headers.get("x-nexus-key") ?? "";
   if (provided.length !== CONTROL_KEY.length) return false;
@@ -82,8 +111,9 @@ function resolveChat(): void {
     fromDb = row?.value ?? "";
     db.close();
   } catch { /* db busy → skip */ }
+  const botId = BOT_ID();
   const saved = readJson<{ chatId: string }>(chatStatePath, { chatId: "" }).chatId;
-  chatId = (fromDb && fromDb !== BOT_ID ? fromDb : "") || (saved && saved !== BOT_ID ? saved : "");
+  chatId = (fromDb && fromDb !== botId ? fromDb : "") || (saved && saved !== botId ? saved : "");
   if (chatId) fs.writeFileSync(chatStatePath, JSON.stringify({ chatId }));
 }
 
@@ -123,12 +153,13 @@ function mirrorInbox(limit: number, unreadOnly: boolean): { messages: MirrorMsg[
 
 // ── telegram send ──
 async function sendToChat(text: string): Promise<{ ok: boolean; error?: string; message_id?: number }> {
-  if (!TOKEN) return { ok: false, error: "TELEGRAM_BOT_TOKEN unset — bridge dormant" };
+  const token = TOKEN();
+  if (!token) return { ok: false, error: "TELEGRAM_BOT_TOKEN unset — bridge dormant" };
   if (!chatId) return { ok: false, error: "chat unresolved — operator must message the bot once" };
   try {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), 15_000);
-    const res = await fetch(`https://api.telegram.org/bot${TOKEN}/sendMessage`, {
+    const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ chat_id: chatId, text: text.slice(0, 4000), parse_mode: "HTML", link_preview_options: { is_disabled: true } }),
@@ -163,7 +194,7 @@ Bun.serve({
       const app = readJson<AppBridgeState>(APP_STATE, {});
       const { unread, total } = mirrorInbox(1, false);
       return json({
-        ok: true, service: "telegram-bridge-relay", armed: Boolean(TOKEN),
+        ok: true, service: "telegram-bridge-relay", armed: Boolean(TOKEN()),
         chatId: chatId ? `${chatId.slice(0, 3)}***${chatId.slice(-2)}` : null,
         chatResolved: Boolean(chatId),
         appBridge: { lastPollAt: app.lastPollAt ?? null, lastIngestAt: app.lastIngestAt ?? null, autoReply: app.autoReply ?? null, errors: app.errors ?? 0 },
@@ -204,4 +235,4 @@ Bun.serve({
   },
 });
 
-console.log(`[RELAY] telegram-bridge-relay v1.2 on :${PORT} — armed=${Boolean(TOKEN)} chat=${chatId ? "resolved" : "pending"} control-gate=${CONTROL_KEY ? "on" : "FAIL-CLOSED"} (polling delegated to app bridge)`);
+console.log(`[RELAY] telegram-bridge-relay v1.2.1 on :${PORT} — armed=${Boolean(TOKEN())} chat=${chatId ? "resolved" : "pending"} control-gate=${envGet("NEXUS_CONTROL_KEY") ? "on (lazy-self-heal)" : "FAIL-CLOSED"} (polling delegated to app bridge)`);

@@ -29184,3 +29184,19 @@ Work Log:
 
 Stage Summary:
 - ناظر مستقر است: تا 01:55Z هر ۱۰ دقیقه وضعیت صدور را می‌خواند؛ اولین ISSUE → گزارش موفقیت تلگرامی و خروج؛ خشکسالی کامل → هشدار تلگرامی بررسی-اسکنر. Verdict نهایی همیشه در .data/rawcal-watchdog-last.json قابل خواندن است. هیچ ردیف دامنه‌ی معاملاتی نوشته نمی‌شود (فقط فایل‌های خودش).
+
+---
+Task ID: 17 (SENIOR-REVIEW REPORT EXECUTION — «گزارش ارسالی مهندس ارشد به تلگرام را بررسی کن و مهندسی اجرا کن»)
+Agent: Z.ai Code (lead)
+Task: بررسی گزارش شبانه‌ی SENIOR-REVIEW (R6) ارسال‌شده به تلگرام در 2026-09-22T21:54:46Z (tg.ok=true) و اجرای مهندسی یافته‌ی قابل‌اجراهای آن.
+
+Work Log:
+- RECONSTRUCTION: گزارش مهندس ارشد از EngineSetting «seniorreview.state» (گزارش کامل + tg.ok=true) بازسازی شد: LEDGER (settled 644 · last-20 +$0.04 · SHORT 30d 241/−$9.19 @ −1.34٪/trade) · RAW-CAL (1 open · 4 settled/24h) · RISK GOVERNOR (HEAVY-DEFENSIVE ×0.5 streak 200) · TIME GOVERNOR (est uplift $6.85) · UI-CANARY (AMBER — BRIDGE(HTTP 401)) · PROPOSALS (صفر — guards/cooldowns).
+- ROOT-CAUSE (تنها یافته‌ی قابل‌اجرا = canary AMBER): کلاس stale-env. تایم‌لاین: رله‌ی تلگرام :3005 در 21:54:37 بوت شد؛ env-guard در 21:54:41 .env پاک‌شده‌ی sandbox را از snapshot ring بازیابی کرد (dev.log: «RESTORED .env from nexus-snapshot-20260922-131758.zip — 5/5 keys»). رله‌ی NEXUS_CONTROL_KEY/TOKEN را فقط یک‌بار در بوت می‌خواند → کلید خالیِ قبل از restore منجمد → fail-closed 401 ابدی روی همه‌ی مسیرهای gated → canary probe GET /api/bridge/inbox همیشه 401 (route فقط status را pass-through می‌کند). واچ‌داگ‌ها کور ماندند چون /health باز و همیشه 200 است (armed:false در /health خودِ شاهد بود). p0-watchdog (1340) بعد از restore بوت شده بود و سالم ماند؛ sentinel/trade/price-ws/liq همگی قبل از restore بوت شدند (فقط sentinel gated route دارد).
+- FIX (بدون ری‌استارت، bun --hot): (a) mini-services/telegram-bridge/index.ts → v1.2.1: خواندن TOKEN + NEXUS_CONTROL_KEY حالا lazy و mtime-cached است (process.env اول؛ .env فقط وقتی mtime عوض شد دوباره خوانده می‌شود؛ فایل پاک‌شده → fail-closed مثل قبل) — بعد از هر restore/چرخش کلید، رله روی اولین درخواست خودش شفا می‌یابد؛ (b) mini-services/sentinel-service/index.ts → resolution به داخل controlOk منتقل شد (envFromDotenv همان سرویس از قبل per-call می‌خواند) — همان کلاس، همان اصلاح. fail-closed و constant-time compare دست‌نخورده.
+- VERIFICATION: رله /health → armed:true (قبلاً false)؛ /inbox با کلید 200، بدون کلید 401 (fail-closed سالم)؛ مسیر دقیق canary GET /api/bridge/inbox → 200؛ چرخه‌ی رسمی POST /api/governors {module:"ui-canary",mode:"SHADOW"} → verdict **AMBER → GREEN** — «all 5 surfaces ok, max latency 229ms» (BRIDGE 11ms) با رویداد audited ENGINE/success «UI-CANARY verdict AMBER → GREEN» در فید؛ گزارش تحویل به تلگرام از خودِ رله‌ی شفا‌یافته ارسال شد (msg 5328, ok=true) که مسیر send را هم end-to-end اثبات می‌کند؛ lint: 17 error + 1 warning همگی pre-existing در scripts/ — صفر در فایل‌های لمس‌شده.
+- OTHER REPORT ITEMS (بررسی‌شده، اقدام نکردن = تصمیم مهندسی): SHORT book −1.34٪/trade — آستانه‌ی draft-B سنیور-ریویو (−1.5٪) فعال نشد و SHORT-SIZE ×0.80 + SHORT-GUARD از قبل فعال‌اند؛ RISK GOVERNOR — leveredRiskCap همین حالا در باند شواهد 15 است (draft-D غیرفعال)؛ TIME GOVERNOR — مشورتی، تغییر ساعت‌بندی فقط از مسیر پیشنهاد/مجوز؛ PROPOSALS صفر — رفتار درست. هیچ knobی بدون پیشنهادِ ثبت‌شده تغییر نکرد (دکترین advisor-channel حفظ شد).
+
+Stage Summary:
+- گزارش شبانه مهندس ارشد بررسی و بسته شد: تنها نقص واقعی آن (BRIDGE 401) ریشه‌یابی، رفع و کلاسِ خطایش (بوتِ سرویس‌ها قبل از restore محیط + خواندن یک‌باره‌ی کلید) برای همیشه بسته شد — رله و sentinel حالا self-heal هستند. UI-CANARY به GREEN بازگشت (رویداد audited). سایر بندها با استناد به داده و دکترین صرفاً watch-item ماندند. بازگشت‌پذیری: تغییرات فقط در دو mini-service و کامنت‌های نسخه — هیچ ردیف دامنه‌ای بازنویسی نشد.
+- Watch: بوت بعدی sandbox باید بدون دخالت انسانی GREEN برسد (self-heal test واقعی)؛ SHORT book در اجراهای بعدی سنیور-ریویو (اگر ≤ −1.5٪ شد، خودش پیشنهاد draft-B را می‌سازد).
