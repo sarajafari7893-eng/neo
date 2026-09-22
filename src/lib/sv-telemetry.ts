@@ -95,6 +95,7 @@ export interface SvTelemetrySnapshot {
     gateAgreement: number;
     paperOpen: number;
     paperSettled: number;
+    recent24h: { n: number; modelSharePct: number | null; lastModelAgeH: number | null; lastVerdictAgeH: number | null };
   };
   arms: SvArmTelemetry[];
   wiring: {
@@ -360,7 +361,7 @@ function emptyShell(): SvTelemetrySnapshot {
     captureMs: 0,
     mode: "shadow",
     config: {} as ShadowVetoConfig,
-    stats: { total: 0, passSide: 0, rejectSide: 0, vetoCount: 0, tradeCount: 0, modelSharePct: null, modelGroundedPct: null, avgConfidence: null, gateAgreement: 0, paperOpen: 0, paperSettled: 0 },
+    stats: { total: 0, passSide: 0, rejectSide: 0, vetoCount: 0, tradeCount: 0, modelSharePct: null, modelGroundedPct: null, avgConfidence: null, gateAgreement: 0, paperOpen: 0, paperSettled: 0, recent24h: { n: 0, modelSharePct: null, lastModelAgeH: null, lastVerdictAgeH: null } },
     arms: [],
     wiring: {
       adjudicator: { ok: true, detail: "" },

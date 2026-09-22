@@ -273,13 +273,18 @@ export default function ShadowVetoCard() {
           </div>
 
           {/* stats strip */}
-          <div className="grid grid-cols-4 gap-2 sm:grid-cols-7">
+          <div className="grid grid-cols-4 gap-2 sm:grid-cols-8">
             {[
               { label: "ADJUDICATED", value: String(stats?.total ?? 0), cls: "text-ink" },
               { label: "HAIR-PASS", value: String(stats?.passSide ?? 0), cls: "text-neon" },
               { label: "FENCE-REJ", value: String(stats?.rejectSide ?? 0), cls: "text-amber-neon" },
               { label: "VETO VOICES", value: String(stats?.vetoCount ?? 0), cls: "text-magenta-neon" },
               { label: "MODEL SHARE", value: stats?.modelSharePct !== null && stats?.modelSharePct !== undefined ? `${stats.modelSharePct}%` : "—", cls: "text-cyan-neon" },
+              {
+                label: "MODEL 24H",
+                value: stats?.recent24h ? (stats.recent24h.modelSharePct !== null ? `${stats.recent24h.modelSharePct}%` : "—") : "—",
+                cls: stats?.recent24h?.modelSharePct !== null && stats?.recent24h?.modelSharePct !== undefined && stats.recent24h.modelSharePct < 50 ? "text-amber-neon" : "text-neon",
+              },
               { label: "GROUNDED", value: stats?.modelGroundedPct !== null && stats?.modelGroundedPct !== undefined ? `${stats.modelGroundedPct}%` : "—", cls: stats?.modelGroundedPct !== null && stats?.modelGroundedPct !== undefined && stats.modelGroundedPct < 100 ? "text-amber-neon" : "text-neon" },
               { label: "GATE AGREE", value: stats && stats.rejectSide ? `${Math.round((stats.gateAgreement / stats.rejectSide) * 100)}%` : "—", cls: "text-ink" },
             ].map((c) => (

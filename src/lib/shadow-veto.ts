@@ -1436,7 +1436,7 @@ export interface ShadowVetoHealth {
 export async function getShadowVetoState(): Promise<{
   armEpoch: string; // v10.7 tag, v10.10 — arms are rolling-30; epoch is a regime tag, not the evidence window
   config: ShadowVetoConfig;
-  stats: { total: number; passSide: number; rejectSide: number; vetoCount: number; tradeCount: number; modelSharePct: number | null; modelGroundedPct: number | null; avgConfidence: number | null; gateAgreement: number; paperOpen: number; paperSettled: number };
+  stats: { total: number; passSide: number; rejectSide: number; vetoCount: number; tradeCount: number; modelSharePct: number | null; modelGroundedPct: number | null; avgConfidence: number | null; gateAgreement: number; paperOpen: number; paperSettled: number; recent24h: { n: number; modelSharePct: number | null; lastModelAgeH: number | null; lastVerdictAgeH: number | null } };
   arms: ArmRow[];
   armsLive: ArmRow[]; // v10.11 — unfrozen live recompute (monitoring-only while a COHORT-FREEZE exists)
   cohortFreeze: CohortFreeze | null; // v10.11 — decision-grade snapshot pointer
@@ -1470,6 +1470,14 @@ export async function getShadowVetoState(): Promise<{
     : arms;
   const now = Date.now();
   while (callStamps.length && now - callStamps[0]! > 3600_000) callStamps.shift();
+  // v10.21.2 RECENCY TRUTH (operator finding: window-aggregated MODEL SHARE masked
+  // the 401 outage — 78% share over a week-old ring while every fresh call was
+  // heuristic). The dashboard shows both: window share + last-24h share + link age.
+  const dayAgo = now - 86_400_000;
+  const w24 = verdicts.filter((v) => v.at >= dayAgo);
+  const w24Model = w24.filter((v) => v.label === "MODEL").length;
+  const lastModelAt = verdicts.reduce((a, v) => (v.label === "MODEL" && v.at > a ? v.at : a), 0);
+  const lastVerdictAt = verdicts.reduce((a, v) => (v.at > a ? v.at : a), 0);
   return {
     armEpoch: ARM_EPOCH,
     config: cfg,
@@ -1485,6 +1493,12 @@ export async function getShadowVetoState(): Promise<{
       gateAgreement,
       paperOpen: papers.filter((p) => !p.outcome).length,
       paperSettled: papers.filter((p) => p.outcome).length,
+      recent24h: {
+        n: w24.length,
+        modelSharePct: w24.length ? Number(((w24Model / w24.length) * 100).toFixed(1)) : null,
+        lastModelAgeH: lastModelAt ? Number(((now - lastModelAt) / 3_600_000).toFixed(1)) : null,
+        lastVerdictAgeH: lastVerdictAt ? Number(((now - lastVerdictAt) / 3_600_000).toFixed(1)) : null,
+      },
     },
     arms,
     armsLive,

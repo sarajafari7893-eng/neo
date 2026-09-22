@@ -732,6 +732,7 @@ export interface ShadowVetoDTO {
     gateAgreement: number;
     paperOpen: number;
     paperSettled: number;
+    recent24h: { n: number; modelSharePct: number | null; lastModelAgeH: number | null; lastVerdictAgeH: number | null }; // v10.21.2 — recency truth next to the window aggregate
   };
   arms: ShadowArmDTO[];
   armsLive?: ShadowArmDTO[]; // v10.11 COHORT-FREEZE — unfrozen live recompute (monitoring-only)

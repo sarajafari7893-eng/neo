@@ -29200,3 +29200,20 @@ Work Log:
 Stage Summary:
 - گزارش شبانه مهندس ارشد بررسی و بسته شد: تنها نقص واقعی آن (BRIDGE 401) ریشه‌یابی، رفع و کلاسِ خطایش (بوتِ سرویس‌ها قبل از restore محیط + خواندن یک‌باره‌ی کلید) برای همیشه بسته شد — رله و sentinel حالا self-heal هستند. UI-CANARY به GREEN بازگشت (رویداد audited). سایر بندها با استناد به داده و دکترین صرفاً watch-item ماندند. بازگشت‌پذیری: تغییرات فقط در دو mini-service و کامنت‌های نسخه — هیچ ردیف دامنه‌ای بازنویسی نشد.
 - Watch: بوت بعدی sandbox باید بدون دخالت انسانی GREEN برسد (self-heal test واقعی)؛ SHORT book در اجراهای بعدی سنیور-ریویو (اگر ≤ −1.5٪ شد، خودش پیشنهاد draft-B را می‌سازد).
+
+---
+Task ID: 18 (OPERATOR 4-QUESTION DIAGNOSIS — «چرا داده‌ها از دست می‌رود؟ analytics اشتباه؟ بازوهای veto پر نمی‌شوند؟ سنتینل نادیده گرفته می‌شود؟»)
+Agent: Z.ai Code (lead)
+Task: تحقیق ریشه‌ای چهار شکایت عملیات + رفع مهندسی موارد قابل‌اجرا.
+
+Work Log:
+- Q1 DATA-LOSS (سه کلاس متفاوت، هیچ حذف بی‌سراندازی وجود ندارد): (الف) SignalEvents نگه‌داری 30d + سقف 80k با آرشیو JSONL اجباری قبل از prune (engine.ts pruneEvents → .data/signal-events-archive.jsonl)؛ (ب) PricePoints پنجره 48h — تلمتری طراحی‌شده؛ (ج) پاک‌سازی sandbox (.env — ترمیم env-guard) + فریز VM 13:16→21:54Z = عدم ثبت، نه حذف. Signal rows هرگز delete نمی‌شوند (646 و رو به رشد).
+- Q2 ANALYTICS-WRONG (ریشه واقعی یافت شد): پلتفرم /etc/.z-ai-config را دوره‌ای rotate می‌کند + پاک‌سازی sandbox → موج 401 «missing X-Token» در llmRing (29 auth-fail؛ خوشه‌های 13:19، 14:55، 21:55Z) → همه‌ی کانال‌های AI در پنجره‌ها به heuristic سقوط می‌کنند (سقوط honest-labeled است). کارت SHADOW VETO «MODEL SHARE 78%» میانگین پنجره‌ی ~1هفته‌ای 600-tایی بود و وقفه را پنهان می‌کرد (سهم واقعی 24h فقط ~30-42%). FIX (v10.21.2 RECENCY TRUTH): stats.recent24h {n, modelSharePct, lastModelAgeH, lastVerdictAgeH} در shadow-veto.ts + mirror types (api-types.ts، sv-telemetry.ts) + چیپ «MODEL 24H» در ShadowVetoCard (amber اگر <50%). لینک فعلی سالم (آخرین MODEL 0.6h).
+- Q3 SHADOW ARMS (ساختاری، نه خرابی): real-keep 26/30 · real-veto 12/30 · paper-keep 30/30 · paper-veto 0/30 (fed=0). paper-veto فقط از VETO واقعی روی کاندیدای deploy پر می‌شود؛ سه عامل: خشکسالی، دکترین MODEL-only fail-open (SV-1675 وتوی HEURISTIC در پنجره‌ی 401 مسدود نکرد — طبق قرارداد)، RAW-CAL unfiltered bypass. سیم‌کشی (shadow-veto.ts:1200) سالم. تغییر دکترین منوط به دستور اپراتور.
+- Q4 SENTINEL-IGNORED (حق با اپراتور — دو شکاف ساختاری، هر دو بسته شد): (الف) صفحات تلگرام فقط روی flip بود → steady-AMBER ابدی ساکت → FIX (sentinel-service v1.1.2): پیام «persisting» با dwell-gate (AMBER≥30m، RED≥5m) و سقف 6h؛ (ب) هیچ مصرف‌کننده‌ای latest.json سنتینل را نمی‌خواند → FIX: بخش SENTINEL در SENIOR-REVIEW شبانه (best-effort، fail-open) — از امشب در گزارش تلگرامی شبانه می‌آید.
+- VERIFICATION: tsc 80 = baseline دقیق (صفر در فایل‌های لمس‌شده؛ único hit مربوط به GovernorCohortsCard pre-existing)؛ lint بدون hit در فایل‌های من؛ API زنده: stats.recent24h = {n:10, modelSharePct:30, lastModelAgeH:0.6} کنار window-share 78%؛ مرورگر (بلافاصله close طبق دکترین OOM): TERMINAL → SHADOW VETO هر دو چیپ رندر (78% / 41.7%)، صفر console/page error؛ گزارش تحویل تلگرام از رله‌ی سالم (msg 5345).
+- HONESTY: AMBER فعلی سنتینل (24 خط error در پنجره dev.log) همان موج 401 ریشة‌یابی‌شده است و با رشد لاگ خارج می‌شود؛ صفحة «persisting» حدود 30دقیقه بعد از دیپلوی این فیکس صداقتاً شلیک می‌شود (AMBER واقعاً پایدار بوده) — اولین آزمون زنده‌ی FIX است.
+
+Stage Summary:
+- چهار شکایت → دو کلاس ریشه‌یابی‌شده و رفع‌شده (شفافیت recency در analytics؛ سنتینل وارد گراف توجه شد) + دو وضعیت ساختاری مستند (نگه‌داری داده با آرشیو؛ گرسنگی paper-veto معلول خشکسالی+دکترین). بازگشت‌پذیری: فقط shadow-veto stats/کارت، senior-review بخش افزودنی، sentinel پچ صفحات — هیچ رفتار مسدودسازی یا knob تغییر نکرد.
+- Watch: اولین پیام «AMBER persisting» سنتینل (~30m)؛ اولین اجرای شبانه با بخش SENTINEL (پس از 00:00 تهران)؛ شارم paper-veto با نخستین وتوی MODEL واقعی.

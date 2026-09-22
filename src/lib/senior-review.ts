@@ -15,6 +15,9 @@
 // Deterministic — no LLM call; the "senior engineer" here is the measured
 // evidence itself.
 
+import fs from "node:fs/promises";
+import path from "node:path";
+
 import { db } from "@/lib/db";
 import type { GateSettings } from "@/lib/gate-settings";
 import { getGateSettings, gateClamps } from "@/lib/gate-settings";
@@ -40,6 +43,7 @@ export interface SeniorReviewReport {
   at: string;
   ledger: { settled: number; last20PnlUsd: number; shortBook: { n: number; pnlUsd: number; expectancyPct: number }; worst: { strategy: string; n: number; expectancyPct: number; pnlUsd: number } | null };
   rawcal: { open: number; settled24h: number; note: string };
+  sentinel: { verdict: string; anomalies: number; servicesDown: number } | null; // v10.21.2 — the night audit now LOOKS at the sentinel
   riskGovernor: { verdict: string; sizeMult: number; streak: number } | null;
   timeGovernor: { toxicHours: number[]; primeHours: number[]; estUpliftUsd: number } | null;
   canary: { verdict: string; line: string } | null;
@@ -198,6 +202,30 @@ export async function runSeniorReview(): Promise<SeniorReviewState> {
     sections.push({ title: "UI-CANARY", lines: [`${canary.verdict} — ${canary.line}`] });
   }
 
+  // 3.5 — sentinel (v10.21.2): operator finding «چرا به گزارش خطای System Sentinel
+  // توجه نمیشه؟» — the sentinel's steady-state verdicts were consumed by NOBODY
+  // (files only; pages fire only on the verdict flip; the night audit never read
+  // it). Now the nightly audit reads .data/sentinel/latest.json best-effort.
+  let sentinel: SeniorReviewReport["sentinel"] = null;
+  try {
+    const raw = await fs.readFile(path.join(process.cwd(), ".data", "sentinel", "latest.json"), "utf8");
+    const j = JSON.parse(raw) as { verdict?: string; anomalies?: Array<{ sev?: string; msg?: string }>; services?: Array<{ up?: boolean; label?: string }> };
+    if (j.verdict) {
+      const down = (j.services ?? []).filter((s) => !s.up).map((s) => s.label ?? "?");
+      const anomalies = (j.anomalies ?? []).slice(0, 3).map((a) => `${a.sev ?? "?"}: ${a.msg ?? "?"}`);
+      sections.push({
+        title: "SENTINEL",
+        lines: [
+          `verdict ${j.verdict}${anomalies.length ? ` — ${anomalies.join(" · ")}` : " — no anomalies"}`,
+          down.length ? `services DOWN: ${down.join(", ")}` : `all ${j.services?.length ?? 0} services up`,
+        ],
+      });
+      sentinel = { verdict: j.verdict, anomalies: (j.anomalies ?? []).length, servicesDown: down.length };
+    }
+  } catch {
+    /* sentinel never ran — fail-open, the audit must not break */
+  }
+
   // 4 — proposals (≤3, advisor-compatible guards)
   const drafts = draftFromEvidence(st, risk.cycles > 0 ? risk : null);
   for (const d of drafts) {
@@ -235,6 +263,7 @@ export async function runSeniorReview(): Promise<SeniorReviewState> {
     at: new Date().toISOString(),
     ledger: { settled: st.settled, last20PnlUsd: st.last20PnlUsd, shortBook: st.shortBook, worst: worst ? { strategy: worst.strategy, n: worst.n, expectancyPct: worst.expectancyPct, pnlUsd: worst.pnlUsd } : null },
     rawcal: { open, settled24h: settled24, note: rawcalNote },
+    sentinel,
     riskGovernor: risk.cycles > 0 ? { verdict: risk.verdict, sizeMult: risk.sizeMult, streak: risk.streak } : null,
     timeGovernor: time.cycles > 0 ? { toxicHours: time.toxicHours, primeHours: time.primeHours, estUpliftUsd: time.estUpliftUsd } : null,
     canary: canary.cycles > 0 ? { verdict: canary.verdict, line: canary.line } : null,

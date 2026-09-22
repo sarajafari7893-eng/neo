@@ -351,6 +351,13 @@ function judge(input: {
 let lastSnapshot: Record<string, unknown> | null = null;
 let lastDeepAt = 0;
 let lastVerdict: Verdict = "GREEN";
+// v1.1.2 PERSISTENT-DEGRADED PAGES (task 18, operator finding «چرا به گزارش خطای
+// System Sentinel توجه نمیشه؟»): pages fire only on the verdict FLIP, so a
+// steady AMBER/RED runs silent forever. Now a degraded verdict that PERSISTS
+// pages at most every 6h (AMBER after 30min, RED after 5min).
+const PERSIST_PAGE_GAP_MS = 6 * 3600_000;
+let degradedSince = 0;
+let lastPersistPageAt = 0;
 
 async function collect(deep: boolean) {
   const services = await Promise.all(SERVICES.map(probeSvc));
@@ -392,6 +399,21 @@ async function collect(deep: boolean) {
     const lines = anomalies.slice(0, 6).map((a) => `• [${a.sev}] ${a.area}: ${a.msg}`).join("\n");
     void tgSend(`verdict-${verdict}`, `${icon} <b>NEXUS-SENTINEL · ${verdict}</b> (was ${lastVerdict})\n${lines || "no anomalies"}\n<code>${tehran()}</code> IRST`);
     lastVerdict = verdict;
+  }
+
+  // v1.1.2 — persistent-degraded page (see PERSIST_PAGE_GAP_MS above)
+  if (verdict === "GREEN") {
+    degradedSince = 0;
+  } else {
+    if (!degradedSince) degradedSince = nowMs();
+    const dwell = verdict === "RED" ? 5 * 60_000 : 30 * 60_000;
+    if (nowMs() - degradedSince >= dwell && nowMs() - lastPersistPageAt >= PERSIST_PAGE_GAP_MS) {
+      lastPersistPageAt = nowMs();
+      const icon = verdict === "RED" ? "🔴" : "🟡";
+      const mins = Math.round((nowMs() - degradedSince) / 60_000);
+      const lines = anomalies.slice(0, 6).map((a) => `• [${a.sev}] ${a.area}: ${a.msg}`).join("\n");
+      void tgSend("degraded-persist", `${icon} <b>NEXUS-SENTINEL · ${verdict} persisting</b> (${mins}m, not a flip)\n${lines || "no anomalies"}\n<code>${tehran()}</code> IRST`);
+    }
   }
 
   lastSnapshot = snap;
