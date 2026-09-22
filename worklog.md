@@ -29217,3 +29217,23 @@ Work Log:
 Stage Summary:
 - چهار شکایت → دو کلاس ریشه‌یابی‌شده و رفع‌شده (شفافیت recency در analytics؛ سنتینل وارد گراف توجه شد) + دو وضعیت ساختاری مستند (نگه‌داری داده با آرشیو؛ گرسنگی paper-veto معلول خشکسالی+دکترین). بازگشت‌پذیری: فقط shadow-veto stats/کارت، senior-review بخش افزودنی، sentinel پچ صفحات — هیچ رفتار مسدودسازی یا knob تغییر نکرد.
 - Watch: اولین پیام «AMBER persisting» سنتینل (~30m)؛ اولین اجرای شبانه با بخش SENTINEL (پس از 00:00 تهران)؛ شارم paper-veto با نخستین وتوی MODEL واقعی.
+
+---
+Task ID: 19 (OPERATOR MANDATE — «سیستم رو کامل شل کن و بدون محدودیتی سیگنال صادر شود» — full de-restriction)
+Agent: Z.ai Code (lead)
+Task: باز کردن کامل گیت‌های صدور سیگنال به دستور صریح اپراتور — از مسیرهای رسمی، با audit و snapshot بازگشت.
+
+Work Log:
+- MAPPING: کل پشته‌ی صدور نقشه‌برداری شد — engine-flags (3 فلگ consolidation)، GateSettings (34 knob با CLAMPS)، لاین‌های spawn (radar / legacy autoSpawn / trigger-bus / RAW-CAL)، SHADOW-VETO mode.
+- ROLLBACK SNAPSHOT اول نوشته شد: EngineSetting «gate.rollback.v1022» (gate JSON کامل + engine-flags قبلی + autoPromoteBefore + دستور restore).
+- GATES (15 knob، همه داخل clamps — کران‌های مهندسی سیستم): minScore 40→12 (+minScorePinned=1: operator-owned، governor/AUTO-RELIEF/supervisor دیگر نمی‌توانند سخت‌گیر کنند) · flowVetoScore 15→4 · flowShortlist 5→6 · universeSize 40→64 · maxActive 5→8 · regimeGuard 2→0 · shortGuard 2→0 (SHORT خودکار برگشت) · chaseThrAdj 6→0 · onsetRetestGuard→0 · decisiveFilter→0 · decisiveErMin→0 · volBarrier→0 · dislocationGate→0 · ttlExtendMax 1→3.
+- FLAGS: legacyAutoSpawn true (لاین full-universe scan-spawn بازگشت؛ رادار هم فعال ماند) · sensorBusDormant false.
+- SHADOW-VETO: POST کانونیک {mode:"shadow"} → {ok:true} (داوری و arms ادامه، هیچ وتویی مسدود نمی‌کند) + autoPromote→false (تا پر شدن شواهد وتو را خودکار بازنگرداند) — این هم در snapshot ثبت شد.
+- AUDIT: رویداد ENGINE/warn «OPERATOR MANDATE — FULL DE-RESTRICTION» با فهرست کامل تغییرات + هشدار انتظار + مسیر rollback در SignalEvent.
+- VERIFY زنده: sweep 23:36 «MIN_SCORE 40, 1 candidate, 38 markets» → sweep 23:42 «MIN_SCORE 12, 39 candidates, 50 markets»؛ NX-0646/0647/0648 صادر شدند (conviction 70-78% — زیر کف قدیمی 78)؛ readback گیت‌ها + mode=shadow + flags ✓؛ canary GREEN (5 surfaces).
+- HANDS-OFF (شفافیت در گزارش): سایزینگ/geometry (riskPerTrade، slAtrMult، rrScale، leveredRiskCap، beTrail*، earlyExit*، shortSizeMult) — مالک RISK GOVERNOR است (فعلن HEAVY-DEFENSIVE ×0.5 اعمال می‌کند)؛ dedup/anti-late-entry و DEGEN-STOP (شکن‌گری دفتر/ضد-هرز، نه گیت کیفیت)؛ RAW-CAL capture.
+- DELIVERY: تلگرام (msg از رله) + حذف اسکریپت یک‌بارمصرف.
+
+Stage Summary:
+- سیستم به «بازترین حالت داخل کرانه‌های مهندسی» رسید: bar روی کف 12 و pin شده، هر چهار لاین صدور فعال، هیچ وتوی مسدودکننده‌ای نمانده، 39 کاندیدای همزمان در سویپ. بازگشت کامل = یک کلید (gate.rollback.v1022). انتظار صادقانه ثبت شد: حجم ↑ شدید، میانگین کیفیت ↓ (پروفایل قبل از v10.18) — RISK GOVERNOR سایز دفاعی را نگه می‌دارد.
+- Watch: نخستین spawn لاین legacy (تگ نداشتن EVENT-TRIGGER)، رفتار SHORT-GATE آزادشده در دفتر 30d آینده، اینکه governor با pin دیگر minScore را بالا نبرد.
