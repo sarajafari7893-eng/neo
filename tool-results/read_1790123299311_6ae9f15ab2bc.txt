@@ -1,0 +1,497 @@
+     1→"use client";
+     2→
+     3→import { useCallback, useEffect, useState } from "react";
+     4→import { Activity, BrainCircuit, Download, Gavel, ShieldCheck } from "lucide-react";
+     5→import { BentoCard, LiveDot, NeonBadge } from "@/components/shared/primitives";
+     6→import type { ShadowArmDTO, ShadowVetoDTO, ShadowVetoModeDTO, SvTelemetryDTO } from "@/lib/api-types";
+     7→
+     8→/* ── v8.2 SHADOW-VETO // AI CORE PHASE 0 card ──
+     9→ * Feed: /api/ai/shadow-veto (8s poll — in-memory rings, cheap).
+    10→ * The tiered-authority second opinion at the deploy gate: the core
+    11→ * adjudicates every fence candidate (hair-thin passes gap 0..+3, near-miss
+    12→ * rejects gap −8..0) with a VETO-ONLY voice, both sides are outcome-tracked
+    13→ * (real linkage for passes, honest paper ledger for rejects), and promotion
+    14→ * to live veto power is gated on measured evidence (≥30 settled per arm +
+    15→ * Wilson-LB95 separation + negative veto-cohort PnL). Fail-open, revocable. */
+    16→
+    17→const MODE_TONE: Record<ShadowVetoModeDTO, string> = {
+    18→  off: "text-ink-3",
+    19→  shadow: "text-amber-neon",
+    20→  veto: "text-violet-neon",
+    21→};
+    22→
+    23→const SIDE_CLS: Record<string, string> = { PASS: "text-neon", REJECT: "text-amber-neon" };
+    24→
+    25→function ago(ts: number): string {
+    26→  const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
+    27→  if (s < 60) return `${s}s`;
+    28→  if (s < 3600) return `${Math.round(s / 60)}m`;
+    29→  if (s < 86400) return `${Math.round(s / 3600)}h`;
+    30→  return `${Math.round(s / 86400)}d`;
+    31→}
+    32→
+    33→function usd(v: number): string {
+    34→  return `${v >= 0 ? "+" : "−"}$${Math.abs(v).toFixed(2)}`;
+    35→}
+    36→
+    37→function ArmRow({ a }: { a: ShadowArmDTO }) {
+    38→  const pct = Math.min(100, (a.n / a.target) * 100);
+    39→  const critical = a.id === "real-veto";
+    40→  return (
+    41→    <div className="px-1 py-1.5" title={a.label}>
+    42→      <div className="flex items-center gap-1.5 font-terminal text-[10px]">
+    43→        <span className={`w-[178px] shrink-0 truncate font-bold ${critical ? "text-magenta-neon" : "text-ink-2"}`}>{a.label}</span>
+    44→        <div className="h-1 flex-1 overflow-hidden rounded-full bg-white/5">
+    45→          <div className={`h-full rounded-full ${critical ? "bg-magenta-neon" : "bg-neon"} opacity-80`} style={{ width: `${pct}%` }} />
+    46→        </div>
+    47→        <span className="w-12 shrink-0 text-right tabular-nums text-ink-3">
+    48→          {a.n}/{a.target}
+    49→        </span>
+    50→        <span className="w-14 shrink-0 text-right tabular-nums text-ink">{a.winRatePct !== null ? `${a.winRatePct}%` : "—"}</span>
+    51→        <span className="w-16 shrink-0 text-right tabular-nums text-cyan-neon">{a.wilsonLB !== null ? `LB ${a.wilsonLB.toFixed(0)}%` : "—"}</span>
+    52→        <span className={`w-14 shrink-0 text-right tabular-nums ${a.netUsd > 0 ? "text-neon" : a.netUsd < 0 ? "text-danger-neon" : "text-ink-3"}`}>{a.n ? usd(a.netUsd) : "—"}</span>
+    53→      </div>
+    54→    </div>
+    55→  );
+    56→}
+    57→
+    58→export default function ShadowVetoCard() {
+    59→  const [data, setData] = useState<ShadowVetoDTO | null>(null);
+    60→  const [loaded, setLoaded] = useState(false);
+    61→  const [busy, setBusy] = useState(false);
+    62→  const [notice, setNotice] = useState<string | null>(null);
+    63→
+    64→  const pull = useCallback(async () => {
+    65→    try {
+    66→      const res = await fetch("/api/ai/shadow-veto", { cache: "no-store" });
+    67→      if (res.ok) setData((await res.json()) as ShadowVetoDTO);
+    68→    } catch {
+    69→      /* next tick retries */
+    70→    } finally {
+    71→      setLoaded(true);
+    72→    }
+    73→  }, []);
+    74→
+    75→  useEffect(() => {
+    76→    void pull();
+    77→    const id = setInterval(pull, 8_000);
+    78→    return () => clearInterval(id);
+    79→  }, [pull]);
+    80→
+    81→  const [cooldown, setCooldown] = useState(0);
+    82→
+    83→  useEffect(() => {
+    84→    if (cooldown <= 0) return;
+    85→    const id = setInterval(() => setCooldown((c) => Math.max(0, c - 1)), 1000);
+    86→    return () => clearInterval(id);
+    87→  }, [cooldown]);
+    88→
+    89→  const handleResponse = useCallback(
+    90→    async (res: Response, mode: ShadowVetoModeDTO) => {
+    91→      let errMsg: string | null = null;
+    92→      if (res.ok) {
+    93→        setNotice(`mode → ${mode.toUpperCase()}`);
+    94→      } else {
+    95→        try {
+    96→          const body = (await res.json()) as { error?: string };
+    97→          errMsg = body.error ?? `HTTP ${res.status}`;
+    98→          if (res.status === 429 && body.error?.includes("cooldown")) setCooldown(20);
+    99→        } catch {
+   100→          errMsg = `HTTP ${res.status}`;
+   101→        }
+   102→        setNotice(errMsg);
+   103→      }
+   104→      setBusy(false);
+   105→      setTimeout(() => setNotice(null), errMsg ? 6000 : 3500);
+   106→      void pull();
+   107→    },
+   108→    [pull],
+   109→  );
+   110→
+   111→  const setMode = useCallback(
+   112→    async (mode: ShadowVetoModeDTO) => {
+   113→      if (!data || busy) return;
+   114→      if (mode === "veto" && !data.promotion.ready) {
+   115→        const ok = window.confirm(
+   116→          `EVIDENCE GATE NOT MET\n\n${data.promotion.criteria.map((c) => `${c.ok ? "✓" : "✗"} ${c.detail}`).join("\n")}\n\nForce veto mode anyway? The override is audited and revocable.`,
+   117→        );
+   118→        if (!ok) return;
+   119→        setBusy(true);
+   120→        const res = await fetch("/api/ai/shadow-veto", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode, force: true }) });
+   121→        await handleResponse(res, mode);
+   122→      } else {
+   123→        setBusy(true);
+   124→        const res = await fetch("/api/ai/shadow-veto", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode }) });
+   125→        await handleResponse(res, mode);
+   126→      }
+   127→    },
+   128→    [data, busy, pull, handleResponse],
+   129→  );
+   130→
+   131→  const mode = data?.config.mode ?? "shadow";
+   132→  const arms = data?.arms ?? [];
+   133→  const recent = data?.recent.slice(0, 7) ?? [];
+   134→  const paper = data?.paper ?? [];
+   135→  const stats = data?.stats;
+   136→
+   137→  // v8.4.1 N3 — manual neural-link probe: one minimal LLM call THROUGH the
+   138→  // 429 shield; success resets the shield instantly (MODEL verdicts resume).
+   139→  const [probing, setProbing] = useState(false);
+   140→  const runProbe = useCallback(async () => {
+   141→    if (probing) return;
+   142→    setProbing(true);
+   143→    try {
+   144→      const res = await fetch("/api/ai/neural-link", { method: "POST" });
+   145→      const body = (await res.json()) as { ok?: boolean; detail?: string };
+   146→      const msg = body.ok ? "neural probe OK — link restored, shield reset" : `probe: ${body.detail ?? "failed"}`;
+   147→      setNotice(msg);
+   148→      setTimeout(() => setNotice(null), body.ok ? 4000 : 6500);
+   149→      void pull();
+   150→    } catch {
+   151→      setNotice("probe failed — network error");
+   152→      setTimeout(() => setNotice(null), 6500);
+   153→    } finally {
+   154→      setProbing(false);
+   155→    }
+   156→  }, [probing, pull]);
+   157→
+   158→  // v10.2 SV-TELEMETRY HUB — arm feed wiring + JSON persistence visibility.
+   159→  // Light 30s poll (served straight from the persisted snapshot file).
+   160→  const [tel, setTel] = useState<SvTelemetryDTO | null>(null);
+   161→  const [telLoaded, setTelLoaded] = useState(false);
+   162→  const [telBusy, setTelBusy] = useState(false);
+   163→
+   164→  const pullTel = useCallback(async () => {
+   165→    try {
+   166→      const res = await fetch("/api/ai/shadow-veto/telemetry", { cache: "no-store" });
+   167→      if (res.ok) setTel((await res.json()) as SvTelemetryDTO);
+   168→      else if (res.status === 503) setTel(null);
+   169→    } catch {
+   170→      /* next tick retries */
+   171→    } finally {
+   172→      setTelLoaded(true);
+   173→    }
+   174→  }, []);
+   175→
+   176→  useEffect(() => {
+   177→    void pullTel();
+   178→    const id = setInterval(pullTel, 30_000);
+   179→    return () => clearInterval(id);
+   180→  }, [pullTel]);
+   181→
+   182→  const runSnapshot = useCallback(async () => {
+   183→    if (telBusy) return;
+   184→    setTelBusy(true);
+   185→    try {
+   186→      const res = await fetch("/api/ai/shadow-veto/telemetry", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ force: true }) });
+   187→      const body = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string };
+   188→      setNotice(body.ok ? "telemetry snapshot captured → .data/shadow-veto-telemetry.json" : `snapshot failed: ${body.error ?? "unknown"}`);
+   189→      setTimeout(() => setNotice(null), body.ok ? 4000 : 6500);
+   190→      await pullTel();
+   191→      void pull();
+   192→    } catch {
+   193→      setNotice("telemetry snapshot failed — network error");
+   194→      setTimeout(() => setNotice(null), 6500);
+   195→    } finally {
+   196→      setTelBusy(false);
+   197→    }
+   198→  }, [telBusy, pullTel, pull]);
+   199→
+   200→  return (
+   201→    <BentoCard>
+   202→      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+   203→        <div className="flex items-center gap-2.5">
+   204→          <BrainCircuit className="h-4 w-4 text-violet-neon" aria-hidden />
+   205→          <span className="label-tech">Shadow veto // AI core phase 0 — tiered authority at the fence</span>
+   206→          <LiveDot />
+   207→        </div>
+   208→        <div className="flex items-center gap-2">
+   209→          {notice && <span className="font-terminal text-[9px] text-neon">{notice}</span>}
+   210→          <NeonBadge tone={mode === "veto" ? "violet" : mode === "shadow" ? "amber" : "muted"}>PHASE 0 · {mode.toUpperCase()}</NeonBadge>
+   211→        </div>
+   212→      </div>
+   213→
+   214→      {!data ? (
+   215→        <div className="flex h-40 items-center justify-center rounded-lg border border-dashed border-violet-neon/25 font-terminal text-[10px] text-ink-3">
+   216→          {!loaded ? "connecting…" : "adjudicator warming — first fence verdicts land within ~2min"}
+   217→        </div>
+   218→      ) : (
+   219→        <div className="space-y-3">
+   220→          {/* control row */}
+   221→          <div className="flex flex-wrap items-center gap-2">
+   222→            <div className="flex overflow-hidden rounded-md border border-white/10">
+   223→              {(["off", "shadow", "veto"] as const).map((m) => (
+   224→                <button
+   225→                  key={m}
+   226→                  onClick={() => void setMode(m)}
+   227→                  disabled={busy || m === mode}
+   228→                  aria-pressed={m === mode}
+   229→                  aria-label={`set shadow-veto mode ${m}`}
+   230→                  className={`px-3 py-1.5 font-terminal text-[10px] font-bold uppercase tracking-wider transition ${m === mode ? "bg-violet-neon/15 text-violet-neon" : "text-ink-3 hover:bg-white/5 hover:text-ink"} disabled:opacity-60`}
+   231→                >
+   232→                  {m}
+   233→                </button>
+   234→              ))}
+   235→            </div>
+   236→            <span className="font-terminal text-[9px] text-ink-3">
+   237→              {cooldown > 0 ? (
+   238→                <span className="text-amber-neon">control cooldown {cooldown}s</span>
+   239→              ) : mode === "shadow" ? (
+   240→                "verdicts recorded · live flow untouched · fail-open"
+   241→              ) : mode === "veto" ? (
+   242→                "veto-only authority active · blocked trades paper-tracked · revocable"
+   243→              ) : (
+   244→                "adjudicator off"
+   245→              )}
+   246→            </span>
+   247→            <span className="ml-auto flex items-center gap-1.5 font-terminal text-[9px] tabular-nums text-ink-3" title="LLM adjudication budget (rate-limited)">
+   248→              <ShieldCheck className="h-3 w-3 text-neon" aria-hidden />
+   249→              budget {data.health.callsLastHour}/{data.config.budgetPerHour}·h
+   250→              {data.health.pending > 0 && <span className="text-amber-neon">· {data.health.pending} in flight</span>}
+   251→              {/* v8.4.1 N3 — active recovery probe button */}
+   252→              {data.llm && (data.llm.cooling || data.llm.consecutive429 > 0) && (
+   253→                <button
+   254→                  onClick={() => void runProbe()}
+   255→                  disabled={probing}
+   256→                  aria-label="probe the LLM link now"
+   257→                  title="fire one minimal LLM probe through the 429 shield — success resets the shield instantly (1 per 2min)"
+   258→                  className="rounded border border-violet-neon/40 px-1.5 py-0.5 font-bold text-violet-neon transition hover:bg-violet-neon/10 disabled:opacity-50"
+   259→                >
+   260→                  {probing ? "PROBING…" : "PROBE"}
+   261→                </button>
+   262→              )}
+   263→              {/* v8.4.1 neural-link (429 budget shield) visibility */}
+   264→              {data.llm && (
+   265→                <span
+   266→                  className={`ml-1 rounded px-1.5 py-0.5 font-bold ${data.llm.cooling ? "bg-danger-neon/15 text-danger-neon" : data.llm.consecutive429 > 0 ? "bg-amber-neon/10 text-amber-neon" : "bg-neon/10 text-neon"}`}
+   267→                  title={data.llm.cooling ? `429 budget shield active — background LLM parked ${Math.ceil(data.llm.cooldownRemainsMs / 1000)}s (operator tier protected)` : "LLM link healthy"}
+   268→                >
+   269→                  {data.llm.cooling ? `NEURAL LINK · 429 COOLDOWN ${Math.ceil(data.llm.cooldownRemainsMs / 1000)}s` : data.llm.consecutive429 > 0 ? `NEURAL LINK · RECOVERING (×${data.llm.consecutive429})` : "NEURAL LINK · OK"}
+   270→                </span>
+   271→              )}
+   272→            </span>
+   273→          </div>
+   274→
+   275→          {/* stats strip */}
+   276→          <div className="grid grid-cols-4 gap-2 sm:grid-cols-8">
+   277→            {[
+   278→              { label: "ADJUDICATED", value: String(stats?.total ?? 0), cls: "text-ink" },
+   279→              { label: "HAIR-PASS", value: String(stats?.passSide ?? 0), cls: "text-neon" },
+   280→              { label: "FENCE-REJ", value: String(stats?.rejectSide ?? 0), cls: "text-amber-neon" },
+   281→              { label: "VETO VOICES", value: String(stats?.vetoCount ?? 0), cls: "text-magenta-neon" },
+   282→              { label: "MODEL SHARE", value: stats?.modelSharePct !== null && stats?.modelSharePct !== undefined ? `${stats.modelSharePct}%` : "—", cls: "text-cyan-neon" },
+   283→              {
+   284→                label: "MODEL 24H",
+   285→                value: stats?.recent24h ? (stats.recent24h.modelSharePct !== null ? `${stats.recent24h.modelSharePct}%` : "—") : "—",
+   286→                cls: stats?.recent24h?.modelSharePct !== null && stats?.recent24h?.modelSharePct !== undefined && stats.recent24h.modelSharePct < 50 ? "text-amber-neon" : "text-neon",
+   287→              },
+   288→              { label: "GROUNDED", value: stats?.modelGroundedPct !== null && stats?.modelGroundedPct !== undefined ? `${stats.modelGroundedPct}%` : "—", cls: stats?.modelGroundedPct !== null && stats?.modelGroundedPct !== undefined && stats.modelGroundedPct < 100 ? "text-amber-neon" : "text-neon" },
+   289→              { label: "GATE AGREE", value: stats && stats.rejectSide ? `${Math.round((stats.gateAgreement / stats.rejectSide) * 100)}%` : "—", cls: "text-ink" },
+   290→            ].map((c) => (
+   291→              <div key={c.label} className="rounded-lg border border-white/8 bg-white/[0.02] px-2 py-1.5 text-center">
+   292→                <div className="font-terminal text-[8px] uppercase tracking-[0.14em] text-ink-3">{c.label}</div>
+   293→                <div className={`font-terminal text-sm font-bold tabular-nums ${c.cls}`}>{c.value}</div>
+   294→              </div>
+   295→            ))}
+   296→          </div>
+   297→
+   298→          {/* A/B arms */}
+   299→          <div className="rounded-lg border border-white/8 bg-white/[0.02] p-2">
+   300→            <div className="mb-1 flex items-center justify-between px-1 font-terminal text-[9px] uppercase tracking-[0.14em] text-ink-3">
+   301→              <span className="flex items-center gap-1.5">
+   302→                <Gavel className="h-3 w-3 text-magenta-neon" aria-hidden />
+   303→                A/B evidence arms · win rate / wilson-LB95 / net
+   304→              </span>
+   305→              <span>target {arms[0]?.target ?? 30} settled per arm</span>
+   306→            </div>
+   307→            <div className="divide-y divide-white/5">
+   308→              {arms.map((a) => (
+   309→                <ArmRow key={a.id} a={a} />
+   310→              ))}
+   311→            </div>
+   312→            {mode !== "veto" && (arms.find((a) => a.id === "paper-veto")?.n ?? 0) === 0 && (
+   313→              <p className="mt-1.5 border-t border-white/5 px-1 pt-1.5 font-terminal text-[9px] leading-relaxed text-ink-3" title="paper-veto only fills in VETO mode: only then a core VETO actually blocks the deploy and the blocked trade is paper-tracked. In shadow mode the trade still deploys, so the same verdicts fill the REAL·VETO arm instead.">
+   314→                paper-veto idle BY DESIGN — it fills only after auto-promotion to veto mode (arms 30/30 + LB separation). In shadow mode PASS+VETO verdicts still deploy → they feed real-veto.
+   315→              </p>
+   316→            )}
+   317→            <div className="mt-1.5 border-t border-white/5 px-1 pt-1.5">
+   318→              <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 font-terminal text-[9px]">
+   319→                {data.promotion.criteria.map((c) => (
+   320→                  <span key={c.id} className={`${c.ok ? "text-neon" : "text-ink-3"}`} title={c.detail}>
+   321→                    {c.ok ? "✓" : "✗"} {c.id}
+   322→                  </span>
+   323→                ))}
+   324→                <span className={`ml-auto font-bold ${data.promotion.ready ? "text-neon" : "text-ink-3"}`}>{data.promotion.ready ? "PROMOTION READY — veto mode unlockable" : "promotion not ready"}</span>
+   325→              </div>
+   326→              <div className={`mt-0.5 font-terminal text-[9px] ${data.promotion.revocation.pressure ? "text-amber-neon" : "text-ink-3"}`} title={data.promotion.revocation.detail}>
+   327→                {data.promotion.revocation.pressure ? "⚠ revocation pressure — " : ""}
+   328→                {data.promotion.revocation.detail}
+   329→              </div>
+   330→            </div>
+   331→          </div>
+   332→
+   333→          <div className="grid gap-3 lg:grid-cols-[1fr_260px]">
+   334→            {/* recent adjudications */}
+   335→            <div className="min-w-0">
+   336→              <div className="mb-1 font-terminal text-[9px] uppercase tracking-[0.14em] text-ink-3">recent adjudications · veto-only voices</div>
+   337→              {recent.length === 0 ? (
+   338→                <div className="flex h-24 items-center justify-center rounded-lg border border-dashed border-violet-neon/20 font-terminal text-[10px] text-ink-3">
+   339→                  no fence candidates adjudicated yet — verdicts appear as candidates touch the boundary band
+   340→                </div>
+   341→              ) : (
+   342→                <div className="max-h-[168px] space-y-0.5 overflow-y-auto pr-1">
+   343→                  {recent.map((v) => (
+   344→                    <div key={v.id} className="grid grid-cols-[58px_40px_44px_46px_1fr] items-center gap-1 px-1 py-1 font-terminal text-[10px] tabular-nums transition hover:bg-white/[0.03]" title={`${v.label} · ${v.side === "PASS" ? "hair-thin pass" : "fence reject"} · source ${v.source}${v.audit ? ` · grounding audit ${v.audit.verdict} (cited ${v.audit.cited}, unmatched ${v.audit.unmatched.length})` : " · pre-audit instrument"}${v.outcome ? ` · settled ${v.outcome.status} ${v.outcome.pnlPercent >= 0 ? "+" : ""}${v.outcome.pnlPercent}%` : ""}`}>
+   345→                      <span className="truncate text-ink-3">{v.id}</span>
+   346→                      <span className={`truncate font-bold ${v.direction === "LONG" ? "text-neon" : "text-magenta-neon"}`}>{v.symbol.replace("USDT", "")}</span>
+   347→                      <span className={SIDE_CLS[v.side]}>{v.side === "PASS" ? "hair✓" : "fence✗"}</span>
+   348→                      <span className={`rounded border px-1 text-center text-[9px] font-bold leading-4 ${v.verdict === "VETO" ? "border-[rgba(255,77,94,0.4)] text-danger-neon" : "border-[rgba(0,255,163,0.4)] text-neon"}`}>{v.verdict}</span>
+   349→                      <span className="min-w-0 truncate text-[9px] text-ink-2" title={v.reason}>
+   350→                        {v.audit && (
+   351→                          <span className={`mr-1 font-bold ${v.audit.verdict === "VIOLATION" ? "text-danger-neon" : v.audit.verdict === "SUSPECT" ? "text-amber-neon" : "text-neon/70"}`} title={`grounding ${v.audit.verdict} — ${v.audit.cited} cited, ${v.audit.unmatched.length} unmatched`}>
+   352→                            {v.audit.verdict === "VIOLATION" ? "✗ungrounded→heuristic" : v.audit.verdict === "SUSPECT" ? "⚠" : "✓"}
+   353→                          </span>
+   354→                        )}
+   355→                        {v.confidence}% · gap {v.gap >= 0 ? "+" : ""}
+   356→                        {v.gap.toFixed(1)} · {v.reason}
+   357→                      </span>
+   358→                    </div>
+   359→                  ))}
+   360→                </div>
+   361→              )}
+   362→            </div>
+   363→
+   364→            {/* paper ledger */}
+   365→            <div className="min-w-0">
+   366→              <div className="mb-1 flex items-center justify-between font-terminal text-[9px] uppercase tracking-[0.14em] text-ink-3">
+   367→                <span>paper ledger · would-have-traded</span>
+   368→                <span className="tabular-nums">
+   369→                  {stats?.paperOpen ?? 0} open / {stats?.paperSettled ?? 0} settled
+   370→                </span>
+   371→              </div>
+   372→              {paper.length === 0 ? (
+   373→                <div className="flex h-24 items-center justify-center rounded-lg border border-dashed border-neon/20 font-terminal text-[10px] text-ink-3">no counterfactual positions — opens when the core disagrees with a fence reject</div>
+   374→              ) : (
+   375→                <div className="max-h-[168px] space-y-0.5 overflow-y-auto pr-1">
+   376→                  {paper.map((p) => (
+   377→                    <div key={p.id} className="flex items-center gap-1.5 px-1 py-1 font-terminal text-[10px] tabular-nums transition hover:bg-white/[0.03]" title={`${p.id} · verdict ${p.verdictId} · entry ${p.entry} · SL ${p.stop.toFixed(p.entry > 100 ? 1 : 4)} · TP3 ${p.tp3.toFixed(p.entry > 100 ? 1 : 4)} · ${p.leverage}× · ${p.closeNote ?? (p.outcome ? "" : `running (MFE ${p.maxPnlPercent >= 0 ? "+" : ""}${p.maxPnlPercent}%)`)}`}>
+   378→                      <span className="w-10 shrink-0 truncate text-ink-3">{p.id}</span>
+   379→                      <span className={`w-12 shrink-0 truncate font-bold ${p.direction === "LONG" ? "text-neon" : "text-magenta-neon"}`}>{p.symbol.replace("USDT", "")}</span>
+   380→                      <span className={`w-14 shrink-0 ${p.outcome ? (p.status === "SL" ? "text-danger-neon" : "text-neon") : "text-amber-neon"}`}>{p.outcome ? p.status : "OPEN"}</span>
+   381→                      <span className={`ml-auto w-14 shrink-0 text-right ${p.pnlPercent > 0 ? "text-neon" : p.pnlPercent < 0 ? "text-danger-neon" : "text-ink-3"}`}>{p.outcome ? `${p.pnlPercent >= 0 ? "+" : ""}${p.pnlPercent.toFixed(1)}%` : `TP ${p.reachedTp}/3`}</span>
+   382→                      <span className="w-14 shrink-0 text-right text-ink-3">{p.outcome ? usd(p.pnlUsd) : ago(p.at)}</span>
+   383→                    </div>
+   384→                  ))}
+   385→                </div>
+   386→              )}
+   387→              <p className="mt-1 px-1 font-terminal text-[9px] leading-relaxed text-ink-3">
+   388→                Honesty contract: paper rows use <span className="text-ink-2">base geometry</span> (slAtrMult×ATR stop, base RR, tranche ladder, real fee model) — directional-edge evidence at the fence, never presented as real PnL.
+   389→                {" "}<span className={data.health.auditViolations > 0 ? "text-amber-neon" : "text-ink-2"} title="v8.2.1 grounding patch — every MODEL verdict is number-audited against its evidence bundle; violations are discarded and the heuristic speaks instead">Grounding audit: every MODEL verdict number-checked — {data.health.auditViolations} violation{data.health.auditViolations === 1 ? "" : "s"} discarded.</span>
+   390→                {" "}Records → .data/shadow-veto.jsonl ({data.health.fileKB}KB).
+   391→              </p>
+   392→            </div>
+   393→          </div>
+   394→
+   395→          {/* v10.2 SV-TELEMETRY HUB — per-arm feed wiring + JSON persistence */}
+   396→          <div className="rounded-lg border border-white/8 bg-white/[0.02] p-2">
+   397→            <div className="mb-1.5 flex flex-wrap items-center justify-between gap-1.5 px-1 font-terminal text-[9px] uppercase tracking-[0.14em] text-ink-3">
+   398→              <span className="flex items-center gap-1.5">
+   399→                <Activity className="h-3 w-3 text-cyan-neon" aria-hidden />
+   400→                Telemetry hub · arm feed wiring
+   401→                {tel && (
+   402→                  <span className="normal-case tracking-normal" title={new Date(tel.capturedAt).toLocaleString()}>
+   403→                    · snapshot {ago(tel.capturedAt)} ago
+   404→                  </span>
+   405→                )}
+   406→              </span>
+   407→              <span className="flex items-center gap-1.5">
+   408→                {tel && (
+   409→                  <span className="tabular-nums normal-case tracking-normal" title={`${tel.store.file} · ${tel.store.writes} atomic writes · capture ${tel.captureMs}ms · schemaVersion ${tel.schemaVersion}`}>
+   410→                    {tel.store.file} · {tel.store.fileKB}KB · {tel.store.historySamples} samples
+   411→                  </span>
+   412→                )}
+   413→                <button
+   414→                  onClick={() => void runSnapshot()}
+   415→                  disabled={telBusy}
+   416→                  aria-label="capture telemetry snapshot now"
+   417→                  title="capture a fresh telemetry snapshot now (POST force — bypasses the 10min throttle)"
+   418→                  className="rounded border border-cyan-neon/40 px-1.5 py-0.5 font-bold text-cyan-neon transition hover:bg-cyan-neon/10 disabled:opacity-50"
+   419→                >
+   420→                  {telBusy ? "…" : "SNAPSHOT"}
+   421→                </button>
+   422→                {tel && (
+   423→                  <a
+   424→                    href="/api/ai/shadow-veto/telemetry?download=1"
+   425→                    download
+   426→                    aria-label="download telemetry JSON"
+   427→                    title="download the consolidated telemetry JSON (schemaVersion 1 — retrievable and usable)"
+   428→                    className="flex items-center gap-1 rounded border border-white/15 px-1.5 py-0.5 font-bold text-ink-2 transition hover:bg-white/5 hover:text-ink"
+   429→                  >
+   430→                    <Download className="h-3 w-3" aria-hidden />
+   431→                    JSON
+   432→                  </a>
+   433→                )}
+   434→              </span>
+   435→            </div>
+   436→
+   437→            {!tel ? (
+   438→              <div className="flex h-14 items-center justify-center rounded-lg border border-dashed border-cyan-neon/20 font-terminal text-[10px] text-ink-3">
+   439→                {!telLoaded ? "reading telemetry store…" : "telemetry warming — first capture lands on the next engine tick or SNAPSHOT"}
+   440→              </div>
+   441→            ) : (
+   442→              <>
+   443→                <div className="grid grid-cols-1 gap-1 sm:grid-cols-2">
+   444→                  {tel.arms.map((a) => (
+   445→                    <div
+   446→                      key={a.id}
+   447→                      className="flex items-center gap-1.5 rounded-md border border-white/5 bg-white/[0.02] px-1.5 py-1 font-terminal text-[10px] tabular-nums"
+   448→                      title={`${a.feedSource}\n${a.neverFed ? "never fed — " : a.starved ? `STARVED — last fed ${ago(a.lastFedAt)} ago · ` : `last fed ${ago(a.lastFedAt)} ago · `}${a.starveDetail ?? ""}`}
+   449→                    >
+   450→                      <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${a.starved ? "bg-danger-neon" : a.neverFed ? "bg-amber-neon/70" : "bg-neon"}`} />
+   451→                      <span className="w-20 shrink-0 truncate font-bold text-ink">{a.id}</span>
+   452→                      <span className="w-10 shrink-0 text-right text-ink-2">
+   453→                        {a.n}/{a.target}
+   454→                      </span>
+   455→                      <div className="h-1 min-w-6 flex-1 overflow-hidden rounded-full bg-white/5">
+   456→                        <div className={`h-full rounded-full ${a.id.startsWith("real") ? "bg-neon" : "bg-cyan-neon"} opacity-80`} style={{ width: `${a.fillPct}%` }} />
+   457→                      </div>
+   458→                      <span className={`w-16 shrink-0 text-right ${a.neverFed ? "text-amber-neon" : a.starved ? "text-danger-neon" : "text-ink-3"}`}>{a.neverFed ? "idle" : a.starved ? "STARVED" : `fed ${ago(a.lastFedAt)}`}</span>
+   459→                      <span className={`w-14 shrink-0 text-right ${a.netUsd > 0 ? "text-neon" : a.netUsd < 0 ? "text-danger-neon" : "text-ink-3"}`}>{a.n ? usd(a.netUsd) : "—"}</span>
+   460→                    </div>
+   461→                  ))}
+   462→                </div>
+   463→                <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-white/5 px-1 pt-1.5 font-terminal text-[9px]">
+   464→                  {([
+   465→                    ["ADJ", tel.wiring.adjudicator],
+   466→                    ["LINK", tel.wiring.realLink],
+   467→                    ["CLOSE", tel.wiring.outcomeClosure],
+   468→                    ["SWEEP", tel.wiring.paperSweep],
+   469→                  ] as const).map(([k, w]) => (
+   470→                    <span key={k} className={w.ok ? "text-neon" : "text-danger-neon"} title={w.detail}>
+   471→                      {w.ok ? "✓" : "✗"} {k}
+   472→                    </span>
+   473→                  ))}
+   474→                  <span className={tel.wiring.llm.ok ? "text-neon" : "text-amber-neon"} title={tel.wiring.llm.detail}>
+   475→                    {tel.wiring.llm.ok ? "✓" : "~"} LLM
+   476→                  </span>
+   477→                  <span className="tabular-nums text-ink-3" title={`${tel.wiring.pipeline.unlinkedPassStale} ACTIVE link leak(s) (swept orphans ${tel.wiring.pipeline.unlinkedPassOrphan} · aged out ${tel.wiring.pipeline.unlinkedPassAged}) · ${tel.wiring.pipeline.pendingRealOutcomes} awaiting closure · ${tel.wiring.pipeline.verdicts24h} verdicts/24h · ${tel.wiring.pipeline.pendingPapers} papers open`}>
+   478→                    leak {tel.wiring.pipeline.unlinkedPassStale} · closing {tel.wiring.pipeline.pendingRealOutcomes} · v24h {tel.wiring.pipeline.verdicts24h}
+   479→                  </span>
+   480→                  {tel.alerts.length > 0 && (
+   481→                    <span
+   482→                      className={`ml-auto rounded px-1.5 py-0.5 font-bold ${tel.alerts.some((a) => a.level === "warn") ? "bg-amber-neon/10 text-amber-neon" : "bg-white/5 text-ink-3"}`}
+   483→                      title={tel.alerts.map((a) => `${a.level.toUpperCase()} · ${new Date(a.at).toISOString().slice(11, 16)}Z · ${a.text}`).join("\n")}
+   484→                    >
+   485→                      {tel.alerts.length} alert{tel.alerts.length === 1 ? "" : "s"}
+   486→                    </span>
+   487→                  )}
+   488→                </div>
+   489→              </>
+   490→            )}
+   491→          </div>
+   492→        </div>
+   493→      )}
+   494→    </BentoCard>
+   495→  );
+   496→}
+   497→

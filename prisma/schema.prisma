@@ -216,6 +216,58 @@ model VolCauseEvent {
   @@index([settledAt])
 }
 
+// ── v10.22 FUTURES TAXONOMY ENGINE (operator mandate: «هدف جمع‌آوری داده …
+// با ذخیره و یادگیری بهترین فیلتر شناسایی شود») ──
+// Five-family futures signal taxonomy persisted as a TIME-SERIES (boards are
+// overwritten, learning needs history): A positioning (funding + L/S ratios) ·
+// B aggressor flow (real-tape CVD) · C forced flow (liquidations) · D structure
+// (OI × Price four-quadrant) · E cross-exchange divergence (Binance/Bybit/OKX).
+// BACKFILL rows carry the 1h grid (~14d) honestly missing stream-only families;
+// LIVE rows sample every ~5min with the full five-family read. Forward returns
+// settle lazily — the learning layer joins them into filter expectancy.
+model FuturesSnapshot {
+  id        String   @id @default(cuid())
+  symbol    String
+  ts        DateTime
+  source    String   @default("LIVE") // LIVE | BACKFILL
+  // family D — structure core
+  price         Float
+  oiBase        Float? // contracts (base-asset units)
+  oiUsdM        Float? // notional $M
+  priceDelta15m Float? // %
+  priceDelta1h  Float? // %
+  oiDelta15m    Float? // %
+  oiDelta1h     Float? // %
+  quadrant15m   String? // Q1_FRESH_LONG | Q2_SQUEEZE | Q3_FRESH_SHORT | Q4_CAPITULATION
+  quadrant1h    String?
+  // family A — positioning
+  funding8h     Float? // % per 8h, signed (Binance)
+  crowdLS       Float? // global account long/short ratio
+  topLS         Float? // top-trader position long/short ratio
+  takerLS       Float? // taker buy/sell ratio (5m×13 mean)
+  // family B — aggressor flow (real tape; null when trade-service down)
+  cvd15mPct     Float?
+  cvd1hPct      Float?
+  vol15mUsd     Float?
+  // family C — forced flow (null when liq-service down)
+  liqLong10mUsd  Float?
+  liqShort10mUsd Float?
+  liqUsd1h       Float?
+  // family E — cross-exchange (Bybit / OKX USDT-M perps)
+  fundingByb    Float?
+  oiByb         Float? // base units
+  fundingOkx    Float?
+  oiOkx         Float? // base units
+  // settled forward returns (unlevered %) — the learning substrate
+  fwd15mPct Float?
+  fwd1hPct  Float?
+  fwd4hPct  Float?
+
+  @@unique([symbol, ts, source])
+  @@index([symbol, ts])
+  @@index([fwd1hPct])
+}
+
 // ── v9.0 PUMP/DUMP RADAR (operator mandate 2026-09-12) ──
 // Independent intelligent engine that identifies and TRACKS pump/dump flows:
 // stage-1 velocity screen (in-memory, every tick) → stage-2 flow confirmation

@@ -2388,6 +2388,22 @@ export async function tick(force = false): Promise<{ ran: boolean; resolved: num
     if (tickCount % 25 === 0 && assets.length > 0) {
       void maybeOiFundScan(assets.map((a) => a.symbol)).catch((e) => console.error("[oi-fund]", e));
     }
+
+    // v10.22 FUTURES TAXONOMY ENGINE — five-family time-series on the anchors
+    // (BTC/ETH): A positioning · B aggressor CVD · C liquidations · D OI×Price
+    // quadrant · E cross-exchange divergence. Sampler ~5min, forward-settler
+    // ~6min. Pure telemetry + learning substrate — NEVER touches the deploy
+    // path; the edge learner feeds the operator's best-filter mandate.
+    if (tickCount % 75 === 10) {
+      void import("@/lib/futures-taxonomy")
+        .then((m) => m.maybeFuturesSample())
+        .catch((e) => console.error("[futures-sample]", e));
+    }
+    if (tickCount % 90 === 40) {
+      void import("@/lib/futures-taxonomy")
+        .then((m) => m.settleFuturesForwards())
+        .catch((e) => console.error("[futures-settle]", e));
+    }
     // v8.1 P1 LIQ-HEAT WARMUP — pre-compute estimated clusters for the top-8
     // OI symbols every ~2.7min (compute is cache-bound, TTL 3min, map ≤64).
     if (tickCount % 45 === 0 && assets.length > 0) {

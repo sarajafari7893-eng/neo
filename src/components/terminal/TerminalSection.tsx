@@ -10,6 +10,7 @@ import LiqDepthRadarCard from "@/components/terminal/LiqDepthRadarCard";
 import VolRiskCard from "@/components/terminal/VolRiskCard";
 import GateGaugeCard from "@/components/terminal/GateGaugeCard";
 import ShadowVetoCard from "@/components/terminal/ShadowVetoCard";
+import FuturesRadarCard from "@/components/terminal/FuturesRadarCard";
 import RawCalCard from "@/components/terminal/RawCalCard";
 import { useMounted, useNow, useDeviceNow, usePulse } from "@/hooks/usePulse";
 import { fmtClockLocal, localTzLabel } from "@/lib/format";
@@ -831,6 +832,9 @@ export default function TerminalSection() {
         <NeonBadge tone="violet">3 MODULES LIVE</NeonBadge>
       </div>
       <div className="flex flex-col gap-4">
+        {/* ── FUTURES TAXONOMY — five-family signal engine (Task 20-b: store → learn
+            → best filter; family D OI×Price quadrant grid + edge leaderboard) ── */}
+        <FuturesRadarCard />
         <FlowScannerCard />
         <LiqDepthRadarCard />
         <VolRiskCard />

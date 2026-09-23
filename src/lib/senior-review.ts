@@ -44,6 +44,7 @@ export interface SeniorReviewReport {
   ledger: { settled: number; last20PnlUsd: number; shortBook: { n: number; pnlUsd: number; expectancyPct: number }; worst: { strategy: string; n: number; expectancyPct: number; pnlUsd: number } | null };
   rawcal: { open: number; settled24h: number; note: string };
   sentinel: { verdict: string; anomalies: number; servicesDown: number } | null; // v10.21.2 — the night audit now LOOKS at the sentinel
+  futures: { rows: number; settled: number; bestFilter: string | null; quadrantTop: string | null } | null; // v10.22 — five-family store + edge study
   riskGovernor: { verdict: string; sizeMult: number; streak: number } | null;
   timeGovernor: { toxicHours: number[]; primeHours: number[]; estUpliftUsd: number } | null;
   canary: { verdict: string; line: string } | null;
@@ -226,6 +227,37 @@ export async function runSeniorReview(): Promise<SeniorReviewState> {
     /* sentinel never ran — fail-open, the audit must not break */
   }
 
+  // 3.6 — FUTURES TAXONOMY (v10.22, operator mandate «جمع‌آوری داده → ذخیره →
+  // یادگیری → بهترین فیلتر»): the night audit now reads the five-family store
+  // + edge study, so the operator sees collection maturity and the current
+  // best-filter candidate in every nightly Telegram report. Best-effort,
+  // fail-open — a cold store must never break the audit.
+  let futures: SeniorReviewReport["futures"] = null;
+  try {
+    const m = await import("@/lib/futures-taxonomy");
+    const edge = await m.buildFuturesEdge();
+    const qLine = edge.quadrantStudy
+      .map((q) => `${q.quadrant.replace(/^Q(\d)_.*/, "Q$1")} ${q.verdict} ${q.meanFwd1h >= 0 ? "+" : ""}${q.meanFwd1h}% (n=${q.n})`)
+      .join(" · ");
+    const lines = [
+      `store ${edge.rowsScanned} rows · settled fwd1h ${edge.settledRows}/${edge.maturity.target} (${edge.maturity.progressPct}%)`,
+      qLine || "quadrant study: no settled rows yet",
+      edge.bestFilter
+        ? `best filter [${edge.bestFilter.source}] ${edge.bestFilter.filter} — edge ${edge.bestFilter.edge} (n=${edge.bestFilter.n}, ${edge.bestFilter.confidence})`
+        : `best filter: COLLECTING (${edge.maturity.settled}/${edge.maturity.target} settled)`,
+      edge.attribution.joined > 0 ? `signal attribution: ${edge.attribution.joined} settled signals joined to quadrant context` : "signal attribution: waiting for settled signals",
+    ];
+    sections.push({ title: "FUTURES TAXONOMY", lines });
+    futures = {
+      rows: edge.rowsScanned,
+      settled: edge.settledRows,
+      bestFilter: edge.bestFilter ? `${edge.bestFilter.filter} (${edge.bestFilter.edge})` : null,
+      quadrantTop: edge.quadrantStudy.length ? edge.quadrantStudy.map((q) => `${q.quadrant}:${q.meanFwd1h}`).join(",") : null,
+    };
+  } catch {
+    /* futures module never ran — fail-open */
+  }
+
   // 4 — proposals (≤3, advisor-compatible guards)
   const drafts = draftFromEvidence(st, risk.cycles > 0 ? risk : null);
   for (const d of drafts) {
@@ -264,6 +296,7 @@ export async function runSeniorReview(): Promise<SeniorReviewState> {
     ledger: { settled: st.settled, last20PnlUsd: st.last20PnlUsd, shortBook: st.shortBook, worst: worst ? { strategy: worst.strategy, n: worst.n, expectancyPct: worst.expectancyPct, pnlUsd: worst.pnlUsd } : null },
     rawcal: { open, settled24h: settled24, note: rawcalNote },
     sentinel,
+    futures,
     riskGovernor: risk.cycles > 0 ? { verdict: risk.verdict, sizeMult: risk.sizeMult, streak: risk.streak } : null,
     timeGovernor: time.cycles > 0 ? { toxicHours: time.toxicHours, primeHours: time.primeHours, estUpliftUsd: time.estUpliftUsd } : null,
     canary: canary.cycles > 0 ? { verdict: canary.verdict, line: canary.line } : null,

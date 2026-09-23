@@ -1,0 +1,162 @@
+ 29080→- OPEN ITEMS for operator: (1) confirm Z.ai billing rules to parameterize credit-budget.json; (2) approve the v10.17/Task-7 code rebuild package (top priority next); (3) re-provide the passphrase file for the off-site channel decrypt path if desired (local ring no longer needs it for env recovery).
+ 29081→
+ 29082→---
+ 29083→Task ID: ADVISORY-20260924-matrix-radar
+ 29084→Agent: Z.ai Code (lead)
+ 29085→Task: Operator proposal «اجرای کل سیستم فقط بر پایه MARKET MATRIX و PUMP/DUMP RADAR» — engineering opinion (advisory only, READ-ONLY run, zero mutations).
+ 29086→
+ 29087→Work Log:
+ 29088→- Ground-truth mapping: MARKET MATRIX = MarketMovers.tsx view (top-|Δ24h| over MarketAsset) — a VIEW, not an engine; PUMP/DUMP RADAR = pump-dump.ts (692 lines, 522 PumpTrack rows, 37 tracks/24h) — detector journal whose deployments ride the SAME deploySignal path as all strategies.
+ 29089→- Weight audit (ps): total RSS 2,913MB — next-server 2,368MB (dev-mode), postcss 327MB, ALL 5 bun mini-services combined ≈163MB. Conclusion: strategy-lib removal cannot materially lighten the system; dev-server dominates.
+ 29090→- Ledger forensics (bun:sqlite STRICT readonly): 7d settled = 190 SL / 13 TP3 / 155 EXPIRED → headline WR ≈3.6%. Investigation of SL anatomy found avgMaxFav +27% (levered) on losers → degenerate births discovered: 200 lifetime SL rows with entryPrice == stopLoss EXACTLY (129 settled inside recent 7d; 110 stamped FLOWRADAR-NEO v10.6 legacy + restore catch-up artifact; 11 from current v10.16 — deploy path engine.ts:1642 stopLoss=entry*(1∓slDistPct) can degenerate when slDistPct→0). Plus 31 recent SL rows carrying POSITIVE pnl (settlement labeling defect, e.g. ONEUSDT SL +73.61%).
+ 29091→- CLEAN-cohort recompute (excluding degenerate SL births), 7d: pump 37 settled / WR 10.8% / avg −13.82% vs other 37 / WR 24.3% / avg +8.66% → pump cohort WEAKER even on clean data. Consistent with 2026-09-21 audit (pump ≈ book baseline ~30% on older window; recent window regime-broken by restore catch-up).
+ 29092→- Spawn liveness: 0 ACTIVE signals explained — GOVERNOR-HYSTERESIS active (min_score 35, set_rr_scale 0.8, set_regime_guard 2, cycle #1298) gating spawns, not engine death. Radar alive (37 tracks/24h).
+ 29093→- Delivered opinion: proposal REJECTED as big-bang (MARKET MATRIX is already the shared data plane; radar-as-sole-source contradicted by clean ledger; layer amputation removes the diagnostic instruments needed for the SL anomaly; R1-R6 doctrine + 3× platform-erasure history forbid destructive rewrites) but ADOPTED as phased product consolidation: Phase-0 fix ledger defects (slDistPct floor guard + settlement relabel + RESTORE_CATCHUP tagging) → Phase-1 demote peripheral sensors to dormant (true "lighter") → Phase-2 make MATRIX+RADAR the product spine, radar as primary source WITH gates (remove pump authorityBypass) → Phase-3 archive non-core strategies to research/ behind auditor gate. Decision requested from operator (A phased / B hard cut / C diagnose-first).
+ 29094→
+ 29095→Stage Summary:
+ 29096→- No code or data changed (advisory run). Decision-grade evidence: contaminated ledger (200 degenerate entry==SL rows, 31 misclassified SLs), pump cohort underperformance on clean data (10.8% vs 24.3% WR 7d), weight concentrated in next-server (2.37GB) not strategy libs.
+ 29097→- NEW P1 findings filed for next work package: (1) deploy-path slDistPct floor guard (engine.ts:1642), (2) settlement label integrity (SL rows with positive pnl), (3) legacy catch-up rows need RESTORE_CATCHUP annotation to keep analytics honest.
+ 29098→
+ 29099→---
+ 29100→Task ID: 8 (v10.18 — operator option A)
+ 29101→Agent: Z.ai Code (lead)
+ 29102→Task: اجرای کامل و مهندسی «گزینه A» — تثبیت فازی سیستم بر پایه MARKET MATRIX + PUMP/DUMP RADAR (فاز ۰ تا ۳ از ADVISORY-20260924-matrix-radar).
+ 29103→
+ 29104→Work Log:
+ 29105→- PHASE-0 (ledger integrity): (a) DEGEN-STOP birth guard در deploySignal بعد از محاسبه stopLoss — ردِ deploy با استاپ non-finite / سمت اشتباه / فاصله <0.25٪ + recordGateBlock(DEGEN-STOP) + رخداد INTEGRITY؛ (b) settlement integrity guard در resolveSignals — استاپِ reachedTp==0 && stop==initialStopLoss که سمت سود باشد → تسویه صادقانه TP1 + qualityFlag=DEGEN_STOP + رخداد؛ (c) ستون qualityFlag در schema.prisma + db:push + فیلتر clean-ledger در buildStats (qualityFlag:null) + شمارنده dataQuality در PlatformStats/api-types.
+ 29106→- FORENSIC CORRECTION (honesty contract): فرضیه «۲۰۰ تولد ناقص entry==SL» رد شد — همه ۲۰۰ ردیف initialStopLoss != stopLoss دارند و ۱۹۷/۲۰۰ اول سبز شده‌اند (maxPnl≥8٪) = خروج‌های قانونی BE-TRAIL؛ «۳۱ SL با سود مثبت» = TP1-trail های قانونی v5.4 (isTpWin آنها را win می‌شمارد). صفر ردیف تاریخی واجد فلگ. متدولوژی هم اصلاح شد: تعریف بردِ status-only اشتباه بود — با تعریف TP-proven پلتفرم (reachedTp≥1)، WR 7d واقعی ~23٪ است نه 3.6٪. کوهورت نهایی: pump 203/ WR 17.7٪/ avg −1.67٪ vs other 151/ WR 23.2٪/ +3.04٪.
+ 29107→- scripts/annotate-quality-flags.ts: ابزار verification ایدمپوتنت (شمارش BE-trail vs true-birth، flip خودکار pump.authority→gated، چاپ کوهورت با تعریف برد صحیح). اجرا شد — خروجی سازگار.
+ 29108→- PHASE-1 (sensor-bus dormant): src/config/engine-flags.json + src/lib/engine-flags.ts (client-safe، fail-open به دستور اپراتور)؛ pulse route: captureTopVolCauses زیر فلگ sensorBusDormant؛ AiCoreSection: سه کارت (SmartMoneyBoard/VolOnsetRadarCard/VolCauseCard) → SensorBusDormantStrip (کارت شفاف با لیست ماژول‌ها + دستور بازگردانی یک-فلگ؛ با فلگ off خودش مخفی می‌شود). ورودی‌های گیت-بحرانی (vol-forecast/flow/klines/liq) دست‌نخورده. RAWCAL همچنان disarmed (بدون تغییر).
+ 29109→- PHASE-2 (radar-primary gated): pump-dump.ts maybeSpawnSignal — شاخه direct/authorityBypass حذف؛ همه نامزدها از پشته کامل گیت‌ها (learning gate + کف ۷۸ + spacing + max-open + گیت‌های موتور)؛ getPumpAuthority همیشه "gated" (صداقت-by-construction برای بج داشبورد)؛ EngineSetting در DB هم gated شد؛ engine.ts tick: autoSpawn زیر فلگ legacyAutoSpawn=false بازنشستگی شد (trigger-bus و RAW-CAL دست‌نخورده). ENGINE_VERSION → NEXUS-LIVE v10.18.
+ 29110→- ACCEPTANCE GATE: /api/analytics/radar-probation (کوهورت رادار v10.18 vs baseline؛ ≥30 settle، ≥14d؛ PASS فقط اگر WR≥baseline && avgPnl>0؛ doctrine degraded-200). زنده و PENDING (0 rows v10.18 — vintage جدید).
+ 29111→- PHASE-3 (archive doctrine): انتقال فیزیکی research modules رد شد (backtest/research-factors/tp3-lab/near-miss همه در گراف import موتورند)؛ بازنشستگی فلگ‌محور + ثبت کامل در research/README.md §5. هیچ فایلی حذف یا جابجا نشد.
+ 29112→- VERIFICATION: (a) lint — ۱۷ خطا، همه pre-existing scripts/ operator-debris؛ صفر خطا در فایل‌های من؛ (b) restart تمیز Next (Prisma client جدید بعد از regenerate — خطای PrismaClientValidationError اولیه با restart حل شد)؛ (c) pulse 200 @ ~110ms ×2، engine events زنده (liq stream + dislocation)، verdict-core runs=465؛ (d) سنتینل: GREEN، 6/6 services؛ (e) agent-browser: صفحه رندر، صفر console/page error، MARKET MATRIX + hero + radar زنده، AI CORE نوار SENSOR BUS // DORMANT را نشان می‌دهد و کارت‌های قدیمی حذف شده‌اند، موبایل 390px سالم، footer درست (sticky روی صفحه کوتاه/پیشرانش روی بلند)، اسکرین‌شات /tmp/nexus-v1018-ai-core.png.
+ 29113→- docs/CHANGELOG-human.md: بخش کامل v10.18 ثبت شد.
+ 29114→
+ 29115→Stage Summary:
+ 29116→- v10.18 شروع به کار کرد: کتاب = MARKET MATRIX (کشف) → PUMP/DUMP RADAR (تشخیص اصلی، از دروازه گیت‌ها) → deploy؛ spawn تصادفی legacy خاموش؛ سنسورهای محیطی dormant؛ دفتر کل با گاردهای دائمی محافظت و شمارنده شفافیت مجهز شد.
+ 29117→- نرخ spawn عمداً پایین‌تر خواهد بود (کیفیت > کمیت): فقط نامزدهای رادار با conviction ≥78 + trigger-bus. دروازه ۱۴روزه radar-probation شاهد پذیرش است.
+ 29118→- اصلاح صادقانه ثبت شد: ادوای قبلی WR 3.6٪/«تولد ناقص» را اغراق‌شده گزارش کرده بود؛ اعداد تصحیح‌شده مبنای همین اجراست (worklog append-only — ادوای قبلی دست نخورد).
+ 29119→- Reversibility: یک فایل (engine-flags.json) همه رفتارها را به قبل برمی‌گرداند؛ هیچ ردیف تاریخچه‌ای بازنویسی نشد.
+ 29120→---
+ 29121→Task ID: 11 (v10.19 — operator mandate)
+ 29122→Agent: Z.ai Code (lead)
+ 29123→Task: «Shadow veto را کامل فعال کن» — full engineering activation of the shadow-veto tiered authority (code rebuild + honest leak accounting + mode=veto flip with audit).
+ 29124→
+ 29125→Work Log:
+ 29126→- GROUND TRUTH: mode=shadow (EngineSetting shadowveto.config), arms real-keep 27/30 (+$0.33) · real-veto 12/30 (+$0.68) · paper-keep 30/30 (+$7.69) · paper-veto 0/30, promotion NOT ready (n-veto 12/30, seq CONTINUE), engine wiring intact (deploy gate engine.ts:1934 + observe + link + sweeps + autoPromote), LLM grounded 100%, 0 violations.
+ 29127→- DIAGNOSIS of structural deadlock: telemetry reported 201 stale unlinked PASS verdicts → the v10.16 promotion backlog gate (blocks >10) could NEVER clear → auto-promotion permanently impossible even if arms filled. Forensic (scripts throwaway, DB×JSONL join): 279 stale unlinked → 235 STRUCTURAL ORPHANS (84% — no same-symbol|direction deploy ever existed in the ±90min window; fence adjudicates candidates that downstream gates refuse to deploy) vs 44 TRUE leaks (deploy existed, never bound — mostly from the lost-link era). Age buckets: 32 >7d (beyond link reach), 193 3-7d, 54 <3d.
+ 29128→- FORENSIC root cause #2 (the lost v10.17 link-delta): ingestVerdict was first-record-wins on seenIds — the JSONL re-persists a verdict when state UPGRADES (serial bind / outcome closure), but hydration DROPPED the linked re-write for an already-seen id → every restart reverted linked-but-unsettled verdicts to unlinked (the documented real-veto 17→12 regression after the 2026-09-21 restarts).
+ 29129→- v10.19 CODE (shadow-veto.ts, sv-telemetry.ts, api-types.ts, terminal/ShadowVetoCard.tsx):
+ 29130→  (1) LINK-DELTA REBUILD — ingestVerdict now MERGES duplicate records (serial/outcome/sweptAt upgrade, order-independent). Effect visible immediately: stale unlinked 201 → 143 on first hydration after restart.
+ 29131→  (2) ORPHAN SWEEP — retroLinkRealDeploys stamps `sweptAt` on verdicts whose ±90min fence window is fully closed AND fully covered by the query reach AND had NO same-symbol|direction deploy at all (absence = proof, not fetch artifact; take-400 coverage bound computed from the oldest fetched row). One-shot validation run: bound 0, swept 139, active leaks 143 → 17.
+ 29132→  (3) HONEST ACCOUNTING — ShadowPipelineDiag split: unlinkedPassStale = ACTIVE leaks only (stale, unswept, within 7d+90min reach; the number the promotion backlog gate + sv-telemetry alert + terminal card read); new unlinkedPassOrphan (swept, promotion-inert) + unlinkedPassAged (beyond reach, never linkable). maybeAutoPromote backlog gate + sv-telemetry realLink check + alert text + card tooltip updated to the new semantics. Also fixed a pre-existing vintage tsc error in sv-telemetry emptyShell (missing PromotionEvidence.sequential) — baseline 81 → 80.
+ 29133→- ACTIVATION: POST /api/ai/shadow-veto {mode:"veto",force:true} through the x-nexus-key control gate (first unkeyed attempt correctly refused — fail-closed verified) → {"ok":true,"mode":"veto"}; the route fired the audited ENGINE event "mode → VETO (OPERATOR FORCE — evidence gate overridden, audited)"; Telegram audit message delivered to the operator chat (ok:true, chatId confirmed).
+ 29134→- RESTART: clean Next restart (p0-watchdog pause honored) to load one coherent module generation; pulse 200 @ ~200ms; sentinel verdict GREEN, shadow block reports mode=veto from live-api source.
+ 29135→- VERIFICATION: (a) tsc 80 errors = baseline minus the one vintage error fixed; eslint clean on all 4 touched files; (b) telemetry snapshot: mode=veto, realLink detail "17 ACTIVE link leak(s) · orphans swept 139 · aged 0", pipeline {stale:17, orphan:139, aged:0, fresh:13}; (c) agent-browser: dashboard renders, sentinel minis show "veto · fence 24h≥37", TERMINAL view SHADOW VETO card shows "PHASE 0 · VETO — veto-only authority active · blocked trades paper-tracked · revocable", arms row live (27/30 · 12/30 · 30/30 · 0/30 idle), wire row "ADJ ✓ LINK ✗(17) CLOSE ✓ SWEEP ✓ LLM ✓", recent adjudications streaming (SV-1662..1667 incl. hair-pass VETOs at gap +5.0/−8.0 — the exact window veto mode now blocks on); no console/page errors; mobile 390px renders, footer pushed naturally (5464px content); screenshots /tmp/nexus-v1019-*.png.
+ 29136→- HONESTY NOTES: activation is OPERATOR-FORCED (evidence not yet full — real-veto 12/30, would-veto net +$0.68 not negative); veto stays fail-open + MODEL-verdict-only + revocable + paper-tracked per doctrine. In veto mode the real-veto arm structurally starves ("veto-but-still-traded" only via fail-open/stale paths) — the live safety signal is now the paper-veto arm (revocation pressure) filling from real blocks. The 17 residual active leaks are one-to-one collisions/coverage edges, kept visible by design; the backlog gate now measures under-linking, not the inherent orphan rate.
+ 29137→- Reversibility: one POST {mode:"shadow"} demotes; engine-flags/config untouched; no DB rows or historical evidence rewritten (JSONL additive per doctrine); throwaway forensic/sweep scripts deleted after use.
+ 29138→
+ 29139→Stage Summary:
+ 29140→- SHADOW-VETO is now FULLY ACTIVE (v10.19): AI veto authority live at the deploy gate under explicit operator mandate, evidence loop un-deadlocked (promotion gate reads honest active-leak count), restart link-loss bug class eliminated, telemetry/UI/sentinel all reporting veto with live numbers.
+ 29141→- Watch items: first real VETO block will open the first paper-veto row (revocation monitor becomes live); real arms keep filling via fence+observe; autoPromote stays armed (no-op while veto; honest gate if operator ever demotes).
+ 29142→---
+ 29143→Task ID: SENTINEL-20260921-M4
+ 29144→Agent: NEXUS-SENTINEL (Z.ai Code)
+ 29145→Task: «چرا سیگنالی صادر نمی‌شود؟ دلیل خشکسالی چیست؟» — Mission M4 intelligence-integrity diagnosis of the signal drought.
+ 29146→
+ 29147→Work Log:
+ 29148→- Read shadow-veto-latest.json (mode=veto, 600 adjudications, veto 153/25.5%, gateAgreement 74), /api/rawcal (armed=false, disarmReason "target reached — 576 EPOCH-2 settled ≥ 576" at 2026-09-19T08:32Z, settledN 632, issueRate3h 0, cadenceGrade OFF), rawcal-run-heartbeat.txt (stale since 2026-09-19T11:33Z).
+ 29149→- SQLite readonly: 28 spawns/24h, 8/6h, last spawn 118min ago, ACTIVE=0 now, byStatus SL 307 / EXPIRED 301 / TP3 31, eventsLast1h 1175, createdEvents24h 28.
+ 29150→- Radar alive: 45 PumpTracks/24h (21/6h), last detection 6min ago, 4 open. Flow sweeps every ~3min ("deployments are flow-gated (CVD/OI/funding/crowd)").
+ 29151→- Confirmed policy root cause: src/config/engine-flags.json legacyAutoSpawn=false + radarPrimary=true (v10.18 operator option A — quality>quantity doctrine, engine.ts:2285); v10.19 mode=veto adds AI veto at deploy gate (fail-open, audited).
+ 29152→- dev.log: "[calibration] R6 lift BLOCKED by rawcal quality gate — status AMBER, informative 43.4% (need GREEN or ≥50%) — weights stay frozen (v10.16)" → learning gates cannot honestly loosen yet.
+ 29153→- No code or data mutated (observer mandate). Worklog-only append.
+ 29154→
+ 29155→Stage Summary:
+ 29156→- Drought is BY DESIGN, not a failure: v10.18 retired random auto-spawn → only radar nominations passing the full gate stack (conviction ≥78 + learning gate + flow gate + spacing + radar max-open 2 + DEGEN-STOP guard) or trigger-bus events spawn; v10.19 veto fence additionally vetoes ~25%. Current spawn rate ~1.2/h with fast resolutions → 0 active windows read as "drought" on the dashboard.
+ 29157→- Honest levers (operator decisions): (1) radar-probation evidence ≥30 v10.18 settles → relax conviction/max-open on PASS; (2) re-arm RAWCAL EVID-BUDGET to push informative ≥50% → unfreeze R6 calibration; (3) quality-neutral: review EXPIRED dominance (301) for TTL sizing; (4) cosmetic: idle heartbeat for RAWCAL run loop when disarmed.
+ 29158→---
+ 29159→Task ID: 12 (v10.20 — operator mandate «کامل و مهندسی انجام بده»)
+ 29160→Agent: Z.ai Code (lead, NEXUS-SENTINEL M4 execution)
+ 29161→Task: بسته مهندسی کامل «خروج از خشکسالی سیگنال» — اجرای توصیه‌های M4 (SENTINEL-20260921-M4): باز-تسلیح EVID-BUDGET + heartbeat بومی موتور + حکم داده‌محور TTL.
+ 29162→
+ 29163→Work Log:
+ 29164→- DIAGNOSTIC VERDICTS (data-first, قبل از هر تغییر): (1) TTL-extension برای کارت‌های رادار **رد شد** — تله‌متری ttl-gate: 86 grant → 9 tpAfter (10.5%) / 7 slAfter / 39 reExpired؛ TTL رادار 60-63m در برابر میانه‌ی زمان‌تا-TP-touch 41.2m درست اندازه‌گذاری شده؛ ممنوعیت v9.3 (informative-ratio mandate) شواهدمحور و پابرجا. (2) رادار probation: radar 0/30 settled از استارت v10.18 — گیت‌ها (کف conviction 78 + flow) بدون مجوز شواهد دست نخوردند. (3) R6 lift نیازمند window informative ≥50% (اکنون 43.4%) — صدور بیشتر به‌تنهایی تضمین آب‌شدن فریز نیست (انتظار صادقانه در رویداد audit ثبت شد).
+ 29165→- v10.20 CODE (3 فایل): (a) src/lib/rawcal-heartbeat.ts جدید — نویسنده‌ی بومی `.data/rawcal-run-heartbeat.txt` از مسیر tick موتور (maybeRawCalDeploy هر 10 tick) با فرمت سازگار سنتینل (regex YYYY-MM-DDTHHMMZ)، throttle 30min حالت-پایدار، سقف 200 خط، fire-and-forget/self-catching + touch در transitions (ARMED/IDLE/ISSUE) — یافته‌ی P2#6 سنتینل (cron مرده‌ی 2026-09-19) برای همیشه بسته شد؛ (b) src/lib/raw-cal.ts — interface RawCalState.retargetNote? + import/touch در maybeRawCalDeploy (ARMED/IDLE)، issue موفق (ISSUE NX-…)، armRawCal و disarmRawCal؛ (c) src/app/api/rawcal/route.ts — POST arm پارامتر `by` (≤220 chars) برای اتریبیوشن audited برنامه‌ای (الگوی EVID-BUDGET)، پیش‌فرض داشبورد دست‌نخورده.
+ 29166→- EVID-BUDGET RE-ARM E-20260921 (throwaway script — بعد از اجرا حذف شد): هدف‌گذاری کتاب رولینگ 632→**672** (+40 settled) + retargetNote کامل (روایت دستور، trace 1a0c6257228fedbd، حکم‌های تشخیصی) + رویداد audited ENGINE/warn در SignalEvent؛ سپس ARM از مسیر کانونیک POST /api/rawcal با x-nexus-key (تلاش unkeyed اول درست reject شد — fail-closed verified) و by = "NEXUS-SUPERVISED (EVID-BUDGET RE-ARM E-20260921 …)" → {ok:true, armed:true, target:672}؛ رویداد ARMED + کارت تلگرام از خود armRawCal (زنجیره‌ی audit کامل).
+ 29167→- RESTART: dev-up.sh (pause-honored، warm) — app:200، هر دو لایه‌ی watchdog زنده.
+ 29168→- VERIFICATION: (a) lint — 17 خطا pre-existing scripts/ operator-debris؛ صفر در فایل‌های من؛ tsc صفر در فایل‌های لمس‌شده؛ (b) heartbeat زنده: خطوط ARMED transition + steady-state هر دقیقه ثبت می‌شوند (throttle داخلی)؛ (c) /api/rawcal: armed=true، target=672، retargetNote کامل، openRaw 0/8؛ (d) حلقه‌ی بلوک صادق: «scan-no-candidate — best |score| 0 vs dynamic MIN_SCORE 35» — خط لوله سالم، صدور اول منتظر نخستین کاندیدای واجد شرایط (ریتم تاریخی این runها ~1/ساعت با mean spacing 57.6m)؛ (e) agent-browser: داشبورد رندر، صفر console/page error، REPRESENTATIVE TERMINAL → کارت RAW-CAL «ARMED — UNFILTERED · AI CALIBRATION BAR 632/672 · 40 to go · OPEN 0/8 · SPACING ≥10m» + رویداد audited E-20260921 در فید زنده‌ی ENGINE TERMINAL؛ سنتینل GREEN 6/6؛ موبایل 390px سالم، footer sticky درست (bottom=844=viewport).
+ 29169→- HONESTY NOTES: خشکسالیِ صفرِ-فعالِ لحظه‌ای برطرف شدنش به نخستین ISSUE وابسته است (رخداد به‌محض واجد شرایط شدنِ اسکن صادر می‌شود)؛ این run EVIDENCE-COMPLETION است نه PnL؛ R6-unfreeze شرطی به کیفیت تسویه‌ی ردیف‌های جدید است.
+ 29170→
+ 29171→Stage Summary:
+ 29172→- v10.20 اعمال شد: RAWCAL E-20260921 مسلح (632/672)، صدور RAW-CAL مسیرِ آشکارِ پایان خشکسالی است؛ heartbeat run سنتینل دیگر هرگز «مرده» به‌نظر نمی‌رسد؛ دو لَوِرِ وسوسه‌انگیزِ بی‌شواهد (تمدید TTL رادار، شل‌کردن گیت‌ها) با داده **رد مستند** شدند — بازگشت‌پذیری کامل (disarm = POST {action:"disarm"})، هیچ ردیف تاریخی بازنویسی نشد.
+ 29173→- Watch: اولین ISSUE (نباید از mean spacing 57.6m+ فاصله‌ی نامتعارف بگیرد)، نرخ informative ردیف‌های جدید (مسیر 50%)، probation radar 0/30.
+ 29174→---
+ 29175→Task ID: 13 (RAWCAL-DROUGHT WATCHDOG — operator order)
+ 29176→Agent: Z.ai Code (lead)
+ 29177→Task: استقرار ایجنت ناظر ۳ساعته — اگر تا ددلاین حتی یک RAW-CAL صادر نشود هشدار تلگرامی «بررسی اسکنر» + گزارش استقرار به تلگرام.
+ 29178→
+ 29179→Work Log:
+ 29180→- scripts/rawcal-watchdog.ts (one-shot، خودپایان، ≤3h10m): پایش هر 10 دقیقه GET /api/rawcal (route سبک force-dynamic)؛ پنجره = armedAt (2026-09-21T22:55:45Z) + 3h → ددلاین 2026-09-22T01:55:45Z (~05:25 تهران).
+ 29181→- SUCCESS condition: issued ≥ 1 در این run یا lastIssueAt > armedAt → گزارش ✅ تلگرام + verdict file → exit 0. DEADLINE: issued=0 → گزارش 🚨 با آخرین بلاک حلقه اسکنر + دستور «به ایجنت بگویید سراغ اسکنر برود» → exit 2. سه miss متوالی API هم در گزارش ددلاین صادقانه ذکر می‌شود.
+ 29182→- تک‌نمونه‌ای (pid file .data/rawcal-watchdog.pid)؛ هرگز مقدار secret را لاگ نمی‌کند (فقط ok/msg_id)؛ verdict file: .data/rawcal-watchdog-last.json (وضعیت نهایی برای هر session بعدی)؛ لاگ: logs/rawcal-watchdog.log.
+ 29183→- DEPLOY: setsid nohup bun در پس‌زمینه → pid 25876 زنده؛ گزارش استقرار به تلگرام تحویل شد (ok=true msg=5163): پنجره، معیار موفقیت، وضعیت ARMED، open raw 0/8، آخرین بلاک اسکنر.
+ 29184→
+ 29185→Stage Summary:
+ 29186→- ناظر مستقر است: تا 01:55Z هر ۱۰ دقیقه وضعیت صدور را می‌خواند؛ اولین ISSUE → گزارش موفقیت تلگرامی و خروج؛ خشکسالی کامل → هشدار تلگرامی بررسی-اسکنر. Verdict نهایی همیشه در .data/rawcal-watchdog-last.json قابل خواندن است. هیچ ردیف دامنه‌ی معاملاتی نوشته نمی‌شود (فقط فایل‌های خودش).
+ 29187→
+ 29188→---
+ 29189→Task ID: 17 (SENIOR-REVIEW REPORT EXECUTION — «گزارش ارسالی مهندس ارشد به تلگرام را بررسی کن و مهندسی اجرا کن»)
+ 29190→Agent: Z.ai Code (lead)
+ 29191→Task: بررسی گزارش شبانه‌ی SENIOR-REVIEW (R6) ارسال‌شده به تلگرام در 2026-09-22T21:54:46Z (tg.ok=true) و اجرای مهندسی یافته‌ی قابل‌اجراهای آن.
+ 29192→
+ 29193→Work Log:
+ 29194→- RECONSTRUCTION: گزارش مهندس ارشد از EngineSetting «seniorreview.state» (گزارش کامل + tg.ok=true) بازسازی شد: LEDGER (settled 644 · last-20 +$0.04 · SHORT 30d 241/−$9.19 @ −1.34٪/trade) · RAW-CAL (1 open · 4 settled/24h) · RISK GOVERNOR (HEAVY-DEFENSIVE ×0.5 streak 200) · TIME GOVERNOR (est uplift $6.85) · UI-CANARY (AMBER — BRIDGE(HTTP 401)) · PROPOSALS (صفر — guards/cooldowns).
+ 29195→- ROOT-CAUSE (تنها یافته‌ی قابل‌اجرا = canary AMBER): کلاس stale-env. تایم‌لاین: رله‌ی تلگرام :3005 در 21:54:37 بوت شد؛ env-guard در 21:54:41 .env پاک‌شده‌ی sandbox را از snapshot ring بازیابی کرد (dev.log: «RESTORED .env from nexus-snapshot-20260922-131758.zip — 5/5 keys»). رله‌ی NEXUS_CONTROL_KEY/TOKEN را فقط یک‌بار در بوت می‌خواند → کلید خالیِ قبل از restore منجمد → fail-closed 401 ابدی روی همه‌ی مسیرهای gated → canary probe GET /api/bridge/inbox همیشه 401 (route فقط status را pass-through می‌کند). واچ‌داگ‌ها کور ماندند چون /health باز و همیشه 200 است (armed:false در /health خودِ شاهد بود). p0-watchdog (1340) بعد از restore بوت شده بود و سالم ماند؛ sentinel/trade/price-ws/liq همگی قبل از restore بوت شدند (فقط sentinel gated route دارد).
+ 29196→- FIX (بدون ری‌استارت، bun --hot): (a) mini-services/telegram-bridge/index.ts → v1.2.1: خواندن TOKEN + NEXUS_CONTROL_KEY حالا lazy و mtime-cached است (process.env اول؛ .env فقط وقتی mtime عوض شد دوباره خوانده می‌شود؛ فایل پاک‌شده → fail-closed مثل قبل) — بعد از هر restore/چرخش کلید، رله روی اولین درخواست خودش شفا می‌یابد؛ (b) mini-services/sentinel-service/index.ts → resolution به داخل controlOk منتقل شد (envFromDotenv همان سرویس از قبل per-call می‌خواند) — همان کلاس، همان اصلاح. fail-closed و constant-time compare دست‌نخورده.
+ 29197→- VERIFICATION: رله /health → armed:true (قبلاً false)؛ /inbox با کلید 200، بدون کلید 401 (fail-closed سالم)؛ مسیر دقیق canary GET /api/bridge/inbox → 200؛ چرخه‌ی رسمی POST /api/governors {module:"ui-canary",mode:"SHADOW"} → verdict **AMBER → GREEN** — «all 5 surfaces ok, max latency 229ms» (BRIDGE 11ms) با رویداد audited ENGINE/success «UI-CANARY verdict AMBER → GREEN» در فید؛ گزارش تحویل به تلگرام از خودِ رله‌ی شفا‌یافته ارسال شد (msg 5328, ok=true) که مسیر send را هم end-to-end اثبات می‌کند؛ lint: 17 error + 1 warning همگی pre-existing در scripts/ — صفر در فایل‌های لمس‌شده.
+ 29198→- OTHER REPORT ITEMS (بررسی‌شده، اقدام نکردن = تصمیم مهندسی): SHORT book −1.34٪/trade — آستانه‌ی draft-B سنیور-ریویو (−1.5٪) فعال نشد و SHORT-SIZE ×0.80 + SHORT-GUARD از قبل فعال‌اند؛ RISK GOVERNOR — leveredRiskCap همین حالا در باند شواهد 15 است (draft-D غیرفعال)؛ TIME GOVERNOR — مشورتی، تغییر ساعت‌بندی فقط از مسیر پیشنهاد/مجوز؛ PROPOSALS صفر — رفتار درست. هیچ knobی بدون پیشنهادِ ثبت‌شده تغییر نکرد (دکترین advisor-channel حفظ شد).
+ 29199→
+ 29200→Stage Summary:
+ 29201→- گزارش شبانه مهندس ارشد بررسی و بسته شد: تنها نقص واقعی آن (BRIDGE 401) ریشه‌یابی، رفع و کلاسِ خطایش (بوتِ سرویس‌ها قبل از restore محیط + خواندن یک‌باره‌ی کلید) برای همیشه بسته شد — رله و sentinel حالا self-heal هستند. UI-CANARY به GREEN بازگشت (رویداد audited). سایر بندها با استناد به داده و دکترین صرفاً watch-item ماندند. بازگشت‌پذیری: تغییرات فقط در دو mini-service و کامنت‌های نسخه — هیچ ردیف دامنه‌ای بازنویسی نشد.
+ 29202→- Watch: بوت بعدی sandbox باید بدون دخالت انسانی GREEN برسد (self-heal test واقعی)؛ SHORT book در اجراهای بعدی سنیور-ریویو (اگر ≤ −1.5٪ شد، خودش پیشنهاد draft-B را می‌سازد).
+ 29203→
+ 29204→---
+ 29205→Task ID: 18 (OPERATOR 4-QUESTION DIAGNOSIS — «چرا داده‌ها از دست می‌رود؟ analytics اشتباه؟ بازوهای veto پر نمی‌شوند؟ سنتینل نادیده گرفته می‌شود؟»)
+ 29206→Agent: Z.ai Code (lead)
+ 29207→Task: تحقیق ریشه‌ای چهار شکایت عملیات + رفع مهندسی موارد قابل‌اجرا.
+ 29208→
+ 29209→Work Log:
+ 29210→- Q1 DATA-LOSS (سه کلاس متفاوت، هیچ حذف بی‌سراندازی وجود ندارد): (الف) SignalEvents نگه‌داری 30d + سقف 80k با آرشیو JSONL اجباری قبل از prune (engine.ts pruneEvents → .data/signal-events-archive.jsonl)؛ (ب) PricePoints پنجره 48h — تلمتری طراحی‌شده؛ (ج) پاک‌سازی sandbox (.env — ترمیم env-guard) + فریز VM 13:16→21:54Z = عدم ثبت، نه حذف. Signal rows هرگز delete نمی‌شوند (646 و رو به رشد).
+ 29211→- Q2 ANALYTICS-WRONG (ریشه واقعی یافت شد): پلتفرم /etc/.z-ai-config را دوره‌ای rotate می‌کند + پاک‌سازی sandbox → موج 401 «missing X-Token» در llmRing (29 auth-fail؛ خوشه‌های 13:19، 14:55، 21:55Z) → همه‌ی کانال‌های AI در پنجره‌ها به heuristic سقوط می‌کنند (سقوط honest-labeled است). کارت SHADOW VETO «MODEL SHARE 78%» میانگین پنجره‌ی ~1هفته‌ای 600-tایی بود و وقفه را پنهان می‌کرد (سهم واقعی 24h فقط ~30-42%). FIX (v10.21.2 RECENCY TRUTH): stats.recent24h {n, modelSharePct, lastModelAgeH, lastVerdictAgeH} در shadow-veto.ts + mirror types (api-types.ts، sv-telemetry.ts) + چیپ «MODEL 24H» در ShadowVetoCard (amber اگر <50%). لینک فعلی سالم (آخرین MODEL 0.6h).
+ 29212→- Q3 SHADOW ARMS (ساختاری، نه خرابی): real-keep 26/30 · real-veto 12/30 · paper-keep 30/30 · paper-veto 0/30 (fed=0). paper-veto فقط از VETO واقعی روی کاندیدای deploy پر می‌شود؛ سه عامل: خشکسالی، دکترین MODEL-only fail-open (SV-1675 وتوی HEURISTIC در پنجره‌ی 401 مسدود نکرد — طبق قرارداد)، RAW-CAL unfiltered bypass. سیم‌کشی (shadow-veto.ts:1200) سالم. تغییر دکترین منوط به دستور اپراتور.
+ 29213→- Q4 SENTINEL-IGNORED (حق با اپراتور — دو شکاف ساختاری، هر دو بسته شد): (الف) صفحات تلگرام فقط روی flip بود → steady-AMBER ابدی ساکت → FIX (sentinel-service v1.1.2): پیام «persisting» با dwell-gate (AMBER≥30m، RED≥5m) و سقف 6h؛ (ب) هیچ مصرف‌کننده‌ای latest.json سنتینل را نمی‌خواند → FIX: بخش SENTINEL در SENIOR-REVIEW شبانه (best-effort، fail-open) — از امشب در گزارش تلگرامی شبانه می‌آید.
+ 29214→- VERIFICATION: tsc 80 = baseline دقیق (صفر در فایل‌های لمس‌شده؛ único hit مربوط به GovernorCohortsCard pre-existing)؛ lint بدون hit در فایل‌های من؛ API زنده: stats.recent24h = {n:10, modelSharePct:30, lastModelAgeH:0.6} کنار window-share 78%؛ مرورگر (بلافاصله close طبق دکترین OOM): TERMINAL → SHADOW VETO هر دو چیپ رندر (78% / 41.7%)، صفر console/page error؛ گزارش تحویل تلگرام از رله‌ی سالم (msg 5345).
+ 29215→- HONESTY: AMBER فعلی سنتینل (24 خط error در پنجره dev.log) همان موج 401 ریشة‌یابی‌شده است و با رشد لاگ خارج می‌شود؛ صفحة «persisting» حدود 30دقیقه بعد از دیپلوی این فیکس صداقتاً شلیک می‌شود (AMBER واقعاً پایدار بوده) — اولین آزمون زنده‌ی FIX است.
+ 29216→
+ 29217→Stage Summary:
+ 29218→- چهار شکایت → دو کلاس ریشه‌یابی‌شده و رفع‌شده (شفافیت recency در analytics؛ سنتینل وارد گراف توجه شد) + دو وضعیت ساختاری مستند (نگه‌داری داده با آرشیو؛ گرسنگی paper-veto معلول خشکسالی+دکترین). بازگشت‌پذیری: فقط shadow-veto stats/کارت، senior-review بخش افزودنی، sentinel پچ صفحات — هیچ رفتار مسدودسازی یا knob تغییر نکرد.
+ 29219→- Watch: اولین پیام «AMBER persisting» سنتینل (~30m)؛ اولین اجرای شبانه با بخش SENTINEL (پس از 00:00 تهران)؛ شارم paper-veto با نخستین وتوی MODEL واقعی.
+ 29220→
+ 29221→---
+ 29222→Task ID: 19 (OPERATOR MANDATE — «سیستم رو کامل شل کن و بدون محدودیتی سیگنال صادر شود» — full de-restriction)
+ 29223→Agent: Z.ai Code (lead)
+ 29224→Task: باز کردن کامل گیت‌های صدور سیگنال به دستور صریح اپراتور — از مسیرهای رسمی، با audit و snapshot بازگشت.
+ 29225→
+ 29226→Work Log:
+ 29227→- MAPPING: کل پشته‌ی صدور نقشه‌برداری شد — engine-flags (3 فلگ consolidation)، GateSettings (34 knob با CLAMPS)، لاین‌های spawn (radar / legacy autoSpawn / trigger-bus / RAW-CAL)، SHADOW-VETO mode.
+ 29228→- ROLLBACK SNAPSHOT اول نوشته شد: EngineSetting «gate.rollback.v1022» (gate JSON کامل + engine-flags قبلی + autoPromoteBefore + دستور restore).
+ 29229→- GATES (15 knob، همه داخل clamps — کران‌های مهندسی سیستم): minScore 40→12 (+minScorePinned=1: operator-owned، governor/AUTO-RELIEF/supervisor دیگر نمی‌توانند سخت‌گیر کنند) · flowVetoScore 15→4 · flowShortlist 5→6 · universeSize 40→64 · maxActive 5→8 · regimeGuard 2→0 · shortGuard 2→0 (SHORT خودکار برگشت) · chaseThrAdj 6→0 · onsetRetestGuard→0 · decisiveFilter→0 · decisiveErMin→0 · volBarrier→0 · dislocationGate→0 · ttlExtendMax 1→3.
+ 29230→- FLAGS: legacyAutoSpawn true (لاین full-universe scan-spawn بازگشت؛ رادار هم فعال ماند) · sensorBusDormant false.
+ 29231→- SHADOW-VETO: POST کانونیک {mode:"shadow"} → {ok:true} (داوری و arms ادامه، هیچ وتویی مسدود نمی‌کند) + autoPromote→false (تا پر شدن شواهد وتو را خودکار بازنگرداند) — این هم در snapshot ثبت شد.
+ 29232→- AUDIT: رویداد ENGINE/warn «OPERATOR MANDATE — FULL DE-RESTRICTION» با فهرست کامل تغییرات + هشدار انتظار + مسیر rollback در SignalEvent.
+ 29233→- VERIFY زنده: sweep 23:36 «MIN_SCORE 40, 1 candidate, 38 markets» → sweep 23:42 «MIN_SCORE 12, 39 candidates, 50 markets»؛ NX-0646/0647/0648 صادر شدند (conviction 70-78% — زیر کف قدیمی 78)؛ readback گیت‌ها + mode=shadow + flags ✓؛ canary GREEN (5 surfaces).
+ 29234→- HANDS-OFF (شفافیت در گزارش): سایزینگ/geometry (riskPerTrade، slAtrMult، rrScale، leveredRiskCap، beTrail*، earlyExit*، shortSizeMult) — مالک RISK GOVERNOR است (فعلن HEAVY-DEFENSIVE ×0.5 اعمال می‌کند)؛ dedup/anti-late-entry و DEGEN-STOP (شکن‌گری دفتر/ضد-هرز، نه گیت کیفیت)؛ RAW-CAL capture.
+ 29235→- DELIVERY: تلگرام (msg از رله) + حذف اسکریپت یک‌بارمصرف.
+ 29236→
+ 29237→Stage Summary:
+ 29238→- سیستم به «بازترین حالت داخل کرانه‌های مهندسی» رسید: bar روی کف 12 و pin شده، هر چهار لاین صدور فعال، هیچ وتوی مسدودکننده‌ای نمانده، 39 کاندیدای همزمان در سویپ. بازگشت کامل = یک کلید (gate.rollback.v1022). انتظار صادقانه ثبت شد: حجم ↑ شدید، میانگین کیفیت ↓ (پروفایل قبل از v10.18) — RISK GOVERNOR سایز دفاعی را نگه می‌دارد.
+ 29239→- Watch: نخستین spawn لاین legacy (تگ نداشتن EVENT-TRIGGER)، رفتار SHORT-GATE آزادشده در دفتر 30d آینده، اینکه governor با pin دیگر minScore را بالا نبرد.
+
+[showing lines 29080-29239 of 29240; use offset=29240 with limit to continue reading]
