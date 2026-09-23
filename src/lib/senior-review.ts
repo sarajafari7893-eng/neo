@@ -45,6 +45,7 @@ export interface SeniorReviewReport {
   rawcal: { open: number; settled24h: number; note: string };
   sentinel: { verdict: string; anomalies: number; servicesDown: number } | null; // v10.21.2 — the night audit now LOOKS at the sentinel
   futures: { rows: number; settled: number; bestFilter: string | null; quadrantTop: string | null } | null; // v10.22 — five-family store + edge study
+  telegramIntake: { open: number; oldestAgeH: number } | null; // v10.23 — operator messages can no longer die unread
   riskGovernor: { verdict: string; sizeMult: number; streak: number } | null;
   timeGovernor: { toxicHours: number[]; primeHours: number[]; estUpliftUsd: number } | null;
   canary: { verdict: string; line: string } | null;
@@ -258,6 +259,29 @@ export async function runSeniorReview(): Promise<SeniorReviewState> {
     /* futures module never ran — fail-open */
   }
 
+  // 3.7 — TELEGRAM INTAKE (v10.23, operator finding «پل تلگرام پیام های ارسالی
+  // به محیط سندباکس را نمی خواند»): operator Telegram messages were ingested +
+  // LLM-answered but never reached the engineering agent — they died silently
+  // in the transcript. The v8.4 ops-intake queue now feeds the night audit:
+  // every open item is listed here so an unread operator mandate can never
+  // rot for a full day again. Best-effort, fail-open.
+  let telegramIntake: SeniorReviewReport["telegramIntake"] = null;
+  try {
+    const { readOpenTasks, countOpenTasks } = await import("@/lib/telegram-bridge");
+    const openTasks = readOpenTasks(5);
+    const open = countOpenTasks();
+    sections.push({
+      title: "TELEGRAM INTAKE",
+      lines: [
+        open === 0 ? "queue empty — every operator message picked up" : `${open} OPEN task(s) waiting for the agent`,
+        ...openTasks.map((t) => `${t.id}: ${t.text.slice(0, 90)}${t.text.length > 90 ? "…" : ""}`),
+      ],
+    });
+    telegramIntake = { open, oldestAgeH: openTasks.length ? Math.round((Date.now() - openTasks[0].ts) / 3_600_000 * 10) / 10 : 0 };
+  } catch {
+    /* bridge module cold — fail-open */
+  }
+
   // 4 — proposals (≤3, advisor-compatible guards)
   const drafts = draftFromEvidence(st, risk.cycles > 0 ? risk : null);
   for (const d of drafts) {
@@ -297,6 +321,7 @@ export async function runSeniorReview(): Promise<SeniorReviewState> {
     rawcal: { open, settled24h: settled24, note: rawcalNote },
     sentinel,
     futures,
+    telegramIntake,
     riskGovernor: risk.cycles > 0 ? { verdict: risk.verdict, sizeMult: risk.sizeMult, streak: risk.streak } : null,
     timeGovernor: time.cycles > 0 ? { toxicHours: time.toxicHours, primeHours: time.primeHours, estUpliftUsd: time.estUpliftUsd } : null,
     canary: canary.cycles > 0 ? { verdict: canary.verdict, line: canary.line } : null,

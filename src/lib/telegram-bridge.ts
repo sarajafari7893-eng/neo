@@ -62,9 +62,23 @@ const BRIDGE_DIR = path.join(process.cwd(), "db", "bridge");
 const STATE_FILE = path.join(BRIDGE_DIR, "state.json");
 const INBOX_FILE = path.join(BRIDGE_DIR, "inbox.ndjson");
 const OUTBOX_FILE = path.join(BRIDGE_DIR, "outbox.ndjson");
+const TASK_QUEUE_FILE = path.join(BRIDGE_DIR, "task-queue.ndjson");
 const POLL_TIMEOUT_S = 25;
 const AUTO_REPLY_MIN_GAP_MS = 12_000;
 const MAX_TEXT = 4000;
+
+// ── v8.4 TELEGRAM OPS INTAKE (operator round 2026-09-23) ────────────────────
+// «پل تلگرام پیام های ارسالی به محیط سندباکس را نمی خواند» — root cause: the
+// Telegram message WAS ingested and even answered by the LLM auto-reply, but
+// it never reached the engineering agent — the platform IM gateway (zai-web)
+// is a separate channel with no local injection API, so real engineering
+// tasks died silently in the transcript. FIX: every ingested operator text is
+// durably queued here with a TQ id and ACKed in Telegram immediately
+// (independent of the 12s-rate-limited LLM auto-reply). Pickup paths:
+//   (a) the agent reads this queue at every session start (worklog protocol),
+//   (b) the nightly senior-review TELEGRAM INTAKE section lists open items —
+// so nothing stays unread. Append-only: completion = a NEW line, same id,
+// status "picked"/"done" (last line per id wins — no in-place rewrites).
 
 export interface BridgeState {
   offset: number;
@@ -348,8 +362,65 @@ async function pollOnceInner(longPoll: boolean): Promise<number> {
     s.lastIngestAt = msg.ts;
   }
   if (accepted.length > 0) saveState(s);
+  // v8.4 OPS INTAKE — durable queue + Telegram ack BEFORE any LLM latency
+  await intakeTasks(accepted);
   for (const msg of accepted) await maybeAutoReply(msg, s);
   return ingested;
+}
+
+/** v8.4 — queue every accepted operator text as an open task + ack the chat. */
+async function intakeTasks(msgs: BridgeMessage[]): Promise<void> {
+  if (msgs.length === 0) return;
+  const ids: string[] = [];
+  for (const msg of msgs) {
+    const id = `TQ-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+    ids.push(id);
+    appendNdjson(TASK_QUEUE_FILE, { id, ts: msg.ts, text: msg.text, status: "open" });
+  }
+  try {
+    const open = countOpenTasks();
+    const head = msgs.length === 1 ? "پیام شما" : `${msgs.length} پیام شما`;
+    await sendDirect(
+      `📥 ${head} در «صف مهندسی سندباکس» ثبت شد (${ids.join(", ")}) — باز: ${open}.\n` +
+      "ایجنت در نخستین سشن کاری آن را برمی‌دارد؛ برای پاسخ لحظه‌ای از کانال وب استفاده کنید."
+    );
+  } catch { /* ack is best-effort — the queue row is the durable record */ }
+}
+
+/** v8.4 — open-task count: last line per id wins (append-only queue). */
+export function countOpenTasks(): number {
+  try {
+    const statusById = new Map<string, string>();
+    for (const line of fs.readFileSync(TASK_QUEUE_FILE, "utf8").split("\n")) {
+      if (!line.trim()) continue;
+      try {
+        const j = JSON.parse(line) as { id?: string; status?: string };
+        if (j.id) statusById.set(j.id, j.status ?? "open");
+      } catch { /* torn line → skip */ }
+    }
+    let n = 0;
+    for (const st of statusById.values()) if (st === "open" || st === "picked") n++;
+    return n;
+  } catch { return 0; /* queue file not created yet */ }
+}
+
+/** v8.4 — open tasks for callers that render them (senior-review, dashboard). */
+export function readOpenTasks(limit = 10): { id: string; ts: number; text: string; status: string }[] {
+  try {
+    const lastById = new Map<string, { id: string; ts: number; text: string; status: string }>();
+    for (const line of fs.readFileSync(TASK_QUEUE_FILE, "utf8").split("\n")) {
+      if (!line.trim()) continue;
+      try {
+        const j = JSON.parse(line) as { id?: string; ts?: number; text?: string; status?: string };
+        if (!j.id) continue;
+        const prev = lastById.get(j.id);
+        lastById.set(j.id, { id: j.id, ts: j.ts ?? prev?.ts ?? 0, text: j.text ?? prev?.text ?? "", status: j.status ?? "open" });
+      } catch { /* torn line → skip */ }
+    }
+    const open = [...lastById.values()].filter((t) => t.status === "open" || t.status === "picked");
+    open.sort((a, b) => a.ts - b.ts); // oldest first — longest-waiting on top
+    return open.slice(0, limit);
+  } catch { return []; }
 }
 
 // rate-limited (10min) warn throttle for ingest allowlist rejections/bootstrap

@@ -51,3 +51,33 @@
 - `2026-09-23T09:40:31.740Z` ENV-GUARD: .env auto-restored from local snapshot ring (nexus-snapshot-20260923-010846.zip) — 5/5 keys, bridge re-arm issued. Erasure forensics: .env-erased/erased-1790156431539.txt
 
 - `2026-09-23T11:24:21.105Z` ENV-GUARD: .env auto-restored from local snapshot ring (nexus-snapshot-20260923-094159.zip) — 5/5 keys, bridge re-arm issued. Erasure forensics: .env-erased/erased-1790162660959.txt
+
+- `2026-09-23T13:11:19.610Z` ENV-GUARD: .env auto-restored from local snapshot ring (nexus-snapshot-20260923-125511.zip) — 5/5 keys, bridge re-arm issued. Erasure forensics: .env-erased/erased-1790169078940.txt
+
+- `2026-09-23T16:02:38.203Z` ENV-GUARD: .env auto-restored from local snapshot ring (nexus-snapshot-20260923-125511.zip) — 5/5 keys, bridge re-arm issued. Erasure forensics: .env-erased/erased-1790179357490.txt
+
+- `2026-09-23T16:48:11.908Z` ENV-GUARD: .env auto-restored from local snapshot ring (nexus-snapshot-20260923-160734.zip) — 5/5 keys, bridge re-arm issued. Erasure forensics: .env-erased/erased-1790182091499.txt
+
+- `2026-09-23T18:03:07.245Z` ENV-GUARD: .env auto-restored from local snapshot ring (nexus-snapshot-20260923-160734.zip) — 5/5 keys, bridge re-arm issued. Erasure forensics: .env-erased/erased-1790186586995.txt
+
+- `2026-09-23T18:33:16.280Z` ENV-GUARD: .env auto-restored from local snapshot ring (nexus-snapshot-20260923-160734.zip) — 5/5 keys, bridge re-arm issued. Erasure forensics: .env-erased/erased-1790188395646.txt
+
+- `2026-09-23T19:21:36.739Z` ENV-GUARD: .env auto-restored from local snapshot ring (nexus-snapshot-20260923-160734.zip) — 5/5 keys, bridge re-arm issued. Erasure forensics: .env-erased/erased-1790191296582.txt
+
+- `2026-09-23T21:44:08.497Z` ENV-GUARD: .env auto-restored from local snapshot ring (nexus-snapshot-20260923-192303.zip) — 5/5 keys, bridge re-arm issued. Erasure forensics: .env-erased/erased-1790199847882.txt
+
+- `2026-09-23T21:44:12.805Z` DAILY-SCHEDULER: SRE engineering daily auto-sent for Tehran day 2026-09-24 (self-driving)
+
+- `2026-09-24T09:23:20.833Z` ENV-GUARD: .env auto-restored from local snapshot ring (nexus-snapshot-20260923-192303.zip) — 5/5 keys, bridge re-arm issued. Erasure forensics: .env-erased/erased-1790241800261.txt
+
+- `2026-09-25T16:06:42.331Z` ENV-GUARD: .env auto-restored from local snapshot ring (nexus-snapshot-20260925-122006.zip) — 5/5 keys, bridge re-arm issued. Erasure forensics: .env-erased/erased-1790352401596.txt
+
+- `2026-09-25T16:06:46.836Z` DAILY-SCHEDULER: daily performance report auto-sent for Tehran day 2026-09-25 (self-driving, no platform cron)
+
+- `2026-09-25T16:06:52.569Z` DAILY-SCHEDULER: SRE engineering daily auto-sent for Tehran day 2026-09-25 (self-driving)
+
+- `2026-09-25T20:40:37.626Z` ENV-GUARD: .env auto-restored from local snapshot ring (nexus-snapshot-20260925-192245.zip) — 5/5 keys, bridge re-arm issued. Erasure forensics: .env-erased/erased-1790368837433.txt
+
+- `2026-09-25T20:40:42.522Z` DAILY-SCHEDULER: daily performance report auto-sent for Tehran day 2026-09-26 (self-driving, no platform cron)
+
+- `2026-09-25T21:03:11.354Z` DAILY-SCHEDULER: SRE engineering daily auto-sent for Tehran day 2026-09-26 (self-driving)

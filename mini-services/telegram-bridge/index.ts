@@ -46,6 +46,25 @@ const APP_STATE = path.join(ROOT, "db", "bridge", "state.json");
 const PORT = 3005;
 fs.mkdirSync(STATE, { recursive: true });
 
+// ── singleton guard (v1.2.2, 2026-09-23) ──
+// The platform spawner (.zscripts/dev.sh) double-started every mini-service on
+// the morning boot — the relay zombie sat idle (EADDRINUSE), but the same
+// class of duplicate on a polling service burns exchange weight and on THIS
+// service could double-send. Guard: pid lockfile; a second live instance
+// exits before binding. bun --hot re-evals with the SAME pid → keeps the lock.
+const RELAY_LOCK = path.join(STATE, "relay.pid");
+try {
+  const prev = Number(fs.readFileSync(RELAY_LOCK, "utf8").trim());
+  if (prev && prev !== process.pid) {
+    try {
+      process.kill(prev, 0);
+      console.error(`[RELAY] another relay instance is alive (pid ${prev}) — exiting`);
+      process.exit(0);
+    } catch { /* stale lock — take over */ }
+  }
+} catch { /* first boot */ }
+fs.writeFileSync(RELAY_LOCK, String(process.pid));
+
 // ── env bootstrap (boot seed; v1.2.1 makes resolution lazy below) ──
 if (!process.env.TELEGRAM_BOT_TOKEN) {
   try {
