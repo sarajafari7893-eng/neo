@@ -29319,3 +29319,21 @@ Stage Summary:
 - بعد از اجازه: چرخه‌ی خودکار ۱۰ دقیقه‌ای تمام تاریخچه (۲۰+ کامیت) را بالا می‌برد؛ نیازی به دستور جدید نیست
 - درس طلایی rollback #4: هر مصنوعی که داخل گیت commit نشود در restore بعدی می‌میرد؛ از این پس هر سرویس/اسکریپت/سند بلافاصله وارد گیت می‌شود
 - تسک NEXUS-LIVE-HARDENING-MASTER-v1.0 پیش از شروع Phase 1 با این rollback قطع شد؛ بعد از تأیید push، از Phase 1 (ARCHITECTURE-MAP) ادامه داده می‌شود
+
+---
+Task ID: 30-b (addendum)
+Agent: Z.ai Code
+Task: تکمیل بازسازی — کشف مکانیسم بقای پروسه و گارد watchdog
+
+Work Log:
+- کشف کلیدی: پروسه‌هایی که از شل agent اسپاون می‌شوند با پایان همان tool call کشته می‌شوند (حتی با setsid/nohup) — فقط فرزندان پروسه‌های بوت-تایم زنده می‌مانند
+- راه‌حل: route جدید POST /api/nexus/armor-boot (گیت x-nexus-key دو لایه) که armor و watchdog را به‌عنوان orphan از پروسه‌ی Next.js spawn می‌کند — بقای armor (pid 5865) از مرز call ها تأیید شد
+- باگ حین عملیات: افزودن کلید armor به SVCS در watchdog بدون کلید متناظر در record state → TypeError در اولین tick → watchdog v1.3.0 با state.armor کامل شد
+- اسکراب امنیتی کامل شد: صفر اثر .env در تمام refs (filter-branch در کلون ایزوله چون سرویس‌های زنده worktree را دائم کثیف می‌کنند) — ۱۹ کامیت حفظ شد
+- lint: ۱۷ خطای require در scripts/ = pre-existing baseline؛ فایل‌های جدید صفر خطا
+- کامیت‌های armor: 4a6bc96، 68f924b (worklog Task 30 + سرویس‌های بازسازی‌شده داخل گیت)
+
+Stage Summary:
+- زره‌ی push v2.0 زنده، guard شده توسط watchdog v1.3.0 (7 سرویس)، و خودش داخل گیت است — مثلث بقای کامل
+- push همچنان 403 (انتظار مجوز Contents: write از اپراتور) — پس از اجازه، چرخه‌ی ۱۰ دقیقه‌ای خودکار همه‌چیز را بالا می‌برد
+- درس ماندگار: هیچ سرویسی نباید فقط با nohup از شل استارت شود؛ یا watchdog heal یا armor-boot route
