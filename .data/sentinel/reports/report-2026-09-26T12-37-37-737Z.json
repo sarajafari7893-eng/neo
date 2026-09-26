@@ -1,24 +1,35 @@
 {
  "schemaVersion": 1,
  "kind": "deep",
- "at": "2026-09-21T23:30:40.076Z",
- "tehran": "22/09/2026, 03:00:40",
- "verdict": "GREEN",
- "anomalies": [],
+ "at": "2026-09-26T12:37:37.736Z",
+ "tehran": "26/09/2026, 16:07:37",
+ "verdict": "RED",
+ "anomalies": [
+  {
+   "sev": "crit",
+   "area": "dev.log",
+   "msg": "11 OOM markers in recent log window"
+  },
+  {
+   "sev": "warn",
+   "area": "dev.log",
+   "msg": "180 error lines in recent log window"
+  }
+ ],
  "services": [
   {
    "key": "app",
    "label": "app :3000",
    "up": true,
    "status": 200,
-   "ms": 21
+   "ms": 10
   },
   {
    "key": "ws",
    "label": "price-ws :3003",
    "up": true,
    "status": 400,
-   "ms": 1
+   "ms": 2
   },
   {
    "key": "bridge",
@@ -50,57 +61,59 @@
   }
  ],
  "mem": {
-  "availableMb": 934
+  "availableMb": 876
  },
  "disk": {
-  "rootFreeGb": 5.52,
-  "tmpFreeGb": 5.52
+  "rootFreeGb": 5.93,
+  "tmpFreeGb": 5.93
  },
  "db": {
   "ok": true,
-  "signals": 639,
-  "events": 30597,
-  "prices": 18058,
-  "assets": 38,
-  "pumps": 537,
-  "events1h": 1459,
-  "lastEventAgeMs": 4927,
+  "signals": 727,
+  "events": 82615,
+  "prices": 18533,
+  "assets": 61,
+  "pumps": 738,
+  "events1h": 4948,
+  "lastEventAgeMs": 2724,
   "stuckActive": 0,
   "orphanEvents": 0,
   "stuckPumpTracks": 0,
-  "dbBytes": 21950464,
-  "walBytes": 4152992
+  "dbBytes": 29573120,
+  "walBytes": 4144752
  },
  "backup": {
   "ok": true,
   "dir": "/tmp/my-project/backups",
-  "encCount": 1,
+  "encCount": 12,
   "zipCount": 12,
-  "newestEncMs": 1790023700597.2458,
-  "newestAnyMs": 1790023700597.2458,
-  "encAgeMs": 9739389.75415039
+  "newestEncMs": 1790423576009.2568,
+  "newestAnyMs": 1790423576009.2568,
+  "encAgeMs": 2681670.7431640625
  },
  "watchdog": {
   "ok": true,
-  "ver": "p0-watchdog 1.2.0",
+  "ver": "p0-watchdog 1.4.0",
   "modes": {
    "app": "ok",
    "liq": "ok",
    "ws": "ok",
    "bridge": "ok",
    "trade": "ok",
-   "sentinel": "ok"
+   "sentinel": "ok",
+   "armor": "ok",
+   "cron": "ok"
   },
   "nonOk": 0,
   "memLevel": "ok",
-  "memAvailableMb": 939,
+  "memAvailableMb": 884,
   "paused": false
  },
  "log": {
-  "windowLines": 2832,
-  "errors": 2,
-  "http500": 0,
-  "oom": 0,
+  "windowLines": 4790,
+  "errors": 180,
+  "http500": 159,
+  "oom": 11,
   "enospc": 0,
   "hydration": 0,
   "unhandled": 0,
@@ -109,40 +122,46 @@
  "shadow": {
   "ok": true,
   "source": "live-api",
-  "mode": "veto",
-  "generatedAt": "2026-09-21T23:30:40.002Z",
+  "mode": "shadow",
+  "generatedAt": "2026-09-26T12:37:37.690Z",
   "stats": {
    "total": 600,
-   "passSide": 218,
-   "rejectSide": 382,
-   "vetoCount": 153,
-   "tradeCount": 447,
-   "modelSharePct": 79.2,
+   "passSide": 177,
+   "rejectSide": 423,
+   "vetoCount": 269,
+   "tradeCount": 331,
+   "modelSharePct": 53.3,
    "modelGroundedPct": 100,
-   "avgConfidence": 82.9,
-   "gateAgreement": 74,
-   "paperOpen": 2,
-   "paperSettled": 58
+   "avgConfidence": 71.9,
+   "gateAgreement": 172,
+   "paperOpen": 13,
+   "paperSettled": 47,
+   "recent24h": {
+    "n": 98,
+    "modelSharePct": 10.2,
+    "lastModelAgeH": 15.1,
+    "lastVerdictAgeH": 0
+   }
   },
   "arms": [
    {
     "id": "real-keep",
-    "n": 27,
+    "n": 2,
     "target": 30,
-    "pct": 90,
+    "pct": 7,
     "starved": false,
     "reachable": true,
-    "fed": 139,
+    "fed": 80,
     "lastFedAgeH": null
    },
    {
     "id": "real-veto",
-    "n": 12,
+    "n": 1,
     "target": 30,
-    "pct": 40,
+    "pct": 3,
     "starved": false,
     "reachable": true,
-    "fed": 79,
+    "fed": 97,
     "lastFedAgeH": null
    },
    {
@@ -166,22 +185,22 @@
     "lastFedAgeH": null
    }
   ],
-  "fillPct": 57,
-  "fillPctReach": 57,
-  "nSum": 69,
+  "fillPct": 28,
+  "fillPctReach": 28,
+  "nSum": 33,
   "tSum": 120,
-  "nSumReach": 69,
+  "nSumReach": 33,
   "tSumReach": 120,
-  "fenceEntries24hFloor": 37
+  "fenceEntries24hFloor": 156
  },
  "rawcal": {
   "armed": true,
-  "issued": 0,
-  "issuedTotal": 166,
-  "target": 672,
+  "issued": 5,
+  "issuedTotal": 206,
+  "target": 770,
   "heartbeatAgeH": 0,
-  "heartbeatAt": "2026-09-21T2330Z ARMED issued=0/166 target=672"
+  "heartbeatAt": "2026-09-26T1237Z ARMED issued=5/206 target=770"
  },
- "uptimeSec": 9000,
+ "uptimeSec": 14400,
  "ver": "nexus-sentinel 1.1.1"
 }
