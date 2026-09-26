@@ -1,0 +1,766 @@
+     1→// ── NEXUS//AI — LLM bridge (server-only) ──
+     2→import fs from "node:fs/promises";
+     3→import fsSync from "node:fs";
+     4→import os from "node:os";
+     5→import path from "node:path";
+     6→import ZAI from "z-ai-web-dev-sdk";
+     7→import { auditGrounding, findMockMarkers, type GroundingAudit } from "./veracity";
+     8→import { getAiSettings, THOUGHT_CHANNELS } from "./ai-settings";
+     9→
+    10→// ── v6.7.4 THOUGHT-CORE — operator-upgradeable reasoning mode ──
+    11→// Every judgment channel resolves its `thinking` parameter through ONE helper
+    12→// backed by the operator-owned EngineSetting key "ai" (default ON). The
+    13→// deep-learn research desk is hard-wired to thought (it IS the thought
+    14→// channel); the symbol scanner stays fast by contract. Fails open to the
+    15→// per-channel default so a settings hiccup never bricks the AI stack.
+    16→type ThinkingParam = { type: "enabled" | "disabled" };
+    17→const THOUGHT: ThinkingParam = { type: "enabled" };
+    18→const FAST: ThinkingParam = { type: "disabled" };
+    19→
+    20→export async function resolveThinking(channel: keyof typeof THOUGHT_CHANNELS | "deep-learn"): Promise<ThinkingParam> {
+    21→  try {
+    22→    const ai = await getAiSettings();
+    23→    const follows = THOUGHT_CHANNELS[channel] ?? false;
+    24→    return ai.thoughtMode === 1 && follows ? THOUGHT : FAST;
+    25→  } catch {
+    26→    return THOUGHT_CHANNELS[channel] ? THOUGHT : FAST;
+    27→  }
+    28→}
+    29→
+    30→// ── v6.0 VERACITY WIRING — «هیچ توهم و شبیه سازی انجام نشه» ──
+    31→// EVERY model output is (a) recorded into the supervisor's outcome ring and
+    32→// (b) grounding-audited number-by-number against the measured bundle it saw.
+    33→// VIOLATION verdicts become audited HALLUCINATION findings; analyst-chat
+    34→// replies additionally get an operator-visible honesty footnote.
+    35→function reportOutcome(source: string, outcome: "MODEL" | "HEURISTIC" | "ERROR", detail?: string): void {
+    36→  void import("./supervisor")
+    37→    .then((m) => m.noteLlmOutcome(source, outcome, detail))
+    38→    .catch(() => undefined);
+    39→}
+    40→function reportAudit(source: string, bundle: string, response: string): void {
+    41→  try {
+    42→    const audit = auditGrounding(bundle, response);
+    43→    void import("./supervisor")
+    44→      .then((m) => m.noteGroundingAudit(source, audit))
+    45→      .catch(() => undefined);
+    46→  } catch {
+    47→    /* audit must never break the bridge */
+    48→  }
+    49→}
+    50→
+    51→const SYSTEM_ANALYST = `You are FLOWRADAR-AI, the elite crypto market analyst of FlowRadar Neo inside a professional trading signal terminal.
+    52→Rules:
+    53→- LANGUAGE: always reply in the SAME language as the operator's last message (Persian/Farsi if they write in Persian, English if they write in English).
+    54→- CLARITY FIRST: open with a ONE-sentence direct answer, then the numbers behind it. No filler, no hedging boilerplate.
+    55→- GROUNDED: when a LIVE TELEMETRY bundle is present, cite ONLY numbers from it (they are measured in real time). If a number is not in the bundle, say the live feed does not cover it — NEVER guess from training data and NEVER present recalled figures as live.
+    56→- Be precise and quantitative. Use trading terminology (liquidity, CVD, funding, OI, structure).
+    57→- Never give financial advice guarantees; this is simulated analytics.
+    58→- Keep answers under 180 words unless asked otherwise.
+    59→- Format with short paragraphs or bullet lines. No markdown headers, plain text with "•" bullets is fine.`;
+    60→
+    61→// v5.2 TOKEN RESILIENCE — root-cause fix for "analyst lost its neural link":
+    62→// the platform rotates /etc/.z-ai-config periodically, but the SDK singleton
+    63→// cached the OLD token forever → every call 401'd (missing/invalid X-Token)
+    64→// and the whole AI stack silently degraded to heuristics. Now: (a) the config
+    65→// file mtime is watched — a rotated token transparently re-creates the client;
+    66→// (b) any 401/X-Token failure triggers one forced reload + retry.
+    67→let zaiInstance: Awaited<ReturnType<typeof ZAI.create>> | null = null;
+    68→let zaiStamp = "";
+    69→
+    70→async function configStamp(): Promise<string> {
+    71→  const paths = [path.join(process.cwd(), ".z-ai-config"), path.join(os.homedir(), ".z-ai-config"), "/etc/.z-ai-config"];
+    72→  for (const p of paths) {
+    73→    try {
+    74→      const st = await fs.stat(p);
+    75→      return `${p}:${Math.round(st.mtimeMs)}`;
+    76→    } catch {
+    77→      /* try next */
+    78→    }
+    79→  }
+    80→  return "";
+    81→}
+    82→
+    83→async function getZAI(force = false): Promise<Awaited<ReturnType<typeof ZAI.create>>> {
+    84→  const stamp = await configStamp();
+    85→  if (!force && zaiInstance && stamp === zaiStamp) return zaiInstance;
+    86→  zaiInstance = await ZAI.create();
+    87→  zaiStamp = stamp;
+    88→  return zaiInstance;
+    89→}
+    90→
+    91→/** Invalidate the cached client (called by the supervisor on LLM health alerts). */
+    92→export function invalidateZai(): void {
+    93→  zaiInstance = null;
+    94→  zaiStamp = "";
+    95→}
+    96→function retriableAuth(err: unknown): boolean {
+    97→  const m = String(err);
+    98→  return m.includes("401") || m.includes("X-Token") || m.includes("token");
+    99→}
+   100→
+   101→/** Run an SDK call with transparent token-rotation recovery (retry once) and a
+   102→ * HARD TIMEOUT — v5.4 hardening: the deep-learn research call (thinking mode)
+   103→ * hung indefinitely and wedged the whole POST route; every AI call is now
+   104→ * capped (default 90s) so callers fall back to their heuristic paths. */
+   105→const AI_CALL_TIMEOUT_MS = Number(process.env.AI_CALL_TIMEOUT_MS ?? 90_000);
+   106→
+   107→// ── v8.4.1 429 BUDGET SHIELD — root-cause fix for "Neural link degraded" ──
+   108→// The platform rate-limits the LLM API (HTTP 429). Background consumers
+   109→// (shadow-veto adjudication, governor, deep-learn, symbol analysis) were
+   110→// hammering a throttled API 24/7 — 1700+ 429s in one log — which starved the
+   111→// OPERATOR-facing calls (analyst chat, card briefs) and produced the
+   112→// degraded-neural-link state. Doctrine: the operator comes FIRST. On a 429 a
+   113→// global escalating cooldown opens; background-tier calls fail FAST (their
+   114→// callers already have honest heuristic fallbacks) instead of burning quota;
+   115→// operator-tier calls still attempt through the cooldown.
+   116→let llm429Until = 0;
+   117→let llm429Streak = 0;
+   118→let lastLlmOkAt = 0;
+   119→const LLM_COOLDOWN_CAP_MS = 10 * 60_000;
+   120→
+   121→// v8.4.1 BG BUDGET — proactive HOURLY cap for background-tier calls. The 429
+   122→// shield is reactive (opens AFTER the provider throttles us); this cap is
+   123→// preventive: shadow adjudication + governor + symbol-scan + deep-learn share
+   124→// one hard hourly budget, so the provider quota never starves and the
+   125→// OPERATOR tier (aiChat / card briefs) always has headroom. Reactive +
+   126→// preventive together = a stable neural link instead of 429 storms.
+   127→const BG_BUDGET_PER_HOUR = Math.max(4, Number(process.env.LLM_BG_BUDGET_PER_HOUR ?? 24));
+   128→let bgHourBucket = Math.floor(Date.now() / 3_600_000);
+   129→let bgCallsThisHour = 0;
+   130→
+   131→function is429(err: unknown): boolean {
+   132→  const m = String(err);
+   133→  return m.includes("429") || m.toLowerCase().includes("too many requests");
+   134→}
+   135→
+   136→function note429(): void {
+   137→  // v8.4.1 N5 — escalation hygiene: a 429 observed INSIDE an open cooldown
+   138→  // window must not extend or escalate it. Operator-tier attempts (and the N3
+   139→  // probe) legitimately pass through the window; without this guard each such
+   140→  // attempt inflated the streak and pushed recovery further away — the exact
+   141→  // "429 COOLDOWN 37s → 240s → 8m" treadmill the operator reported.
+   142→  if (Date.now() < llm429Until) {
+   143→    console.warn(`[ai] 429 inside open cooldown window — window keeps its course (streak ${llm429Streak}, no escalation)`);
+   144→    return;
+   145→  }
+   146→  llm429Streak += 1;
+   147→  const cd = Math.min(30_000 * Math.pow(2, llm429Streak - 1), LLM_COOLDOWN_CAP_MS); // 30s→60s→2m→4m→8m→10m cap
+   148→  llm429Until = Date.now() + cd;
+   149→  console.warn(`[ai] 429 budget shield: cooldown ${Math.round(cd / 1000)}s (streak ${llm429Streak}) — background tier parked, operator tier protected`);
+   150→}
+   151→
+   152→function noteLlmOk(): void {
+   153→  llm429Streak = 0;
+   154→  llm429Until = 0;
+   155→  lastLlmOkAt = Date.now();
+   156→}
+   157→
+   158→/** Live LLM health for the supervisor/UI — is the neural link cooling down? */
+   159→export function llmHealth(): { cooling: boolean; cooldownRemainsMs: number; consecutive429: number; lastOkAt: number | null; bgUsed: number; bgBudget: number } {
+   160→  const now = Date.now();
+   161→  const cooling = now < llm429Until;
+   162→  const bucket = Math.floor(now / 3_600_000);
+   163→  const bgUsed = bucket === bgHourBucket ? bgCallsThisHour : 0;
+   164→  return { cooling, cooldownRemainsMs: cooling ? llm429Until - now : 0, consecutive429: llm429Streak, lastOkAt: lastLlmOkAt || null, bgUsed, bgBudget: BG_BUDGET_PER_HOUR };
+   165→}
+   166→
+   167→// v8.4.1 N3 — ACTIVE RECOVERY PROBE: the shield is passive (it only learns
+   168→// the link is back when real traffic happens to fire). The probe makes
+   169→// recovery ACTIVE: one minimal "pong" call punches through the cooldown
+   170→// (operator-tier semantics — the probe exists to test THROUGH the window);
+   171→// success resets the shield instantly so MODEL verdicts resume without
+   172→// waiting for the next natural call. Auto-probe rides the engine tick every
+   173→// 5min while the link is cooling or no call has succeeded in 15min.
+   174→let probeInFlight = false;
+   175→let lastProbeAt = 0;
+   176→let lastAutoProbeAt = 0;
+   177→const PROBE_MIN_SPACING_MS = 120_000; // manual/API probes: ≥1 per 2min
+   178→const AUTO_PROBE_SPACING_MS = 300_000; // background probes: ≥1 per 5min
+   179→const AUTO_PROBE_IDLE_MS = 900_000; // auto-probe when no OK for 15min (or cooling)
+   180→
+   181→export async function probeNeuralLink(): Promise<{ ok: boolean; detail: string; health: ReturnType<typeof llmHealth> }> {
+   182→  const now = Date.now();
+   183→  if (probeInFlight) return { ok: false, detail: "probe already in flight", health: llmHealth() };
+   184→  if (now - lastProbeAt < PROBE_MIN_SPACING_MS)
+   185→    return { ok: false, detail: `probe spacing — retry in ${Math.ceil((PROBE_MIN_SPACING_MS - (now - lastProbeAt)) / 1000)}s`, health: llmHealth() };
+   186→  probeInFlight = true;
+   187→  lastProbeAt = now;
+   188→  try {
+   189→    const zai = await getZAI();
+   190→    await Promise.race([
+   191→      zai.chat.completions.create({ messages: [{ role: "user", content: "Reply with exactly: pong" }] }),
+   192→      new Promise<never>((_, reject) => {
+   193→        const t = setTimeout(() => reject(new Error(`probe timeout after ${AI_CALL_TIMEOUT_MS}ms`)), AI_CALL_TIMEOUT_MS);
+   194→        t.unref?.();
+   195→      }),
+   196→    ]);
+   197→    noteLlmOk();
+   198→    console.log("[ai] neural probe OK — link restored, 429 shield reset");
+   199→    return { ok: true, detail: "pong — neural link OK", health: llmHealth() };
+   200→  } catch (err) {
+   201→    if (is429(err)) note429(); // N5 decides whether this escalates (in-window → no)
+   202→    const detail = String(err).slice(0, 140);
+   203→    console.warn(`[ai] neural probe failed: ${detail}`);
+   204→    return { ok: false, detail, health: llmHealth() };
+   205→  } finally {
+   206→    probeInFlight = false;
+   207→  }
+   208→}
+   209→
+   210→/** Engine-tick hook: one cheap probe per 5min while the link is degraded.
+   211→ * Returns null when the probe did not run (spacing/healthy-skip). */
+   212→export async function maybeNeuralAutoProbe(): Promise<{ ok: boolean } | null> {
+   213→  try {
+   214→    const now = Date.now();
+   215→    const h = llmHealth();
+   216→    const idle = !h.lastOkAt || now - h.lastOkAt > AUTO_PROBE_IDLE_MS;
+   217→    if (!h.cooling && !idle) return null;
+   218→    if (now - lastAutoProbeAt < AUTO_PROBE_SPACING_MS) return null;
+   219→    lastAutoProbeAt = now;
+   220→    const r = await probeNeuralLink();
+   221→    return { ok: r.ok };
+   222→  } catch {
+   223→    return null;
+   224→  }
+   225→}
+   226→
+   227→// v10.16 audit: true while the watchdog memory-action lease is fresh (<10min).
+   228→// Both watchdog layers write .data/ai/background-suspend under OOM proximity.
+   229→function memSuspendActive(): boolean {
+   230→  try {
+   231→    const raw = fsSync.readFileSync(path.join(process.cwd(), ".data", "ai", "background-suspend"), "utf8").trim();
+   232→    const until = parseInt(raw, 10);
+   233→    return Number.isFinite(until) && Date.now() / 1000 < until;
+   234→  } catch {
+   235→    return false;
+   236→  }
+   237→}
+   238→
+   239→async function withZai<T>(fn: (zai: Awaited<ReturnType<typeof ZAI.create>>) => Promise<T>, opts?: { tier?: "operator" | "background" }): Promise<T> {
+   240→  if (opts?.tier === "background" && Date.now() < llm429Until) {
+   241→    throw new Error(`LLM 429-cooldown ${Math.ceil((llm429Until - Date.now()) / 1000)}s — background call skipped, heuristic tier`);
+   242→  }
+   243→  // v10.16 audit (watchdog memory-action channel): under OOM-proximity pressure
+   244→  // both watchdog layers write .data/ai/background-suspend (10min lease) — the
+   245→  // background tier fails fast so the box keeps RAM for the serving paths.
+   246→  if (opts?.tier === "background" && memSuspendActive()) {
+   247→    throw new Error("memory-pressure suspend active (.data/ai/background-suspend) — background LLM call skipped, heuristic tier");
+   248→  }
+   249→  if (opts?.tier === "background") {
+   250→    const bucket = Math.floor(Date.now() / 3_600_000);
+   251→    if (bucket !== bgHourBucket) {
+   252→      bgHourBucket = bucket;
+   253→      bgCallsThisHour = 0;
+   254→    }
+   255→    if (bgCallsThisHour >= BG_BUDGET_PER_HOUR) {
+   256→      throw new Error(`LLM background budget exhausted (${bgCallsThisHour}/${BG_BUDGET_PER_HOUR} this hour) — call skipped, heuristic tier`);
+   257→    }
+   258→    bgCallsThisHour += 1;
+   259→  }
+   260→  const attempt = async (): Promise<T> => {
+   261→    const zai = await getZAI();
+   262→    return Promise.race([
+   263→      fn(zai),
+   264→      new Promise<never>((_, reject) => {
+   265→        const t = setTimeout(() => reject(new Error(`AI call timeout after ${AI_CALL_TIMEOUT_MS}ms`)), AI_CALL_TIMEOUT_MS);
+   266→        t.unref?.();
+   267→      }),
+   268→    ]) as Promise<T>;
+   269→  };
+   270→  let result: T;
+   271→  try {
+   272→    result = await attempt();
+   273→  } catch (err) {
+   274→    if (is429(err)) note429();
+   275→    if (retriableAuth(err)) {
+   276→      console.warn("[ai] auth failure — reloading rotated .z-ai-config and retrying once");
+   277→      try {
+   278→        result = await attempt();
+   279→      } catch (retryErr) {
+   280→        if (is429(retryErr)) note429();
+   281→        // escalate to the AI SUPERVISOR (dynamic import — avoids ai↔supervisor cycle)
+   282→        void import("./supervisor")
+   283→          .then((m) => m.noteLlmAuthFailure())
+   284→          .catch(() => undefined);
+   285→        throw retryErr;
+   286→      }
+   287→    } else {
+   288→      throw err;
+   289→    }
+   290→  }
+   291→  noteLlmOk();
+   292→  return result;
+   293→}
+   294→
+   295→/** Free-form chat with the AI analyst (optional verified-memory grounding) */
+   296→export async function aiChat(messages: Array<{ role: "user" | "assistant"; content: string }>, grounding?: string): Promise<string> {
+   297→  try {
+   298→    const completion = await withZai(async (zai) =>
+   299→      zai.chat.completions.create({
+   300→        messages: [{ role: "assistant", content: grounding ? `${SYSTEM_ANALYST}\n\n${grounding}` : SYSTEM_ANALYST }, ...messages.slice(-10)],
+   301→        thinking: await resolveThinking("analyst-chat"),
+   302→      }), { tier: "operator" }
+   303→    );
+   304→    const content = completion.choices[0]?.message?.content;
+   305→    if (!content) throw new Error("empty completion");
+   306→    reportOutcome("analyst-chat", "MODEL");
+   307→    if (grounding) {
+   308→      try {
+   309→        const audit = auditGrounding(grounding, content);
+   310→        void import("./supervisor")
+   311→          .then((m) => m.noteGroundingAudit("analyst-chat", audit))
+   312→          .catch(() => undefined);
+   313→        if (audit.verdict === "VIOLATION") {
+   314→          return `${content}\n\n⚠ HONESTY AUDIT: ${audit.unmatched.length} numbers in this reply were not found in the live telemetry bundle — treat them as unverified (flagged to the AI supervisor).`;
+   315→        }
+   316→      } catch {
+   317→        /* audit must never break the chat */
+   318→      }
+   319→    }
+   320→    return content;
+   321→  } catch (err) {
+   322→    console.error("[aiChat]", err);
+   323→    reportOutcome("analyst-chat", "ERROR", String(err).slice(0, 120));
+   324→    return "⚠ Neural link degraded — analysis core unreachable. Retry shortly, operator. Local heuristics suggest monitoring funding rates and liquidity pools around recent session extremes.";
+   325→  }
+   326→}
+   327→
+   328→/** Per-card AI brief — answers against a specific serial (NX-xxxx) with hard grounding. */
+   329→export interface CardBrief {
+   330→  action: "HOLD" | "CLOSE" | "PARTIAL";
+   331→  conviction: number;
+   332→  summary: string;
+   333→  risk: string;
+   334→  label: "MODEL" | "HEURISTIC";
+   335→}
+   336→
+   337→export async function aiSignalBrief(grounding: string): Promise<CardBrief> {
+   338→  try {
+   339→    const completion = await withZai(async (zai) =>
+   340→      zai.chat.completions.create({
+   341→        messages: [
+   342→          { role: "assistant", content: `${SYSTEM_ANALYST}\nYou are scanning ONE deployed signal card. Respond with ONLY valid JSON, no code fences: {"action":"HOLD|CLOSE|PARTIAL","conviction":<0-100>,"summary":"<3-4 sentences: open with the serial, cite measured numbers>","risk":"<one sentence>"}\n${grounding}` },
+   343→          { role: "user", content: "Scan this card now. Use ONLY the context numbers." },
+   344→        ],
+   345→        thinking: await resolveThinking("card-brief"),
+   346→      }), { tier: "operator" }
+   347→    );
+   348→    const raw = completion.choices[0]?.message?.content ?? "";
+   349→    const json = raw.replace(/```json|```/g, "").trim();
+   350→    const parsed = JSON.parse(json);
+   351→    const action = ["HOLD", "CLOSE", "PARTIAL"].includes(parsed.action) ? parsed.action : "HOLD";
+   352→    const summary = String(parsed.summary ?? "").slice(0, 800);
+   353→    const risk = String(parsed.risk ?? "").slice(0, 300);
+   354→    reportOutcome("card-brief", "MODEL");
+   355→    reportAudit("card-brief", grounding, `${summary} ${risk}`);
+   356→    return { action, conviction: Math.max(0, Math.min(100, Number(parsed.conviction) || 50)), summary, risk, label: "MODEL" };
+   357→  } catch (err) {
+   358→    console.error("[aiSignalBrief] fallback", err);
+   359→    reportOutcome("card-brief", "HEURISTIC", String(err).slice(0, 120));
+   360→    return { action: "HOLD", conviction: 50, summary: "Neural link degraded — heuristic scan only. Context numbers below remain authoritative.", risk: "Model unavailable; rely on measured levels and TTL.", label: "HEURISTIC" };
+   361→  }
+   362→}
+   363→
+   364→/** AI GOVERNOR — grounded decision loop (v5.0). The LLM is a real operator
+   365→ *  over the engine: it receives ONLY measured system telemetry and returns
+   366→ *  strict decisions that the core validates, clamps, applies and audits. */
+   367→export interface GovernorDecision {
+   368→  action: "set_min_score" | "set_flow_veto" | "set_flow_shortlist" | "set_universe" | "set_ttl_extend_max" | "set_ttl_extend_minutes" | "set_ttl_near_tp" | "set_sl_atr_mult" | "set_rr_scale" | "set_regime_guard" | "set_max_active" | "set_risk_per_trade" | "run_backtest" | "run_autotune" | "no_op";
+   369→  value?: number;
+   370→  rationale: string;
+   371→}
+   372→
+   373→export interface GovernorLlmResult {
+   374→  decisions: GovernorDecision[];
+   375→  label: "MODEL" | "HEURISTIC";
+   376→}
+   377→
+   378→// tier marked at each call site below
+   379→export async function aiGovernorDecisions(context: string, heuristicFallback: GovernorDecision[]): Promise<GovernorLlmResult> {
+   380→  try {
+   381→    const completion = await withZai(async (zai) =>
+   382→      zai.chat.completions.create({
+   383→        messages: [
+   384→          {
+   385→            role: "assistant",
+   386→            content: `${SYSTEM_ANALYST}
+   387→You are now the AI GOVERNOR of this trading engine — an autonomous analyst wired into the system core.
+   388→You receive a GROUNDED telemetry bundle (every number is measured, none invented). Your job: decide how the engine's deployment gates should change to IMPROVE learned performance.
+   389→Rules of engagement:
+   390→- You may run at most ${3 /* v10.16 prompt fix: was the literal string "maxActions"; this is the REAL cap enforced below via decisions.slice(0, 3) (governor applies its own cfg.maxActions on top) */} actions; prefer precision over activity; no_op is a valid, often correct decision.
+   391→- set_min_score: raise when realized WR/backtest expectancy is poor (trade less, filter harder); lower only when evidence is MARGINAL and sample sizes are decent.
+   392→- set_flow_veto: raise (stricter) when flow-confirmed deploys still lose; lower when good setups get vetoed by marginal flow.
+   393→- set_flow_shortlist: how many top-scoring candidates get flow-checked (1-6).
+   394→- set_universe: how many USDT-M perps the flow scanner tracks (12-64) — raise when the domain misses flows (thin scan coverage), lower when rate/latency pressure shows.
+   395→- set_ttl_extend_max: DYNAMIC EXPIRY GATE — max TTL extensions granted per signal (0-3). Use the TTL-GATE line: when the extension→TP conversion rate is high (tpAfter >> slAfter) and post-expiry afterlife shows many would-have-won expiries, RAISE the budget; when extensions mostly re-expire or stop out, LOWER it (0 disables the gate).
+   396→- set_ttl_extend_minutes: minutes per extension (15-240) — longer for slow regimes/strategies, shorter when extensions barely convert.
+   397→- set_ttl_near_tp: unlevered % band to the next TP that auto-qualifies a maturing signal for extension (0.3-5.0, default 1.5). WIDEN it when the DENIED count stays high AND the EXPIRED post-mortem win share is high (trades keep expiring just OUTSIDE the band then winning afterwards); tighten it when granted extensions keep stopping out or re-expiring.
+   398→- set_sl_atr_mult: stop distance in ATR multiples (0.8-2.5, default 1.5) — the DYNAMIC RISK knob. Read the RISK LEDGER line: when the stop-rate is high AND the SL bucket bleeds the most USD, WIDEN stops (noise takes out trades that would have worked); when instead trades die of TIME (expiry bucket dominant, stops rare), stops are too far — TIGHTEN.
+   399→- set_rr_scale: scales every computed R:R ladder (0.75-1.35, default 1.0). LOWER it when TP3 hits are rare and stopped trades outnumber full-TP badly (greedy targets); RAISE it when full-TP conversion is strong and the RISK LEDGER shows winners reaching the final rung.
+   400→- set_regime_guard: regime-filter hardening level 0-2 (default 1). Read the REGIME LEDGER line: L0 = soft penalties only; L1 = hard VETO on breakout/momentum in strong chop; L2 = + BTC-spillover counter-trend surcharge + no mean-revert in vol expansion. RAISE the guard when the chop/volatile ledger bleeds USD; LOWER it (L0) only if the ledger proves you are vetoing profitable regimes.
+   401→- set_max_active: position capacity — max concurrent open signals (2-8, default 5). Read the DEPLOY/CAPACITY line: at capacity with healthy open PNL you may RAISE it to keep diversifying; LOWER it when open risk is concentrated, correlated, or the equity drawdown is deep.
+   402→- set_risk_per_trade: margin sizing scale on the confidence-sized margin (0.5-1.5, default 1.0). LOWER below 1.0 when the recent ledger bleeds (deep drawdown, expectancy negative) — survive first; RAISE above 1.0 ONLY when expectancy is positive and the equity curve is making new highs.
+   403→- CLAMP RANGES: every knob is hard-clamped by the core — the 0. CLAMPS line in the telemetry lists each legal range. Requesting a value outside the range wastes the action (the core pins it to the nearest legal value).
+   404→- run_backtest / run_autotune: trigger the history learner or the weight auto-tuner when outcomes changed materially or evidence is stale.
+   405→Respond with ONLY valid JSON, no code fences: {"decisions":[{"action":"set_min_score|set_flow_veto|set_flow_shortlist|set_universe|set_ttl_extend_max|set_ttl_extend_minutes|set_ttl_near_tp|set_sl_atr_mult|set_rr_scale|set_regime_guard|set_max_active|set_risk_per_trade|run_backtest|run_autotune|no_op","value":<number or null>,"rationale":"<one sentence citing specific bundle numbers>"}]}
+   406→${context}`,
+   407→        },
+   408→        { role: "user", content: "Governor cycle: review the telemetry and issue your decisions now." },
+   409→      ],
+   410→      thinking: await resolveThinking("governor"),
+   411→      }), { tier: "background" }
+   412→    );
+   413→    const raw = completion.choices[0]?.message?.content ?? "";
+   414→    const parsed = JSON.parse(raw.replace(/```json|```/g, "").trim()) as { decisions?: GovernorDecision[] };
+   415→    const valid = ["set_min_score", "set_flow_veto", "set_flow_shortlist", "set_universe", "set_ttl_extend_max", "set_ttl_extend_minutes", "set_ttl_near_tp", "set_sl_atr_mult", "set_rr_scale", "set_regime_guard", "set_max_active", "set_risk_per_trade", "run_backtest", "run_autotune", "no_op"];
+   416→    const decisions = (parsed.decisions ?? [])
+   417→      .filter((d) => valid.includes(d.action))
+   418→      .slice(0, 3)
+   419→      .map((d) => ({ action: d.action, value: typeof d.value === "number" ? d.value : undefined, rationale: String(d.rationale ?? "").slice(0, 300) }));
+   420→    if (decisions.length === 0) throw new Error("no usable decisions");
+   421→    reportOutcome("governor", "MODEL");
+   422→    reportAudit("governor", context, JSON.stringify(decisions));
+   423→    return { decisions, label: "MODEL" };
+   424→  } catch (err) {
+   425→    console.error("[aiGovernorDecisions] fallback", err);
+   426→    reportOutcome("governor", "HEURISTIC", String(err).slice(0, 120));
+   427→    return { decisions: heuristicFallback, label: "HEURISTIC" };
+   428→  }
+   429→}
+   430→
+   431→/** Structured single-symbol analysis */
+   432→export interface SymbolAnalysis {
+   433→  bias: string;
+   434→  summary: string;
+   435→  invalidation: string;
+   436→  conviction: number;
+   437→}
+   438→
+   439→/** ── v5.4 DEEP-LEARN — research Q&A over full-TP (TP3) + stopped-out cases ──
+   440→ *  The LLM acts as the engine's research desk: it receives ONLY measured case
+   441→ *  files + the TP3 lab contrast, answers why winners ran the whole ladder and
+   442→ *  why losers died, and returns strict lessons that are persisted + grounded
+   443→ *  into every agent. Heuristic fallback produces honest, data-driven lessons. */
+   444→export interface DeepLearnLessonRaw {
+   445→  scope: "TP3_FULL" | "SL" | "MIXED";
+   446→  pattern: string;
+   447→  evidence: string;
+   448→  action: string;
+   449→  confidence: number;
+   450→}
+   451→export interface DeepLearnResult {
+   452→  lessons: DeepLearnLessonRaw[];
+   453→  hypothesis: string;
+   454→  label: "MODEL" | "HEURISTIC";
+   455→}
+   456→
+   457→export async function aiDeepLearn(grounding: string, questions: string, lab: { fullTp: { count: number; avgConfidence: number; avgRr: number }; stopped: { count: number; avgConfidence: number } }): Promise<DeepLearnResult> {
+   458→  try {
+   459→    const completion = await withZai(async (zai) =>
+   460→      zai.chat.completions.create({
+   461→        messages: [
+   462→          {
+   463→            role: "assistant",
+   464→            content: `${SYSTEM_ANALYST}
+   465→You are now the FLOWRADAR DEEP-LEARN CORE — the research desk of the trading engine.
+   466→You receive measured case files of FULL-TP (TP3, whole ladder captured) and STOPPED-OUT deployments plus a statistical contrast. Your research method:
+   467→- Study what the full-TP winners SHARED at deploy time (factor votes, flow verdict, regime, conviction, R:R, timeframe).
+   468→- Study what the stopped-out trades showed that should have been a warning.
+   469→- Derive 2-4 concrete, measurable lessons. Each lesson: pattern (what to look for BEFORE deploy), evidence (cite the case numbers), action (a specific gate/weight/sizing/TTL behaviour change), confidence 0-100.
+   470→- Never invent numbers; cite only the grounding. Prefer precision over activity — 2 strong lessons beat 4 weak ones.
+   471→Respond with ONLY valid JSON, no code fences: {"lessons":[{"scope":"TP3_FULL|SL|MIXED","pattern":"...","evidence":"...","action":"...","confidence":0-100}],"hypothesis":"<3-6 sentence research answer to the questions>"}
+   472→${grounding}`,
+   473→          },
+   474→          { role: "user", content: `${questions}\nRun this research cycle now.` },
+   475→        ],
+   476→        thinking: await resolveThinking("deep-learn"), // hard-wired THOUGHT via THOUGHT_CHANNELS
+   477→      }), { tier: "background" }
+   478→    );
+   479→    const raw = completion.choices[0]?.message?.content ?? "";
+   480→    const parsed = JSON.parse(raw.replace(/```json|```/g, "").trim()) as { lessons?: DeepLearnLessonRaw[]; hypothesis?: string };
+   481→    const lessons = (parsed.lessons ?? [])
+   482→      .filter((l) => l && typeof l.pattern === "string")
+   483→      .slice(0, 4)
+   484→      .map((l) => ({
+   485→        scope: (["TP3_FULL", "SL", "MIXED"].includes(l.scope) ? l.scope : "MIXED") as DeepLearnLessonRaw["scope"],
+   486→        pattern: String(l.pattern ?? "").slice(0, 240),
+   487→        evidence: String(l.evidence ?? "").slice(0, 300),
+   488→        action: String(l.action ?? "").slice(0, 240),
+   489→        confidence: Number(l.confidence) || 60,
+   490→      }));
+   491→    if (lessons.length === 0) throw new Error("no usable lessons");
+   492→    const hypothesis = String(parsed.hypothesis ?? "").slice(0, 2400);
+   493→    reportOutcome("deep-learn", "MODEL");
+   494→    reportAudit("deep-learn", grounding, `${hypothesis} ${JSON.stringify(lessons)}`);
+   495→    return { lessons, hypothesis, label: "MODEL" };
+   496→  } catch (err) {
+   497→    console.error("[aiDeepLearn] fallback", err);
+   498→    reportOutcome("deep-learn", "HEURISTIC", String(err).slice(0, 120));
+   499→    // Honest heuristic lessons from the measured lab contrast (no invention)
+   500→    const lessons: DeepLearnLessonRaw[] = [];
+   501→    const confDelta = lab.fullTp.avgConfidence - lab.stopped.avgConfidence;
+   502→    if (lab.fullTp.count > 0 && lab.stopped.count > 0) {
+   503→      lessons.push({
+   504→        scope: "TP3_FULL",
+   505→        pattern: `Full-TP winners deployed at avg conviction ${lab.fullTp.avgConfidence} with RR ${lab.fullTp.avgRr} (${confDelta >= 0 ? "+" : ""}${confDelta} vs stop-outs)`,
+   506→        evidence: `${lab.fullTp.count} full-TP vs ${lab.stopped.count} stop-outs in the measured lab window`,
+   507→        action: confDelta >= 4 ? "Favour deployments with conviction ≥ the full-TP cohort average; treat sub-average conviction as ladder-trim candidates" : "Keep current conviction gate — winner/loser conviction profiles are too close to act on",
+   508→        confidence: 62,
+   509→      });
+   510→      lessons.push({
+   511→        scope: "SL",
+   512→        pattern: `Stop-outs died at avg conviction ${lab.stopped.avgConfidence} — study their shared tags/regime before the next deploy`,
+   513→        evidence: `${lab.stopped.count} stopped cases measured`,
+   514→        action: "Deploy the flow gate harder on setups whose tags match the stop-out cohort",
+   515→        confidence: 58,
+   516→      });
+   517→    } else {
+   518→      lessons.push({
+   519→        scope: "MIXED",
+   520→        pattern: "Sample too thin for a reliable winner/loser contrast",
+   521→        evidence: `${lab.fullTp.count} full-TP / ${lab.stopped.count} stop-out cases`,
+   522→        action: "Keep logging outcomes; the deep-learn cycle re-runs automatically",
+   523→        confidence: 50,
+   524→      });
+   525→    }
+   526→    return { lessons, hypothesis: "Neural link degraded — lessons derived from the measured TP3-lab contrast only (heuristic mode). No invented numbers.", label: "HEURISTIC" };
+   527→  }
+   528→}
+   529→
+   530→/** ── v8.2 VERDICT-CORE — decision-border research desk (operator: «موتور گیج») ──
+   531→ *  Reads the MEASURED GateVerdict journal aggregate (which reason-codes
+   532→ *  confirm/reject, how close the rejects came) and returns grounded findings
+   533→ *  + a digest that is persisted for the AI CORE page and analyst grounding. */
+   534→export interface VerdictLearnResult {
+   535→  digest: string;
+   536→  findings: Array<{ pattern: string; evidence: string; action: string; confidence: number }>;
+   537→  label: "MODEL" | "HEURISTIC";
+   538→}
+   539→
+   540→export async function aiVerdictLearn(grounding: string, stats: { total: number; rejectedScore: number; deployed: number; boundary: number; avgMarginRejected: number | null; topRejectDrivers: Array<{ code: string; n: number }>; topConfirmDrivers: Array<{ code: string; n: number }> }): Promise<VerdictLearnResult> {
+   541→  try {
+   542→    const completion = await withZai(async (zai) =>
+   543→      zai.chat.completions.create({
+   544→        messages: [
+   545→          {
+   546→            role: "assistant",
+   547→            content: `${SYSTEM_ANALYST}
+   548→You are now the FLOWRADAR VERDICT-CORE — the research desk that studies the engine's own approve/reject decisions at the deploy gate.
+   549→You receive a measured journal bundle: candidates that reached the decision border (score within ±10 of the EFFECTIVE threshold), the reasons that pushed them (pro/con factor votes, regime/MTF/liq-heat/chase threshold surcharges), and how the gate ruled.
+   550→Derive 2-3 concrete findings about WHY candidates confirm or reject: which drivers dominate, whether border rejects are hair-thin (surcharge-flipped) or wide misses, and what the gate behaviour implies.
+   551→Each finding: pattern (what to watch before deploy), evidence (cite journal numbers), action (what the operator/engine should monitor or do), confidence 0-100.
+   552→NEVER invent numbers — cite only the bundle. If outcome learning for rejected candidates is declared OBSERVING, say so instead of guessing win rates.
+   553→Respond with ONLY valid JSON, no code fences: {"findings":[{"pattern":"...","evidence":"...","action":"...","confidence":0-100}],"digest":"<3-6 sentence plain-text summary of the decision border right now>"}
+   554→${grounding}`,
+   555→          },
+   556→          { role: "user", content: "Verdict-core cycle: analyze the decision border journal now." },
+   557→        ],
+   558→        thinking: await resolveThinking("governor"),
+   559→      }), { tier: "background" }
+   560→    );
+   561→    const raw = completion.choices[0]?.message?.content ?? "";
+   562→    const parsed = JSON.parse(raw.replace(/```json|```/g, "").trim()) as { findings?: Array<{ pattern?: string; evidence?: string; action?: string; confidence?: number }>; digest?: string };
+   563→    const findings = (parsed.findings ?? [])
+   564→      .filter((f) => f && typeof f.pattern === "string")
+   565→      .slice(0, 3)
+   566→      .map((f) => ({ pattern: String(f.pattern).slice(0, 240), evidence: String(f.evidence ?? "").slice(0, 300), action: String(f.action ?? "").slice(0, 240), confidence: Number(f.confidence) || 60 }));
+   567→    if (findings.length === 0) throw new Error("no usable findings");
+   568→    reportOutcome("verdict-core", "MODEL");
+   569→    reportAudit("verdict-core", grounding, `${parsed.digest ?? ""} ${JSON.stringify(findings)}`);
+   570→    return { digest: String(parsed.digest ?? "").slice(0, 1600), findings, label: "MODEL" };
+   571→  } catch (err) {
+   572→    console.error("[aiVerdictLearn] fallback", err);
+   573→    reportOutcome("verdict-core", "HEURISTIC", String(err).slice(0, 120));
+   574→    const topRej = stats.topRejectDrivers[0];
+   575→    const topPro = stats.topConfirmDrivers[0];
+   576→    const findings: VerdictLearnResult["findings"] = [];
+   577→    if (topRej) {
+   578→      findings.push({
+   579→        pattern: `"${topRej.code}" dominates rejections (×${topRej.n})`,
+   580→        evidence: `${stats.rejectedScore} score-gate rejections in the window; avg miss ${stats.avgMarginRejected ?? "n/a"} pts`,
+   581→        action: stats.avgMarginRejected !== null && stats.avgMarginRejected > -4 ? "Hair-thin border rejects — surcharges are flipping marginal setups; keep shadow-tracking" : "Wide-margin rejects — the gate is a hard filter, no change warranted",
+   582→        confidence: 58,
+   583→      });
+   584→    }
+   585→    if (topPro) findings.push({ pattern: `"${topPro.code}" leads confirmations (×${topPro.n})`, evidence: `${stats.deployed} deployments measured`, action: "Keep this factor grounded; verify its settled cohort in the ledger", confidence: 55 });
+   586→    if (findings.length === 0) findings.push({ pattern: "Journal too thin for contrast", evidence: `${stats.total} rows`, action: "Keep logging; cycle re-runs automatically", confidence: 50 });
+   587→    return {
+   588→      digest: `Heuristic verdict-core read (${stats.total} rows: ${stats.boundary} border · ${stats.rejectedScore} rejects · ${stats.deployed} deployed). Top reject driver ${topRej?.code ?? "n/a"}; top confirm driver ${topPro?.code ?? "n/a"}. Neural link degraded — deterministic read only, no invented outcomes.`,
+   589→      findings,
+   590→      label: "HEURISTIC",
+   591→    };
+   592→  }
+   593→}
+   594→
+   595→/** ── v8.2 SHADOW ADJUDICATOR — AI-core Phase 0 second opinion at the gate fence ──
+   596→ *  Called by lib/shadow-veto.ts for candidates inside the adjudication window
+   597→ *  (hair-thin passes gap 0..+3 and near-miss rejects gap −8..0). VETO-ONLY
+   598→ *  doctrine: the core may agree or block, never create signals. The verdict is
+   599→ *  recorded + paper-tracked; in shadow mode it NEVER affects live flow.
+   600→ *  v8.2.1 GROUNDING PATCH (operator: «پچ grounding قاضی سایه را کامل و مهندسی
+   601→ *  بزن») — the judge was the LAST unaudited LLM path in the bridge. Now every
+   602→ *  MODEL verdict is number-by-number grounding-audited against the evidence
+   603→ *  bundle it saw: CLEAN/SUSPECT verdicts carry their audit to the record;
+   604→ *  a VIOLATION (unmatched citations / simulation fingerprints) has its verdict
+   605→ *  DISCARDED and the deterministic heuristic speaks instead (fail-open —
+   606→ *  hallucinated evidence can never become a veto voice). */
+   607→export interface ShadowAdjudication {
+   608→  verdict: "TRADE" | "VETO";
+   609→  confidence: number; // 0..100
+   610→  reason: string;
+   611→  label: "MODEL" | "HEURISTIC";
+   612→  audit: { cited: number; unmatched: number[]; verdict: "CLEAN" | "SUSPECT" | "VIOLATION" } | null; // null = legacy/heuristic-without-model-attempt
+   613→}
+   614→
+   615→export interface ShadowAdjudicationCtx {
+   616→  symbol: string;
+   617→  direction: "LONG" | "SHORT";
+   618→  strategy: string;
+   619→  side: "PASS" | "REJECT"; // hair-thin pass vs near-miss reject
+   620→  gap: number;
+   621→  score: number;
+   622→  effMin: number;
+   623→  thr: Record<string, number>;
+   624→  confirms: Array<{ factor: string; vote: number; detail?: string }>;
+   625→  opposes: Array<{ factor: string; vote: number; detail?: string }>;
+   626→  notes: string | null;
+   627→}
+   628→
+   629→function shadowHeuristic(ctx: ShadowAdjudicationCtx): { verdict: "TRADE" | "VETO"; confidence: number; reason: string; label: "MODEL" | "HEURISTIC" } {
+   630→  // deterministic fallback: signed net pressure of the journaled votes
+   631→  const net = [...ctx.confirms, ...ctx.opposes].reduce((a, f) => a + f.vote, 0);
+   632→  const opposeHeavy = net < 0;
+   633→  return {
+   634→    verdict: opposeHeavy ? "VETO" : "TRADE",
+   635→    confidence: 52,
+   636→    reason: `heuristic: net vote pressure ${net >= 0 ? "+" : ""}${net.toFixed(0)} — ${opposeHeavy ? "opposing factors outweigh confirms" : "no concrete opposing dominance"}`,
+   637→    label: "HEURISTIC",
+   638→  };
+   639→}
+   640→
+   641→export async function aiShadowAdjudication(ctx: ShadowAdjudicationCtx): Promise<ShadowAdjudication> {
+   642→  // v8.4.3 VERDICT-CORE WIRING (operator: «چرا از نتایج Verdict core استفاده
+   643→  // نمیشه؟») — the judge now consults the core's own deep-learn lessons over
+   644→  // the gate journal (institutional memory of recurring confirm/reject
+   645→  // patterns). Consultative only: the doctrine block below forbids treating a
+   646→  // lesson as an automatic veto/flip; every MODEL verdict still passes the
+   647→  // number-by-number grounding audit, and any VIOLATION still discards the
+   648→  // model's voice (fail-open). Dynamic import — verdict.ts sits across the
+   649→  // engine/shadow-veto import web.
+   650→  let coreMemory = "";
+   651→  try {
+   652→    const { getVerdictCoreState } = await import("./verdict");
+   653→    const vc = await getVerdictCoreState();
+   654→    if (vc.lessons.length) {
+   655→      coreMemory = `VERDICT-CORE MEMORY (the engine's own deep-learn findings over recent gate verdicts — consult as context, never as an automatic verdict):\n${vc.lessons.slice(0, 3).map((l) => `- ${l.pattern} → ${l.action} (confidence ${l.confidence}%, ${l.label})`).join("\n")}\n`;
+   656→    }
+   657→  } catch { /* verdict-core unavailable → judge works from the bundle alone */ }
+   658→  const bundle = [
+   659→    `CANDIDATE: ${ctx.symbol} ${ctx.direction} · strategy ${ctx.strategy} · confluence score ${ctx.score.toFixed(1)} vs EFFECTIVE gate ${ctx.effMin} (gap ${ctx.gap >= 0 ? "+" : ""}${ctx.gap.toFixed(1)}).`,
+   660→    `FENCE POSITION: ${ctx.side === "PASS" ? "PASSED the numeric gate by a hair (gap 0..+3) — question: block this deployment?" : "MISSED the numeric gate by ≤8 pts (the boundary band) — question: is the numeric rejection wrong; should this trade anyway?"}`,
+   661→    `THRESHOLD MODIFIERS: ${Object.entries(ctx.thr).filter(([, v]) => v !== 0).map(([k, v]) => `${k} ${v > 0 ? "+" : ""}${v}`).join(" · ") || "none (base gate only)"}.`,
+   662→    `CONFIRMING FACTORS: ${ctx.confirms.map((f) => `${f.factor} ${f.vote >= 0 ? "+" : ""}${f.vote}${f.detail ? ` (${f.detail})` : ""}`).join(" · ") || "none"}.`,
+   663→    `OPPOSING FACTORS: ${ctx.opposes.map((f) => `${f.factor} ${f.vote >= 0 ? "+" : ""}${f.vote}${f.detail ? ` (${f.detail})` : ""}`).join(" · ") || "none"}.`,
+   664→    `REGIME/HEAT NOTES: ${ctx.notes ?? "none"}.`,
+   665→    coreMemory,
+   666→  ].filter(Boolean).join("\n");
+   667→  try {
+   668→    const completion = await withZai(async (zai) =>
+   669→      zai.chat.completions.create({
+   670→        messages: [
+   671→          {
+   672→            role: "assistant",
+   673→            content: `You are the FLOWRADAR SHADOW ADJUDICATOR — a veto-only second opinion that reviews borderline candidates at the engine's deploy gate.
+   674→DOCTRINE (strict):
+   675→- You may only VETO (block) or let TRADE. You can never create signals, resize, or move targets.
+   676→- Default is TRADE: only VETO when the measured evidence is concretely bad — opposing factors dominate the confirms, the candidate only passed because a threshold discount flattered it, it chases a fresh eruption, it faces a flush-risk liquidity cluster, MTF flow conflicts, or the regime ruling is fighting the direction.
+   677→- A near-miss reject (REJECT side) should flip to TRADE only if the numeric miss is clearly surcharge-flavored (the modifiers, not the confluence, caused the miss) AND the confirming factors are strong.
+   678→- Judge the REASON QUALITY, not the score magnitude. Never invent data — use only the bundle.
+   679→Respond with ONLY valid JSON, no code fences: {"verdict":"TRADE|VETO","confidence":<0-100>,"reason":"<one line, max 140 chars, cite the decisive factors>"}
+   680→BUNDLE:
+   681→${bundle}`,
+   682→          },
+   683→          { role: "user", content: `Adjudicate this ${ctx.side === "PASS" ? "hair-thin pass" : "near-miss reject"} now.` },
+   684→        ],
+   685→        thinking: await resolveThinking("governor"),
+   686→      }), { tier: "background" }
+   687→    );
+   688→    const raw = completion.choices[0]?.message?.content ?? "";
+   689→    const parsed = JSON.parse(raw.replace(/```json|```/g, "").trim()) as { verdict?: string; confidence?: number; reason?: string };
+   690→    const verdict = parsed.verdict === "VETO" ? "VETO" : "TRADE";
+   691→    const confidence = Math.max(0, Math.min(100, Number(parsed.confidence) || 60));
+   692→    const reason = String(parsed.reason ?? "no reason given").slice(0, 180);
+   693→    // v8.2.1 GROUNDING AUDIT — audit the REASON (the factual claims; verdict is
+   694→    // categorical and confidence is self-assessed, neither asserts world facts),
+   695→    // and fingerprint the RAW model output for simulation/placeholder language
+   696→    // (veracity semantics: markers → SUSPECT, markers + ≥2 unmatched → VIOLATION).
+   697→    const reasonAudit = auditGrounding(bundle, reason);
+   698→    const rawMarkers = findMockMarkers(raw);
+   699→    const auditVerdict: GroundingAudit["verdict"] =
+   700→      rawMarkers.length > 0 ? (reasonAudit.unmatched.length >= 2 ? "VIOLATION" : "SUSPECT") : reasonAudit.verdict;
+   701→    const audit = { ...reasonAudit, verdict: auditVerdict };
+   702→    void import("./supervisor")
+   703→      .then((m) => m.noteGroundingAudit("shadow-veto", audit))
+   704→      .catch(() => undefined);
+   705→    const auditFootprint = { cited: audit.cited, unmatched: audit.unmatched, verdict: audit.verdict };
+   706→    if (audit.verdict === "VIOLATION") {
+   707→      // HALLUCINATION FINGERPRINT — the model's verdict cannot stand on ungrounded
+   708→      // reasoning. Discard it; the deterministic heuristic speaks instead (fail-open,
+   709→      // veto-only doctrine: no veto voice may rest on invented evidence).
+   710→      console.error("[aiShadowAdjudication] grounding VIOLATION — model verdict discarded, heuristic speaks:", auditFootprint);
+   711→      reportOutcome("shadow-veto", "HEURISTIC", `grounding violation — ${audit.unmatched.length} unmatched citations`);
+   712→      return { ...shadowHeuristic(ctx), audit: auditFootprint };
+   713→    }
+   714→    reportOutcome("shadow-veto", "MODEL");
+   715→    return {
+   716→      verdict,
+   717→      confidence,
+   718→      reason,
+   719→      label: "MODEL",
+   720→      audit: auditFootprint,
+   721→    };
+   722→  } catch (err) {
+   723→    console.error("[aiShadowAdjudication] heuristic fallback", err);
+   724→    reportOutcome("shadow-veto", "HEURISTIC", String(err).slice(0, 120));
+   725→    return { ...shadowHeuristic(ctx), audit: null };
+   726→  }
+   727→}
+   728→
+   729→export async function aiAnalyzeSymbol(symbol: string, price: number, change24h: number): Promise<SymbolAnalysis> {
+   730→  try {
+   731→    const completion = await withZai(async (zai) =>
+   732→      zai.chat.completions.create({
+   733→        messages: [
+   734→          { role: "assistant", content: `${SYSTEM_ANALYST}\nRespond with ONLY valid JSON, no code fences: {"bias":"BULLISH|BEARISH|NEUTRAL","summary":"<2-3 sentences on structure, flow, key levels>","invalidation":"<one level-based sentence>","conviction":<0-100 number>}` },
+   735→          { role: "user", content: `Analyze ${symbol}. Current price ${price}. 24h change ${change24h.toFixed(2)}%. Provide structural read.` },
+   736→        ],
+   737→        thinking: await resolveThinking("symbol-scan"), // contract: always FAST
+   738→      }), { tier: "background" }
+   739→    );
+   740→    const raw = completion.choices[0]?.message?.content ?? "";
+   741→    const json = raw.replace(/```json|```/g, "").trim();
+   742→    const parsed = JSON.parse(json);
+   743→    const summary = String(parsed.summary ?? "").slice(0, 600);
+   744→    reportOutcome("symbol-scan", "MODEL");
+   745→    // NOTE: no grounding audit here — this call has no measured bundle to audit
+   746→    // against (the model produces fresh structural analysis by design).
+   747→    return {
+   748→      bias: ["BULLISH", "BEARISH", "NEUTRAL"].includes(parsed.bias) ? parsed.bias : "NEUTRAL",
+   749→      summary,
+   750→      invalidation: String(parsed.invalidation ?? "").slice(0, 240),
+   751→      conviction: Math.max(0, Math.min(100, Number(parsed.conviction) || 72)),
+   752→    };
+   753→  } catch (err) {
+   754→    console.error("[aiAnalyzeSymbol]", err);
+   755→    reportOutcome("symbol-scan", "HEURISTIC", String(err).slice(0, 120));
+   756→    // procedural fallback
+   757→    const bias = change24h > 1 ? "BULLISH" : change24h < -1 ? "BEARISH" : "NEUTRAL";
+   758→    return {
+   759→      bias,
+   760→      summary: `${symbol} trades at ${price} with ${change24h >= 0 ? "+" : ""}${change24h.toFixed(2)}% on the session. ${bias === "BULLISH" ? "Buyers defend intraday value; reclaim of session high opens liquidity above." : bias === "BEARISH" ? "Sellers control value; weakness below session low likely taps resting liquidity." : "Range-bound compression — await displacement for directional commitment."} Local model only (neural link offline).`,
+   761→      invalidation: `Structure invalidated on a decisive break of the ${bias === "BULLISH" ? "session low" : bias === "BEARISH" ? "session high" : "range mid"}.`,
+   762→      conviction: 68,
+   763→    };
+   764→  }
+   765→}
+   766→

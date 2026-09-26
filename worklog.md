@@ -29392,3 +29392,22 @@ Stage Summary:
 - ۸ از ۱۰ سند الزامی تحویل شد (ARCHITECTURE-MAP, SECURITY-HARDENING, DATABASE-HARDENING, EXECUTION-STATE-MACHINE, ACCOUNTING-SPEC, STRATEGY-VALIDATION-PROTOCOL, DISASTER-DRILL-REPORT, LIVE-READINESS, CHANGELOG, TEST-REPORT = همه ۱۰!)
 - live_status = NOT_ELIGIBLE_FOR_LIVE (oos_validation FAIL + execution_reconciliation DEGRADED تا D1)
 - گام بعدی تک: D1 — اتصال entryGate+kill-switch به مسیر deploy در engine.ts (tests-first)
+
+---
+Task ID: 33
+Agent: Z.ai Code (main)
+Task: دستور ۶گانه اپراتور 2026-09-26 — ممیزی کامل پیش از اجرا (recon)
+
+Work Log:
+- ADVISOR: خطای «Decision failed: unauthorized» = میدل‌ور v2 (LIVE-HARDENING P2) پست بدون session را 401 می‌کند؛ فلوی /login سمت سرور سالم تست شد (curl → cookie → POST advisor = 200)؛ مشکل: UI هیچ affordance ورود ندارد + AdvisorCard.runCycle حتی res.ok را چک نمی‌کند
+- RAW-CAL: state target=672 رسیده (settledE2=712) و در 09-23 14:03 به‌خاطر «target reached» خود-خنثی شده — دقیقاً همزمان که بازوهای واقعی shadow-veto گرسنه شدند؛ راه‌حل: هدف پویا تا تکمیل بازوها
+- SHADOW-VETO کشف بحرانی: 46 verdict لینک‌شده به سیگنال‌های SETTLED هرگز outcome نگرفتند؛ closeRealOutcomes در حافظه pending=0 می‌بیند (VERDICT_CAP=600 + collapse حین hydrate رکوردهای upgrade را می‌اندازد)؛ catch بی‌صدا = صفر مشاهده‌پذیری؛ retroLink با 28 PASS لینک‌نشده 24h → bound=0
+- علت گرسنگی بازوهای واقعی: از 09-23 هیچ دیپلوی واقعی (RAW-CAL خاموش + trigger-spawn آخرین بار 09-23 06:42 + legacyAutoSpawn=false) — دستور اپراتور «bar تا تکمیل بازوها فعال بماند» دقیقاً درمان است
+- Binance: feed اصلی LIVE (spot 200)؛ ولی fapi USDT-M استخر egress چند-IP با بن‌های انباشته چندساعته (418 تا ~7h)؛ WS fstream: bookTicker/depth زنده، aggTrade/!forceOrder ساکت (سرکوب IP)؛ **spot aggTrade WS کار می‌کند** = خط سوخت جایگزین
+- Trigger Bus: زنده است (heartbeat true, 11/11 cycles, 12 event) ولی L1 همه «NOT aligned/no spawn» چون tape (:3011) dataStalled=true و REST فالبکش 1800 weight/min مصرف می‌کرد = محرک اصلی بن‌ها
+- FUTURES TAXONOMY: STORE 672/720 = ردیف‌های backfill یک‌باره (2×336h) نسبت به SETTLED_TARGET=720؛ فقط +1 ردیف LIVE در 3 روز چون fapi 418 سمپلر را گرسنانده (8 ردیف/24h بجای ~576)
+- سرویس‌ها: 3000/3003/3005/3010/3011/3016/3020/3030 UP؛ 3015 (supervisor-cron) DOWN — بازسازی در Task 34-c
+
+Stage Summary:
+- شش خواسته اپراتور به ۳ ریشه واحد می‌رسد: (۱) auth session در UI، (۲) بن‌های fapi از اضافه‌وزن REST، (۳) کپ‌های حافظه shadow-veto
+- معماری اجرا: 34-a fapi-gate مرکزی · 34-b trade-service SPOT-MIRROR · 34-c supervisor-cron :3015 · 34-1 advisor auth UX · 34-2 RAW-CAL arms-coupled · 34-4 taxonomy resilience · 34-6 D1 entryGate+kill-switch — live همچنان DISABLED
