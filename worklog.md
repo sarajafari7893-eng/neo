@@ -29453,3 +29453,23 @@ Stage Summary:
 - LLM پلتفرم حین تحویل 429 سراسری بود — مسیر llm_unavailable صادقانه تست و ثبت شد؛ review زمان‌بندی‌شده بعدی به‌محض رفع 429 خروجی کامل مهندس ارشد را می‌فرستد (retry ۹۰ثانیه‌ای تعبیه شد).
 - درس تکرارشده: bun --hot حین ویرایش چندمرحله‌ای فایل، حالت‌های نیمه‌تمام را parse می‌کند (Unexpected end of file در لاگ) — ویرایش باید atomic باشد؛ خوشبختانه مسیر re-eval تا فایل سالم پیش رفت.
 - Watch: اولین progress خودکار در +۶ ساعت؛ اولین review خودکار در +۱۲ ساعت؛ اگر 429 پلتفرم رفع شود، تلگرام «بازبینی مهندس ارشد» با ۳ اقدام اولویت‌دار برای وین‌ریت/PNL می‌رسد.
+
+---
+Task ID: 34
+Agent: Z.ai Code (main) + subagents 34-a/34-b/34-c
+Task: دستور ۶گانه اپراتور 2026-09-26 — اجرا و راستی‌آزمایی کامل
+
+Work Log:
+- 34-1 (ADVISOR): SessionProvider + OperatorBadge (LOCKED/OPERATOR در هدر) + nexus-client.ts (401 → توست راهنمای ورود) + فیکس runCycle (قبلاً 401 را موفق نشان می‌داد)؛ مرورگر: LOCKED→login→OPERATOR→کلیک APPROVE به سرور رسید (401 حذف شد)؛ APPLY-GUARD سرور پیشنهاد stale (knob زنده 2، پایه 3) را با یادداشت audit رد کرد — گارد است، سیم‌کشی سالم
+- 34-2 (RAW-CAL↔بازوها): re-arm با متن mandate؛ خنثی‌سازی خودکار مقید به تکمیل بازوها (تمدید هدف به اندازه کسری + retargetNote؛ paper-veto در حالت shadow معاف)؛ shadowArmsCompletion با ادغام snapshot سنتینل (fail-closed به INCOMPLETE)؛ نوار بازوها در RawCalCard؛ رفع ریشه‌ای: VERDICT_CAP شواهد باز را می‌انداخت (46 verdict لینک‌شده بدون outcome → گرسنگی بی‌صدا) → trimVerdicts شواهد-امن + لاگ خطا در closeRealOutcomes/retroLink
+- 34-a (fapi-gate): توکن-باکت وزنی 1100/min + بن per-IP (parse «banned until») + retry چرخش استخر + single-flight؛ 10 ماژول مصرف‌کننده وصل شدند
+- 34-b (trade-service v4.8): SPOT-MIRROR (spot aggTrade WS زنده — fstream aggTrade سرکوب‌شده)؛ اولویت WS>SPOT-MIRROR>REST؛ REST وزن 1800→240/min + توقف کامل تا پایان بن (گارد در عمل شلیک شد)؛ dataStalled=false، 18k+ فریم
+- 34-4 (TAXONOMY): STORE 672/720 = backfill یک‌باره 14روزه/هدف بلوغ bestFilter؛ +1 ردیف در 3روز به‌خاطر بن fapi بود؛ فالبک spot (قیمت/klines) + tooltip تفکیک صادقانه؛ فالبک gate برای 10 ماژول
+- 34-c (supervisor-cron :3015): sweep 10min/progress 6h/review 12h (sentinel-deep + LLM مهندس ارشد طبق اسکیل nexus-sentinel؛ پلتفرم LLM فعلاً 429 → مسیر صادقانه llm_unavailable + retry)؛ هشدار TG روی RED با rate-limit؛ watchdog v1.4.0 قانون دو-مکان
+- 34-6 (D1/next_action): entryGate+kill-switch به deploySignal وصل شد (kill-switch مطلق حتی روی forced)؛ route /api/nexus/kill-switch (engage/release با گیت دولایه)؛ تست زنده: engage → forced deploy 503 KILL_SWITCH؛ release → سیگنال‌های 722/723 جاری شدند
+- راستی‌آزمایی: bun test 42/42 · lint 17 baseline · tsc سورس‌پاک · مرورگر: فلوی کامل ورود/تصمیم + نوار بازوها · هر 9 پورت سبز شد · دو افت OOM گذرا (الگوی پلتفرمی، سنتینل RED روی 19 مارکر) هر دو با زنجیره heal جبران شد
+
+Stage Summary:
+- هر ۶ خواسته اجرا و راستی‌آزمایی شد؛ live همچنان DISABLED / NOT_ELIGIBLE_FOR_LIVE؛ هیچ مسیر سفارش واقعی اضافه نشد
+- پاسخ صادقانه به «چرا STORE پر نمی‌شود»: بن‌های fapi (اکنون با gate+spot-mirror مهار) — و به «بازوها چرا کامل نمی‌شوند»: کپ حافظه شواهد را می‌انداخت (رفع شد) + توقف دیپلوی‌های واقعی از 09-23 (با SPOT-MIRROR و re-arm جریان از سر گرفت)
+- گام بعد: رصد پرشدن بازوها تا آستانه ارتقای shadow→veto؛ وقتی 429 LLM رفع شد اولین review کامل مهندس ارشد به TG می‌آید
