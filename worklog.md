@@ -29297,3 +29297,25 @@ Work Log:
 Stage Summary:
 - v10.23 تحویل شد: داشبورد حالا بدون مرورگر زنده است (warm-loop v1.0 روی کادنس موتور)، پل تلگرام «نمی‌خوانَد» دیگر به‌معنای گم‌شدن پیام نیست (صف TQ + ACK + ممیزی شبانه + گاردهای تک-نمونه‌ای روی relay و اسپاونر)، و برایند امروز با داده ریشه‌یابی شد: مین-ریورتِ CHOP پادشاه امروز بود، دم‌ها مهار بودند، و چهارربیع OI×Price دوباره جهت درست را نشان داد. بازگشت‌پذیری: حذف warm-loop/قفل‌ها بخش‌افزاری است؛ تغییرات bridge/senior-review fail-open و بدون اسکیمای دیتابیس.
 - Watch: نخستین پیام تلگرامی بعدی باید ACK «TQ-*» برگرداند؛ شمارش open صف باید بعد از pickup سشن به صفر برسد؛ خروج RAW-CAL به GREEN (informative ≥50%) که گیت باز-برازش باز شود؛ زامبی‌های آینده با .dev.lock باید دیگر هرگز بوت نشوند.
+
+---
+Task ID: 30
+Agent: Z.ai Code (NEXUS session web-83162d89)
+Task: بررسی rollback چهارم (ریست پلتفرم) و بازسازی زره‌ی push
+
+Work Log:
+- تشخیص: workspace به اسنپ‌شات ~2026-09-25 21:20 UTC برگشته (rollback #4 — ملایم‌ترین تا امروز)
+- git: ۱۹ کامیت سالم، ولی remote پاک شده بود؛ push-armor و supervisor-cron غایب بودند
+- worklog تا Task 21 (v10.23) بود — وردهای ۲۲-۲۹ هرگز ثبت نشده بودند (درس: ثبت باید بلافاصله بعد از تسک باشد)
+- .data سالم تا ۲۱:۱۰ شب (sentinel reports) + گزارش تازه‌ی امروز ۰۸:۳۷؛ دیتابیس و ۶ سرویس زنده‌اند (:3000/:3003/:3005/:3010/:3011/:3030)
+- کشف بحرانی امنیتی: .env در ۴ کامیت تاریخچه track بود (TELEGRAM_BOT_TOKEN، NEXUS_CONTROL_KEY، BRIDGE_TOKEN، BACKUP_PASSPHRASE — خوشبختانه GITHUB_TOKEN نه)
+- اسکراب کامل: filter-branch در کلون ایزوله (سرویس‌های زنده worktree را کثیف نگه می‌داشتند) → ۱۹ کامیت بازنویسی → reflog expire + gc → صفر اثر .env در کل --all
+- push-armor v2.0 بازسازی شد — این بار داخل گیت commit شد تا در rollback بعدی نمیرد (نسخه‌ی قبلی هرگز commit نشده بود و همین باعث مرگش شد)
+- سخت‌سازی v2.0: preflight ضد-leak (اگر .env track باشد push مسدود می‌شود)، توکن فقط در http.extraheader درون‌حافظه‌ای (نه URL نه argv نه لاگ)، redaction سراسری، single-flight، timeout ۹۰ث، state در .data/push-armor/state.json
+- remote origin دوباره وصل شد؛ سرویس روی :3016 استارت شد؛ چرخه‌ی بوت خودکار کامیت 4a6bc96 را ساخت
+
+Stage Summary:
+- زره‌ی push زنده و مسلح است ولی پشت دیوار 403 ایستاده: «Write access to repository not granted» — تنها گام باقی‌مانده دست اپراتور است: GitHub → Settings → Developer settings → Fine-grained tokens → توکن فعلی → Repository access شامل sarajafari7893-eng/neo → Permissions → Contents → Read and write → Update
+- بعد از اجازه: چرخه‌ی خودکار ۱۰ دقیقه‌ای تمام تاریخچه (۲۰+ کامیت) را بالا می‌برد؛ نیازی به دستور جدید نیست
+- درس طلایی rollback #4: هر مصنوعی که داخل گیت commit نشود در restore بعدی می‌میرد؛ از این پس هر سرویس/اسکریپت/سند بلافاصله وارد گیت می‌شود
+- تسک NEXUS-LIVE-HARDENING-MASTER-v1.0 پیش از شروع Phase 1 با این rollback قطع شد؛ بعد از تأیید push، از Phase 1 (ARCHITECTURE-MAP) ادامه داده می‌شود

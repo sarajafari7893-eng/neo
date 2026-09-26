@@ -29,7 +29,7 @@
 import { Database } from "bun:sqlite";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 
-const VER = "p0-watchdog 1.2.0";
+const VER = "p0-watchdog 1.3.0";
 const ROOT = "/home/z/my-project";
 const DIR = `${ROOT}/.data/p0-watchdog`;
 const LOCK = `${DIR}/lock.json`;
@@ -54,7 +54,7 @@ const MEM_CRIT_MB = 250;
 // The 2026-09-20 restore resurrected bridge :3005 / trade :3011 / sentinel :3030
 // WITHOUT guardians — trade ran down for hours unnoticed. All six are now
 // probe+heal covered; heal commands mirror each service's battle-tested start.
-type SvcKey = "app" | "liq" | "ws" | "bridge" | "trade" | "sentinel";
+type SvcKey = "app" | "liq" | "ws" | "bridge" | "trade" | "sentinel" | "armor";
 type Mode = "init" | "ok" | "degraded" | "healing" | "escalated";
 
 interface SvcCfg {
@@ -109,6 +109,15 @@ const SVCS: Record<SvcKey, SvcCfg> = {
     expectNote: "200",
     healCmd: `cd ${ROOT}/mini-services/sentinel-service && nohup bun --hot index.ts >> ${ROOT}/logs/sentinel-service.log 2>&1 &`,
   },
+  // v2.0.1 (2026-09-26, Task 30): push-armor guarded after rollback #4 — the ONLY
+  // anti-restore armor. Probe /health; heal spawns armor v2.0 from its own dir.
+  armor: {
+    label: "armor :3016",
+    url: "http://127.0.0.1:3016/health",
+    expect: (s) => s === 200,
+    expectNote: "200",
+    healCmd: `cd ${ROOT}/mini-services/push-armor && nohup bun --hot index.ts >> ${ROOT}/logs/push-armor.log 2>&1 &`,
+  },
 };
 
 interface SvcState {
@@ -131,6 +140,7 @@ const BOOT = Date.now();
 const state: Record<SvcKey, SvcState> = {
   app: freshSvc(), liq: freshSvc(), ws: freshSvc(),
   bridge: freshSvc(), trade: freshSvc(), sentinel: freshSvc(),
+  armor: freshSvc(),
 };
 function freshSvc(): SvcState {
   return { mode: "init", fails: 0, heals: 0, lastProbeAt: null, lastOkAt: null, lastStatus: null, lastLatencyMs: null, lastDownAt: null, lastHealAt: null, healingUntil: null, nextHealAllowedAt: null, recoveries: 0 };
@@ -450,7 +460,7 @@ try {
   process.exit(0);
 }
 log("info", "boot", { ver: VER, pid: process.pid, port: PORT });
-console.log(`[${tehran()}] ${VER} armed on :${PORT} — app:3000 ws:3003 bridge:3005 liq:3010 trade:3011 sentinel:3030`);
+console.log(`[${tehran()}] ${VER} armed on :${PORT} — app:3000 ws:3003 bridge:3005 liq:3010 trade:3011 sentinel:3030 armor:3016`);
 persistState();
 
 process.on("SIGTERM", () => { log("info", "shutdown", { sig: "SIGTERM" }); releaseLock(); process.exit(0); });
