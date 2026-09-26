@@ -1,0 +1,1670 @@
+     1→// ── FlowRadar Neo v8.2 SHADOW-VETO — AI-core PHASE 0 (server-only) ──
+     2→// Operator mandate 2026-09-09: «قدم بعدی پیشنهادی رو کامل و مهندسی انجام بده»
+     3→// — the suggested next step from the AI-core usefulness doctrine
+     4→// (OP-AUDIT-TERMINAL-0908 ④ + OP-GATE-GAUGE-0908): a TIERED- AUTHORITY second
+     5→// opinion at the deploy gate, fully instrumented before it ever gains power.
+     6→//
+     7→//   Phase 0 (THIS): shadow mode — the adjudicator reviews every candidate in
+     8→//   the fence window (hair-thin passes gap 0..+3, near-miss rejects gap
+     9→//   −8..0), its verdicts are journaled, and BOTH sides of the fence are
+    10→//   outcome-tracked:
+    11→//     · PASS-side verdicts link to the REAL deployed trade (the would-veto
+    12→//       cohort keeps trading — that is the counterfactual evidence).
+    13→//     · REJECT-side TRADE verdicts open PAPER trades with engine-identical
+    14→//       geometry — the "would-have-won" ledger for fence rejects.
+    15→//   Phase 1 (gated): veto mode — unlockable ONLY on measured evidence
+    16→//   (≥30 settled per arm + Wilson-LB separation + negative veto-cohort PnL).
+    17→//   In veto mode a fresh VETO verdict blocks the deploy (fail-open: stale or
+    18→//   missing verdict → deploy proceeds) and the blocked trade is paper-tracked
+    19→//   so revocation pressure stays measurable.
+    20→//
+    21→// Division of labour: gate-journal.ts = capture · verdict.ts = learning ·
+    22→// THIS module = the adjudicator + outcome closure + A/B evidence. Zero SQLite
+    23→// writes for records (memory rings + .data/shadow-veto.jsonl); only the
+    24→// rarely-written config persists in EngineSetting (verdictcore.state pattern).
+    25→// Fail-open everywhere: this module must never throw into the deploy path.
+    26→//
+    27→// v10.19 FULL ACTIVATION (operator mandate 2026-09-24 «Shadow veto را کامل فعال کن»):
+    28→//   (1) LINK-DELTA REBUILD (lost v10.17, restored): hydration now MERGES
+    29→//       duplicate verdict records — the JSONL re-persists a verdict when its
+    30→//       state upgrades (serial bind / outcome closure / orphan sweep), but the
+    31→//       old first-record-wins hydration silently reverted linked verdicts to
+    32→//       unlinked on every restart (the real-veto 17→12 regression).
+    33→//   (2) ORPHAN SWEEP: the retro-link sweep now stamps verdicts whose fence
+    34→//       window closed with NO bindable deploy as swept orphans (sweptAt).
+    35→//       Forensic 2026-09-24: 84% of the stale backlog was structural orphan
+    36→//       (candidate adjudicated, deploy refused downstream) — counting them as
+    37→//       leaks DEADLOCKED the v10.16 promotion gate forever. The gate now
+    38→//       counts ACTIVE leaks only.
+    39→//   (3) mode=veto activated by OPERATOR MANDATE (audited force — arms were
+    40→//       27/30 + 12/30, evidence not yet full; veto stays fail-open, MODEL-
+    41→//       verdict-only, revocable, paper-tracked).
+    42→
+    43→import { appendFile, mkdir, open, readFile, rename, stat, writeFile } from "node:fs/promises";
+    44→import { seqStopEvaluate, type SeqStopResult } from "./seq-stop"; // v10.11 SEQ-STOP (operator APPROVE 2026-09-17)
+    45→import path from "node:path";
+    46→import { db } from "@/lib/db";
+    47→import { getGateSettings } from "@/lib/gate-settings";
+    48→import { feeBreakdown, ladderWeightedMove, LADDER_TRANCHES } from "@/lib/accounting";
+    49→import { fetchKlines } from "@/lib/market-feed";
+    50→import { buildSnapshot } from "@/lib/indicators";
+    51→import type { GateFactor, GateSource, ThrBreakdown } from "@/lib/gate-journal";
+    52→
+    53→// ── types ─────────────────────────────────────────────────────
+    54→
+    55→export type ShadowVetoMode = "off" | "shadow" | "veto";
+    56→export type FenceSide = "PASS" | "REJECT"; // hair-thin pass (0..+3) vs near-miss reject (−8..0)
+    57→export type Adjudication = "TRADE" | "VETO";
+    58→
+    59→export interface ShadowVetoConfig {
+    60→  mode: ShadowVetoMode;
+    61→  windowPass: number; // adjudicate PASS candidates with gap ≤ this (default +3)
+    62→  windowReject: number; // adjudicate rejects with gap ≥ this (default −8)
+    63→  budgetPerHour: number; // max LLM adjudications / hour
+    64→  minSpacingMs: number; // min spacing between LLM calls
+    65→  dedupMs: number; // per symbol|direction re-adjudication interval
+    66→  cacheTtlMs: number; // deploy-time veto lookup freshness
+    67→  paperMarginUsd: number; // hypothetical margin for paper trades
+    68→  autoPromote: boolean; // v9.3 — flip to mode=veto automatically when promotionEvidence reports READY (operator mandate ج)
+    69→  observeCapture: boolean; // v10.6 (operator mandate 2026-09-15 «پرشدن بازوهای shadow-veto را سرعت و بهبود ببخش»):
+    70→  // RAW-CAL capture deploys run with ALL quality gates bypassed — including the
+    71→  // deploy-time adjudication — so 100+ capture issues produced ZERO pass-side
+    72→  // verdicts and the REAL arms starved (real-keep 9/30 after 113 issues).
+    73→  // observe=true: capture deploys still get an OBSERVE-ONLY adjudication (side
+    74→  // PASS, never vetoes — capture authority is untouched) linked to the real
+    75→  // serial, so every capture settle lands in the real-keep / real-veto arms.
+    76→}
+    77→
+    78→export interface ShadowOutcome {
+    79→  status: string; // TP1/TP2/TP3/SL/EXPIRED/CLOSED or paper equivalents
+    80→  pnlPercent: number; // margin-relative NET (engine contract)
+    81→  pnlUsd: number;
+    82→  win: boolean; // pnlPercent > 0 || reachedTp ≥ 1 (engine win rule)
+    83→  closedAt: number;
+    84→}
+    85→
+    86→export interface ShadowVerdict {
+    87→  id: string; // SV-xxxx
+    88→  at: number;
+    89→  symbol: string;
+    90→  direction: "LONG" | "SHORT";
+    91→  strategy: string;
+    92→  side: FenceSide;
+    93→  gap: number;
+    94→  score: number;
+    95→  effMin: number;
+    96→  thr: ThrBreakdown;
+    97→  verdict: Adjudication;
+    98→  confidence: number; // 0..100
+    99→  reason: string;
+   100→  label: "MODEL" | "HEURISTIC";
+   101→  audit: { cited: number; unmatched: number[]; verdict: "CLEAN" | "SUSPECT" | "VIOLATION" } | null; // v8.2.1 grounding audit (null = legacy record / no model attempt)
+   102→  source: GateSource;
+   103→  serial: number | null; // real-trade linkage (PASS side)
+   104→  outcome: ShadowOutcome | null; // settled real outcome
+   105→  epoch?: string; // v10.7 ARM-EPOCH — regime stamp; legacy (un-stamped) records stay audit-only
+   106→  origin?: "capture" | "fence"; // v10.16 PROVENANCE (audit 4-f) — "capture" = RAW-CAL capture-observe adjudication (observe-only instrumentation, NEVER fence evidence); "fence" = normal gate-fence adjudication. Legacy records predate the stamp and are identified by their [CAPTURE-OBSERVE] reason suffix (see isCaptureOrigin).
+   107→  sweptAt?: number; // v10.19 ORPHAN SWEEP — timestamp the retro-link sweep confirmed this verdict's fence window closed with NO bindable deploy (structural orphan: candidate adjudicated, deploy refused downstream by max-open/spacing/governor/risk gates). Swept orphans are honest non-evidence, promotion-inert — NOT active leaks.
+   108→}
+   109→
+   110→export interface PaperTrade {
+   111→  id: string; // PP-xxxx
+   112→  verdictId: string;
+   113→  originSide: FenceSide;
+   114→  originVerdict: Adjudication;
+   115→  at: number;
+   116→  symbol: string;
+   117→  direction: "LONG" | "SHORT";
+   118→  strategy: string;
+   119→  entry: number;
+   120→  stop: number; // effective (trailed) stop
+   121→  initialStop: number;
+   122→  tp1: number;
+   123→  tp2: number;
+   124→  tp3: number;
+   125→  leverage: number;
+   126→  marginUsd: number;
+   127→  slDistPct: number;
+   128→  rr: number;
+   129→  ttlMinutes: number;
+   130→  status: "OPEN" | "TP1" | "TP2" | "TP3" | "SL" | "EXPIRED";
+   131→  reachedTp: number; // 0..3 — TP-proven ledger
+   132→  maxPnlPercent: number;
+   133→  pnlPercent: number; // final NET (margin-relative) once settled
+   134→  pnlUsd: number;
+   135→  outcome: ShadowOutcome | null;
+   136→  closeNote: string | null;
+   137→  epoch?: string; // v10.7 ARM-EPOCH — regime stamp inherited at creation
+   138→}
+   139→
+   140→// ── storage (mirrors gate-journal: rings + JSONL, zero SQLite) ──
+   141→
+   142→const VERDICT_CAP = 600;
+   143→// v10.7 ARM-EPOCH HYGIENE (operator-approved 2026-09-16 «تایید کامل و مهندسی
+   144→// ARM-EPOCH HYGIENE» — SUPERVISOR proposal, web-search-validated min-sample
+   145→// guardrail + regime-tagging practice). The A/B arms are REGIME evidence: a
+   146→// ring that mixes pre/post-v10.6 outcomes lets a stale regime outvote the
+   147→// live one (paper-keep 94/30 = 3× target) and feeds autoPromote stale
+   148→// aggregates. Three properties, minimal-diff:
+   149→//   (1) EPOCH STAMP — every entry carries the epoch it was born in.
+   150→//   (2) PAPER FIFO CAP 60 — the paper ring is capped at 60 (was 400) so the
+   151→//       paper cohorts stay recent-regime; OPEN papers are evicted LAST so a
+   152→//       burst cannot orphan live counterfactuals mid-settlement.
+   153→//   (3) SAME-EPOCH PROMOTION — arms + promotion cohorts count CURRENT-epoch
+   154→//       entries only; legacy (un-stamped) records stay in the rings for
+   155→//       audit/history but can no longer vote. Accelerated qualification:
+   156→//       n≥20 with Wilson-LB95 ≥ 50% instead of the full n≥30.
+   157→// v10.10 REGIME-ALIGNED SHADOW COHORTS (SUPERVISOR proposal 19:00Z, operator
+   158→// APPROVE via bridge 2026-09-16 19:01Z «پیشنهاد سوپروایزر را تایید می کنم»):
+   159→// promotion evidence moves from ANCHORED (cumulative-since-epoch) cohorts to
+   160→// FIXED ROLLING-30 settled windows per arm — the same window semantics as the
+   161→// realizedEdge memory gate. Rationale: the gate suppresses on rolling-30 while
+   162→// anchored promotion cohorts wait for epoch-anchored fills the gate itself
+   163→// throttles to a trickle between runs → structural promotion deadlock (real
+   164→// arms frozen 7/8-9/30 for 30h+). Epoch stays as a hygiene TAG (un-stamped
+   165→// legacy rows still never vote); a previous-epoch row sits in the window only
+   166→// until 30 fresher settles slide it out. Walk-forward best practice prefers
+   167→// fixed rolling windows when regime change makes stale evidence obsolete.
+   168→export const ARM_EPOCH = "E-20260915"; // opened at the v10.6 observeCapture regime
+   169→const ROLLING_WINDOW = 30; // v10.10 — per-arm evidence window (most-recent settled)
+   170→const PAPER_CAP = 60;
+   171→const DATA_DIR = path.join(process.cwd(), ".data");
+   172→const FILE = path.join(DATA_DIR, "shadow-veto.jsonl");
+   173→const FILE_MAX_BYTES = 6 * 1024 * 1024;
+   174→
+   175→const verdicts: ShadowVerdict[] = [];
+   176→const papers: PaperTrade[] = [];
+   177→let persisted = 0;
+   178→let hydrating: Promise<void> | null = null;
+   179→let seq = 0;
+   180→// v8.2.1 INGEST DISCIPLINE — Turbopack can run TWO module instances (old engine
+   181→// closure + freshly compiled routes) that BOTH adjudicate and write this JSONL
+   182→// with independent seq counters (length-derived seq caused id reuse: SV/PP-0039
+   183→// written twice). All ingestion therefore goes through id-unique + candidate-
+   184→// collapse gates so rings stay honest no matter how many instances write.
+   185→const seenIds = new Set<string>();
+   186→const INGEST_COLLAPSE_MS = 10 * 60_000; // same candidate adjudicated twice within 10min = cross-instance duplicate
+   187→
+   188→function maxIdSeq(list: Array<{ id: string }>): number {
+   189→  let max = 0;
+   190→  for (const r of list) {
+   191→    const m = /^S[VP]-(\d+)$/.exec(r.id);
+   192→    if (m) max = Math.max(max, Number(m[1]));
+   193→  }
+   194→  return max;
+   195→}
+   196→
+   197→function ingestVerdict(v: ShadowVerdict): boolean {
+   198→  if (!v || typeof v.id !== "string") return false;
+   199→  // v10.19 LINK-DELTA REBUILD (restored lost v10.17): the JSONL re-persists a
+   200→  // verdict whenever its state UPGRADES (linkRealDeploy binds the serial, the
+   201→  // outcome sweep closes it, the orphan sweep stamps it). First-record-wins
+   202→  // hydration silently DROPPED those upgrades — every restart reverted linked-
+   203→  // but-unsettled verdicts back to unlinked (the real-veto 17→12 regression
+   204→  // after the 2026-09-21 restarts). Duplicate ids now MERGE their upgrade
+   205→  // fields into the already-ingested record, order-independent.
+   206→  if (seenIds.has(v.id)) {
+   207→    const ex = verdicts.find((x) => x.id === v.id);
+   208→    if (ex) {
+   209→      if (ex.serial === null && v.serial !== null) ex.serial = v.serial;
+   210→      if (!ex.outcome && v.outcome) ex.outcome = v.outcome;
+   211→      if (ex.sweptAt === undefined && v.sweptAt !== undefined) ex.sweptAt = v.sweptAt;
+   212→    }
+   213→    return false;
+   214→  }
+   215→  v.audit = v.audit ?? null; // normalize legacy records
+   216→  // collapse cross-instance duplicate adjudications of the same candidate —
+   217→  // scan backwards to the candidate's latest record; inside the window = dupe
+   218→  for (let i = verdicts.length - 1; i >= 0; i--) {
+   219→    const x = verdicts[i]!;
+   220→    if (x.symbol === v.symbol && x.direction === v.direction) {
+   221→      if (Math.abs(x.at - v.at) < INGEST_COLLAPSE_MS) return false;
+   222→      break;
+   223→    }
+   224→  }
+   225→  seenIds.add(v.id);
+   226→  verdicts.push(v);
+   227→  if (verdicts.length > VERDICT_CAP) verdicts.splice(0, verdicts.length - VERDICT_CAP);
+   228→  return true;
+   229→}
+   230→
+   231→function ingestPaper(p: PaperTrade): boolean {
+   232→  if (!p || typeof p.id !== "string") return false;
+   233→  if (seenIds.has(p.id)) return false;
+   234→  seenIds.add(p.id);
+   235→  papers.push(p);
+   236→  trimPapers();
+   237→  return true;
+   238→}
+   239→
+   240→/** v10.7 FIFO cap with evidence-safety — evict oldest SETTLED papers first;
+   241→ * only when the ring is all-OPEN (degenerate burst) fall back to oldest-first.
+   242→ * A settled record can always be re-derived from the rotated journal, but a
+   243→ * live counterfactual evicted mid-flight is lost evidence forever. */
+   244→function trimPapers(): void {
+   245→  if (papers.length <= PAPER_CAP) return;
+   246→  let overflow = papers.length - PAPER_CAP;
+   247→  for (let i = 0; i < papers.length && overflow > 0; ) {
+   248→    if (papers[i]!.outcome) {
+   249→      papers.splice(i, 1);
+   250→      overflow--;
+   251→    } else i++;
+   252→  }
+   253→  if (papers.length > PAPER_CAP) papers.splice(0, papers.length - PAPER_CAP);
+   254→}
+   255→// v8.2.1 SPLIT-BRAIN COUNTERMEASURE (mirrors gate-journal.ts) — Turbopack dev
+   256→// compiles one module instance PER ROUTE; the engine's instance adjudicates +
+   257→// writes the JSONL while a freshly-compiled read route would otherwise show a
+   258→// frozen/empty view forever. readPos-tailing keeps every reader live.
+   259→let readPos = 0;
+   260→let hydratedAt = 0;
+   261→let refreshing: Promise<void> | null = null;
+   262→let lastRefreshAt = 0;
+   263→const REFRESH_MIN_INTERVAL_MS = 10_000;
+   264→const REFRESH_MAX_BITE = 512 * 1024;
+   265→
+   266→const DEFAULT_CONFIG: ShadowVetoConfig = {
+   267→  mode: "shadow",
+   268→  windowPass: 3,
+   269→  windowReject: -8,
+   270→  budgetPerHour: 12,
+   271→  minSpacingMs: 90_000,
+   272→  dedupMs: 30 * 60_000,
+   273→  cacheTtlMs: 8 * 60_000,
+   274→  paperMarginUsd: 5,
+   275→  autoPromote: true, // v9.3 — arms fill → real veto activates itself, no operator flip needed
+   276→  observeCapture: true, // v10.6 — capture deploys adjudicated observe-only so REAL arms fill
+   277→};
+   278→
+   279→const CONFIG_KEY = "shadowveto.config";
+   280→let configCache: ShadowVetoConfig | null = null;
+   281→let configLoadedAt = 0;
+   282→
+   283→async function hydrate(): Promise<void> {
+   284→  if (hydrating) return hydrating;
+   285→  hydrating = (async () => {
+   286→    try {
+   287→      const buf = await readFile(FILE, "utf8").catch(() => "");
+   288→      if (buf) {
+   289→        const lines = buf.split("\n").filter(Boolean);
+   290→        for (const line of lines.slice(-3000)) {
+   291→          try {
+   292→            const rec = JSON.parse(line) as { k: string; v: unknown };
+   293→            if (rec.k === "v") ingestVerdict(rec.v as ShadowVerdict);
+   294→            else if (rec.k === "p") ingestPaper(rec.v as PaperTrade);
+   295→            else if (rec.k === "o") applyOutcomeRecord(rec.v as { id: string; outcome: ShadowOutcome });
+   296→            else if (rec.k === "pc") applyPaperClose(rec.v as { id: string; status: PaperTrade["status"]; reachedTp: number; pnlPercent: number; pnlUsd: number; stop: number; outcome: ShadowOutcome; closeNote: string });
+   297→          } catch {
+   298→            /* torn line */
+   299→          }
+   300→        }
+   301→        // v8.2.1 — seq MUST derive from the MAX id on disk (length-derived seq
+   302→        // reused ids when two module instances wrote with independent counters)
+   303→        seq = Math.max(maxIdSeq(verdicts), maxIdSeq(papers));
+   304→      }
+   305→      const st = await stat(FILE).catch(() => null);
+   306→      persisted = st?.size ?? 0;
+   307→      readPos = st?.size ?? 0;
+   308→      hydratedAt = Date.now();
+   309→      // dedup continuity across instance swaps — a fresh instance must not
+   310→      // instantly re-adjudicate what another instance just adjudicated
+   311→      for (const v of verdicts) {
+   312→        const key = `${v.symbol}|${v.direction}`;
+   313→        const prev = lastAdjAt.get(key) ?? 0;
+   314→        if (v.at > prev) lastAdjAt.set(key, v.at);
+   315→      }
+   316→      if ((st?.size ?? 0) > FILE_MAX_BYTES) {
+   317→        // v10.6.1 persist-guard (operator APPROVE 2026-09-18): rotation is the
+   318→        // destructive rewrite — if a fresher boot just rotated, resync our
+   319→        // counters from disk instead of renaming over its rotation.
+   320→        const { persistGuardOk, persistWatermark, serializePersist } = await import("./persist-guard");
+   321→        await serializePersist("shadow-veto-journal", async () => {
+   322→          if (!(await persistGuardOk("shadow-veto-journal"))) {
+   323→            const fresh = await stat(FILE).catch(() => null);
+   324→            persisted = Math.min(fresh?.size ?? 0, FILE_MAX_BYTES);
+   325→            readPos = fresh?.size ?? 0;
+   326→            return;
+   327→          }
+   328→          await rename(FILE, `${FILE}.old`).catch(() => undefined);
+   329→          await persistWatermark("shadow-veto-journal");
+   330→          persisted = 0;
+   331→          readPos = 0;
+   332→        });
+   333→      }
+   334→    } catch {
+   335→      /* journaling must never break the engine */
+   336→    }
+   337→  })();
+   338→  return hydrating;
+   339→}
+   340→
+   341→async function persist(rec: { k: string; v: unknown }): Promise<void> {
+   342→  try {
+   343→    const line = JSON.stringify(rec) + "\n";
+   344→    await appendFile(FILE, line, "utf8");
+   345→    persisted += line.length;
+   346→    readPos += line.length; // our own bytes are already in the rings
+   347→    if (persisted > FILE_MAX_BYTES) {
+   348→      // v10.6.1 persist-guard: serialize rotation + re-stat before renaming so
+   349→      // concurrent writers (or a stale generation) never clobber a fresh file.
+   350→      const { persistGuardOk, persistWatermark, serializePersist } = await import("./persist-guard");
+   351→      await serializePersist("shadow-veto-journal", async () => {
+   352→        const cur = await stat(FILE).catch(() => null);
+   353→        if ((cur?.size ?? 0) <= FILE_MAX_BYTES) {
+   354→          // someone else already rotated — just resync our counters
+   355→          persisted = Math.min(cur?.size ?? 0, FILE_MAX_BYTES);
+   356→          readPos = cur?.size ?? 0;
+   357→          return;
+   358→        }
+   359→        if (!(await persistGuardOk("shadow-veto-journal"))) {
+   360→          const fresh = await stat(FILE).catch(() => null);
+   361→          persisted = Math.min(fresh?.size ?? 0, FILE_MAX_BYTES);
+   362→          readPos = fresh?.size ?? 0;
+   363→          return;
+   364→        }
+   365→        await rename(FILE, `${FILE}.old`).catch(() => undefined);
+   366→        await persistWatermark("shadow-veto-journal");
+   367→        persisted = 0;
+   368→        readPos = 0;
+   369→      });
+   370→    }
+   371→  } catch {
+   372→    /* non-fatal */
+   373→  }
+   374→}
+   375→
+   376→export async function shadowVetoReady(): Promise<void> {
+   377→  await hydrate();
+   378→  try {
+   379→    await mkdir(DATA_DIR, { recursive: true });
+   380→  } catch {
+   381→    /* exists */
+   382→  }
+   383→}
+   384→
+   385→/** v8.2.1 READ-PATH LIVENESS — tail-ingest another instance's writes (see
+   386→ * gate-journal.gateJournalRefresh for the full rationale). Throttled,
+   387→ * single-flight, rotation-safe, bounded bite. */
+   388→export async function shadowVetoRefresh(maxAgeMs = REFRESH_MIN_INTERVAL_MS): Promise<void> {
+   389→  if (Date.now() - lastRefreshAt < maxAgeMs) return;
+   390→  if (refreshing) return refreshing;
+   391→  refreshing = (async () => {
+   392→    try {
+   393→      const st = await stat(FILE).catch(() => null);
+   394→      if (!st) return;
+   395→      if (st.size < readPos) readPos = 0; // rotated
+   396→      if (st.size === readPos) return;
+   397→      const len = Math.min(st.size - readPos, REFRESH_MAX_BITE);
+   398→      const fh = await open(FILE, "r").catch(() => null);
+   399→      if (!fh) return;
+   400→      try {
+   401→        const buf = Buffer.alloc(len);
+   402→        const { bytesRead } = await fh.read(buf, 0, len, readPos);
+   403→        let text = buf.toString("utf8", 0, bytesRead);
+   404→        const lastNl = text.lastIndexOf("\n");
+   405→        if (lastNl === -1) return; // partial line — wait for the writer
+   406→        text = text.slice(0, lastNl + 1);
+   407→        readPos += Buffer.byteLength(text, "utf8");
+   408→        for (const line of text.split("\n")) {
+   409→          if (!line) continue;
+   410→          try {
+   411→            const rec = JSON.parse(line) as { k: string; v: unknown };
+   412→            if (rec.k === "v") {
+   413→              const v = rec.v as ShadowVerdict;
+   414→              const m = /^SV-(\d+)$/.exec(v.id ?? "");
+   415→              if (ingestVerdict(v) && m) seq = Math.max(seq, Number(m[1]));
+   416→            } else if (rec.k === "p") {
+   417→              ingestPaper(rec.v as PaperTrade);
+   418→            } else if (rec.k === "o") applyOutcomeRecord(rec.v as { id: string; outcome: ShadowOutcome });
+   419→            else if (rec.k === "pc") applyPaperClose(rec.v as { id: string; status: PaperTrade["status"]; reachedTp: number; pnlPercent: number; pnlUsd: number; stop: number; outcome: ShadowOutcome; closeNote: string });
+   420→          } catch {
+   421→            /* torn line */
+   422→          }
+   423→        }
+   424→        hydratedAt = Date.now();
+   425→      } finally {
+   426→        await fh.close().catch(() => undefined);
+   427→      }
+   428→    } catch {
+   429→      /* non-fatal */
+   430→    } finally {
+   431→      lastRefreshAt = Date.now();
+   432→    }
+   433→  })().finally(() => {
+   434→    refreshing = null;
+   435→  });
+   436→  return refreshing;
+   437→}
+   438→
+   439→function applyOutcomeRecord(rec: { id: string; outcome: ShadowOutcome }): void {
+   440→  const v = [...verdicts].reverse().find((x) => x.id === rec.id);
+   441→  if (v && !v.outcome) v.outcome = rec.outcome;
+   442→}
+   443→
+   444→function applyPaperClose(rec: { id: string; status: PaperTrade["status"]; reachedTp: number; pnlPercent: number; pnlUsd: number; stop: number; outcome: ShadowOutcome; closeNote: string }): void {
+   445→  const p = [...papers].reverse().find((x) => x.id === rec.id);
+   446→  if (p && !p.outcome) {
+   447→    p.status = rec.status;
+   448→    p.reachedTp = rec.reachedTp;
+   449→    p.pnlPercent = rec.pnlPercent;
+   450→    p.pnlUsd = rec.pnlUsd;
+   451→    p.stop = rec.stop;
+   452→    p.outcome = rec.outcome;
+   453→    p.closeNote = rec.closeNote;
+   454→  }
+   455→}
+   456→
+   457→// ── config (EngineSetting — the rare-write exception, verdictcore pattern) ──
+   458→
+   459→export async function getShadowVetoConfig(force = false): Promise<ShadowVetoConfig> {
+   460→  if (!force && configCache && Date.now() - configLoadedAt < 15_000) return configCache;
+   461→  try {
+   462→    const row = await db.engineSetting.findUnique({ where: { key: CONFIG_KEY } });
+   463→    if (row) {
+   464→      const parsed = JSON.parse(row.value) as Partial<ShadowVetoConfig>;
+   465→      configCache = {
+   466→        mode: (["off", "shadow", "veto"] as const).includes(parsed.mode as ShadowVetoMode) ? (parsed.mode as ShadowVetoMode) : DEFAULT_CONFIG.mode,
+   467→        windowPass: Number.isFinite(parsed.windowPass) ? Math.max(0, Math.min(10, parsed.windowPass!)) : DEFAULT_CONFIG.windowPass,
+   468→        windowReject: Number.isFinite(parsed.windowReject) ? Math.max(-30, Math.min(0, parsed.windowReject!)) : DEFAULT_CONFIG.windowReject,
+   469→        budgetPerHour: Number.isFinite(parsed.budgetPerHour) ? Math.max(2, Math.min(40, parsed.budgetPerHour!)) : DEFAULT_CONFIG.budgetPerHour,
+   470→        minSpacingMs: Number.isFinite(parsed.minSpacingMs) ? Math.max(30_000, parsed.minSpacingMs!) : DEFAULT_CONFIG.minSpacingMs,
+   471→        dedupMs: Number.isFinite(parsed.dedupMs) ? Math.max(5 * 60_000, parsed.dedupMs!) : DEFAULT_CONFIG.dedupMs,
+   472→        cacheTtlMs: Number.isFinite(parsed.cacheTtlMs) ? Math.max(60_000, parsed.cacheTtlMs!) : DEFAULT_CONFIG.cacheTtlMs,
+   473→        paperMarginUsd: Number.isFinite(parsed.paperMarginUsd) ? Math.max(1, Math.min(20, parsed.paperMarginUsd!)) : DEFAULT_CONFIG.paperMarginUsd,
+   474→        autoPromote: typeof parsed.autoPromote === "boolean" ? parsed.autoPromote : DEFAULT_CONFIG.autoPromote,
+   475→        observeCapture: typeof parsed.observeCapture === "boolean" ? parsed.observeCapture : DEFAULT_CONFIG.observeCapture,
+   476→      };
+   477→    } else configCache = { ...DEFAULT_CONFIG };
+   478→  } catch {
+   479→    configCache = configCache ?? { ...DEFAULT_CONFIG };
+   480→  }
+   481→  configLoadedAt = Date.now();
+   482→  return configCache!;
+   483→}
+   484→
+   485→export async function saveShadowVetoConfig(patch: Partial<ShadowVetoConfig>): Promise<ShadowVetoConfig> {
+   486→  const cur = await getShadowVetoConfig(true);
+   487→  const next: ShadowVetoConfig = { ...cur, ...patch };
+   488→  await db.engineSetting.upsert({
+   489→    where: { key: CONFIG_KEY },
+   490→    create: { key: CONFIG_KEY, value: JSON.stringify(next) },
+   491→    update: { value: JSON.stringify(next) },
+   492→  });
+   493→  configCache = next;
+   494→  configLoadedAt = Date.now();
+   495→  return next;
+   496→}
+   497→
+   498→// ── statistics helpers ────────────────────────────────────────
+   499→
+   500→/** Wilson score LOWER bound at 95% (z=1.96) — the A/B evidence statistic. */
+   501→export function wilsonLB(wins: number, n: number): number | null {
+   502→  if (n <= 0) return null;
+   503→  const z = 1.96;
+   504→  const p = wins / n;
+   505→  const denom = 1 + (z * z) / n;
+   506→  const centre = p + (z * z) / (2 * n);
+   507→  const spread = z * Math.sqrt((p * (1 - p) + (z * z) / (4 * n)) / n);
+   508→  return Math.max(0, ((centre - spread) / denom) * 100);
+   509→}
+   510→
+   511→// ── budget / dedup state ──────────────────────────────────────
+   512→
+   513→const callStamps: number[] = [];
+   514→let lastCallAt = 0;
+   515→const lastAdjAt = new Map<string, number>();
+   516→const verdictCache = new Map<string, ShadowVerdict>(); // symbol|direction → latest
+   517→let pendingCount = 0;
+   518→const MAX_PENDING = 3;
+   519→
+   520→function withinBudget(cfg: ShadowVetoConfig): boolean {
+   521→  const now = Date.now();
+   522→  while (callStamps.length && now - callStamps[0]! > 3600_000) callStamps.shift();
+   523→  if (callStamps.length >= cfg.budgetPerHour) return false;
+   524→  if (now - lastCallAt < cfg.minSpacingMs) return false;
+   525→  return true;
+   526→}
+   527→
+   528→// ── fence offers (engine calls after recordGateSamples) ───────
+   529→
+   530→export interface FenceCandidate {
+   531→  symbol: string;
+   532→  direction: "LONG" | "SHORT";
+   533→  strategy: string;
+   534→  score: number; // signed adjScore
+   535→  effMin: number;
+   536→  baseMin: number;
+   537→  thr: ThrBreakdown;
+   538→  confirms: GateFactor[];
+   539→  opposes: GateFactor[];
+   540→  notes: string | null;
+   541→  source: GateSource;
+   542→  passed: boolean;
+   543→}
+   544→
+   545→/** Offer a scan batch's fence candidates to the adjudicator. Fire-and-forget,
+   546→ * self-budgeted, deduped — never throws, never blocks the scan. */
+   547→export async function offerFenceAdjudication(batch: FenceCandidate[]): Promise<void> {
+   548→  try {
+   549→    const cfg = await getShadowVetoConfig();
+   550→    if (cfg.mode === "off" || batch.length === 0 || pendingCount >= MAX_PENDING) return;
+   551→    await shadowVetoReady();
+   552→    const now = Date.now();
+   553→    // closest-to-gate first so the budget buys the most informative verdicts
+   554→    const fence = batch
+   555→      .map((c) => ({ c, gap: Math.abs(c.score) - c.effMin }))
+   556→      .filter(({ c, gap }) => (c.passed ? gap >= 0 && gap <= cfg.windowPass : gap < 0 && gap >= cfg.windowReject))
+   557→      .sort((a, b) => Math.abs(a.gap) - Math.abs(b.gap));
+   558→    for (const { c, gap } of fence) {
+   559→      const key = `${c.symbol}|${c.direction}`;
+   560→      const last = lastAdjAt.get(key) ?? 0;
+   561→      if (now - last < cfg.dedupMs) continue;
+   562→      const cached = verdictCache.get(key);
+   563→      if (cached && now - cached.at < cfg.cacheTtlMs) continue; // fresh verdict already in place
+   564→      lastAdjAt.set(key, now);
+   565→      pendingCount++;
+   566→      void runAdjudication(c, c.passed ? "PASS" : "REJECT", gap)
+   567→        .catch(() => undefined)
+   568→        .finally(() => {
+   569→          pendingCount = Math.max(0, pendingCount - 1);
+   570→        });
+   571→    }
+   572→  } catch {
+   573→    /* never break the scan */
+   574→  }
+   575→}
+   576→
+   577→async function runAdjudication(c: FenceCandidate, side: FenceSide, gap: number): Promise<void> {
+   578→  const cfg = await getShadowVetoConfig(true);
+   579→  if (cfg.mode === "off") return;
+   580→  if (!withinBudget(cfg)) return;
+   581→  callStamps.push(Date.now());
+   582→  lastCallAt = Date.now();
+   583→  await adjudicateCore(c, side, gap, cfg); // origin defaults to "fence" — the normal gate-fence path
+   584→}
+   585→
+   586→/** v10.6 CAPTURE-OBSERVE (operator mandate «پرشدن بازوهای shadow-veto را سرعت و بهبود ببخش»،
+   587→ * 2026-09-15). ROOT CAUSE of the REAL-arm starvation: RAW-CAL capture deploys run
+   588→ * with bypassQuality=true, which SKIPS the entire shadow-veto deploy path — so 113
+   589→ * capture issues produced ZERO pass-side verdicts and real-keep froze at 9/30
+   590→ * (n-keep is the binding promotion criterion). observe(): an OBSERVE-ONLY
+   591→ * adjudication on every capture deploy — side PASS (the trade IS deploying),
+   592→ * verdict NEVER vetoes (capture authority untouched), linked to the real serial
+   593→ * by the existing linkRealDeploy → settle → closeRealOutcomes chain. Every
+   594→ * capture settle now lands in the real-keep / real-veto A/B arms. Budget-honest:
+   595→ * shares the LLM accounting (callStamps) with a small observe headroom, spaced
+   596→ * by minSpacingMs; capture cadence (~12min spacing) keeps it ≈3-5 calls/h. */
+   597→let lastObserveAt = 0;
+   598→export async function shadowVetoObserve(ctx: DeployGateCtx): Promise<void> {
+   599→  try {
+   600→    const cfg = await getShadowVetoConfig(true);
+   601→    if (cfg.mode === "off" || !cfg.observeCapture) return;
+   602→    await shadowVetoReady();
+   603→    const now = Date.now();
+   604→    if (now - lastObserveAt < cfg.minSpacingMs) return;
+   605→    const key = `${ctx.symbol}|${ctx.direction}`;
+   606→    const cached = verdictCache.get(key);
+   607→    if (cached && now - cached.at < cfg.cacheTtlMs && cached.side === "PASS" && cached.serial === null) return; // fresh unlinked verdict — linkRealDeploy will bind it
+   608→    lastObserveAt = now;
+   609→    callStamps.push(now);
+   610→    lastCallAt = now;
+   611→    await adjudicateCore(
+   612→      {
+   613→        symbol: ctx.symbol,
+   614→        direction: ctx.direction,
+   615→        strategy: ctx.strategy,
+   616→        score: ctx.score,
+   617→        effMin: ctx.effMin,
+   618→        baseMin: 0,
+   619→        thr: ctx.thr,
+   620→        confirms: ctx.confirms,
+   621→        opposes: ctx.opposes,
+   622→        notes: ctx.notes,
+   623→        source: ctx.source,
+   624→        passed: true,
+   625→      },
+   626→      "PASS",
+   627→      ctx.gap,
+   628→      cfg,
+   629→      " [CAPTURE-OBSERVE]",
+   630→      "capture", // v10.16 — stamped so promotion evidence can exclude the capture path
+   631→    );
+   632→  } catch {
+   633→    /* observe must never break the deploy */
+   634→  }
+   635→}
+   636→
+   637→async function adjudicateCore(c: FenceCandidate, side: FenceSide, gap: number, cfg: ShadowVetoConfig, tag = "", origin: "capture" | "fence" = "fence"): Promise<void> {
+   638→  const { aiShadowAdjudication } = await import("@/lib/ai");
+   639→  const res = await aiShadowAdjudication({
+   640→    symbol: c.symbol,
+   641→    direction: c.direction,
+   642→    strategy: c.strategy,
+   643→    side,
+   644→    gap,
+   645→    score: c.score,
+   646→    effMin: c.effMin,
+   647→    thr: c.thr as unknown as Record<string, number>,
+   648→    confirms: c.confirms,
+   649→    opposes: c.opposes,
+   650→    notes: c.notes,
+   651→  });
+   652→  seq++;
+   653→  const rec: ShadowVerdict = {
+   654→    id: `SV-${String(seq).padStart(4, "0")}`,
+   655→    at: Date.now(),
+   656→    symbol: c.symbol,
+   657→    direction: c.direction,
+   658→    strategy: c.strategy,
+   659→    side,
+   660→    gap,
+   661→    score: c.score,
+   662→    effMin: c.effMin,
+   663→    thr: c.thr,
+   664→    verdict: res.verdict,
+   665→    confidence: res.confidence,
+   666→    reason: `${res.reason}${tag}`,
+   667→    label: res.label,
+   668→    audit: res.audit ?? null, // v8.2.1 grounding audit rides the record
+   669→    source: c.source,
+   670→    serial: null,
+   671→    outcome: null,
+   672→    epoch: ARM_EPOCH, // v10.7 — born into the current evidence epoch
+   673→    origin, // v10.16 — capture vs fence provenance (readers ignore unknown fields; JSONL is additive)
+   674→  };
+   675→  verdicts.push(rec);
+   676→  seenIds.add(rec.id); // id-discipline: this instance's live verdicts are also "seen"
+   677→  if (verdicts.length > VERDICT_CAP) verdicts.splice(0, verdicts.length - VERDICT_CAP);
+   678→  verdictCache.set(`${c.symbol}|${c.direction}`, rec);
+   679→  void persist({ k: "v", v: rec });
+   680→
+   681→  // v8.2.1 — an audited HALLUCINATION is an operator-visible event (rate-bounded
+   682→  // by the adjudication budget itself; this path only fires on VIOLATION)
+   683→  if (res.audit?.verdict === "VIOLATION") {
+   684→    await import("@/lib/engine")
+   685→      .then((m) => m.fireEvent(null, c.symbol, "ENGINE", "warn", `SHADOW-VETO ${rec.id}: model verdict DISCARDED — grounding violation (${res.audit!.unmatched.length} citations not in evidence bundle). Heuristic adjudication used instead.`))
+   686→      .catch(() => undefined);
+   687→  }
+   688→
+   689→  // REJECT-side TRADE verdict = the core disagrees with the numeric gate →
+   690→  // open the counterfactual paper trade (the would-have-won ledger).
+   691→  if (side === "REJECT" && res.verdict === "TRADE") void openPaperTrade(rec, cfg.paperMarginUsd).catch(() => undefined);
+   692→
+   693→  // rate-limited audit event so the operator sees the core speaking
+   694→  if ((side === "REJECT" && res.verdict === "TRADE") || (side === "PASS" && res.verdict === "VETO")) {
+   695→    const pos = side === "PASS" ? "hair-thin pass" : `fence reject gap ${gap.toFixed(1)}`;
+   696→    const msg = `SHADOW-VETO ${rec.id}: ${c.symbol} ${c.direction} (${pos}) → ${res.verdict} @ ${res.confidence}% — ${res.reason}`;
+   697→    await import("@/lib/engine")
+   698→      .then((m) => m.fireEvent(null, c.symbol, "ENGINE", "ai", msg))
+   699→      .catch(() => undefined);
+   700→  }
+   701→}
+   702→
+   703→// ── deploy-time gate (Phase 1; cache lookup only — zero added latency) ──
+   704→
+   705→export interface DeployGateCtx {
+   706→  symbol: string;
+   707→  direction: "LONG" | "SHORT";
+   708→  strategy: string;
+   709→  score: number;
+   710→  effMin: number;
+   711→  gap: number;
+   712→  thr: ThrBreakdown;
+   713→  confirms: GateFactor[];
+   714→  opposes: GateFactor[];
+   715→  notes: string | null;
+   716→  entryPrice: number;
+   717→  source: GateSource;
+   718→}
+   719→
+   720→export interface DeployGateResult {
+   721→  veto: boolean;
+   722→  verdictId: string | null;
+   723→  reason: string | null;
+   724→  mode: ShadowVetoMode;
+   725→}
+   726→
+   727→/** Deploy-path check. FAIL-OPEN by design: no fresh verdict, mode≠veto, or any
+   728→ * error → the deploy proceeds. When a VETO actually blocks, the blocked trade
+   729→ * is paper-tracked so revocation pressure stays measurable. */
+   730→export async function shadowVetoDeployGate(ctx: DeployGateCtx): Promise<DeployGateResult> {
+   731→  const failOpen: DeployGateResult = { veto: false, verdictId: null, reason: null, mode: "shadow" };
+   732→  try {
+   733→    const cfg = await getShadowVetoConfig();
+   734→    failOpen.mode = cfg.mode;
+   735→    if (cfg.mode !== "veto" || ctx.gap > cfg.windowPass) return failOpen;
+   736→    await shadowVetoReady();
+   737→    const key = `${ctx.symbol}|${ctx.direction}`;
+   738→    const cached = verdictCache.get(key);
+   739→    const fresh = cached && Date.now() - cached.at < cfg.cacheTtlMs && cached.side === "PASS";
+   740→    if (!fresh || !cached) {
+   741→      // pre-warm for the next evaluation of this fence candidate
+   742→      void offerFenceAdjudication([
+   743→        {
+   744→          symbol: ctx.symbol,
+   745→          direction: ctx.direction,
+   746→          strategy: ctx.strategy,
+   747→          score: ctx.score,
+   748→          effMin: ctx.effMin,
+   749→          baseMin: 0,
+   750→          thr: ctx.thr,
+   751→          confirms: ctx.confirms,
+   752→          opposes: ctx.opposes,
+   753→          notes: ctx.notes,
+   754→          source: ctx.source,
+   755→          passed: true,
+   756→        },
+   757→      ]);
+   758→      return failOpen;
+   759→    }
+   760→    // v8.4.1 HARD GUARD — only MODEL verdicts may ever block a real deploy.
+   761→    // Heuristic verdicts are honest fallbacks (429 storms, grounding violations)
+   762→    // but a deterministic net-vote sign must never veto real capital. Fail-open.
+   763→    if (cached.label !== "MODEL") {
+   764→      void offerFenceAdjudication([
+   765→        {
+   766→          symbol: ctx.symbol,
+   767→          direction: ctx.direction,
+   768→          strategy: ctx.strategy,
+   769→          score: ctx.score,
+   770→          effMin: ctx.effMin,
+   771→          baseMin: 0,
+   772→          thr: ctx.thr,
+   773→          confirms: ctx.confirms,
+   774→          opposes: ctx.opposes,
+   775→          notes: ctx.notes,
+   776→          source: ctx.source,
+   777→          passed: true,
+   778→        },
+   779→      ]);
+   780→      return failOpen;
+   781→    }
+   782→    if (cached.verdict !== "VETO") return failOpen;
+   783→    // VETO fires — record the block + the counterfactual paper trade
+   784→    const geo = await paperGeometry(ctx.symbol, ctx.direction, ctx.strategy, ctx.entryPrice).catch(() => null);
+   785→    if (!geo) return failOpen;
+   786→    seq++;
+   787→    const paper = newPaperShell(`PP-${String(seq).padStart(4, "0")}`, cached, cfg, geo);
+   788→    papers.push(paper);
+   789→    trimPapers();
+   790→    void persist({ k: "p", v: paper });
+   791→    return { veto: true, verdictId: cached.id, reason: `${cached.label} ${cached.confidence}% — ${cached.reason}`, mode: cfg.mode };
+   792→  } catch {
+   793→    return failOpen;
+   794→  }
+   795→}
+   796→
+   797→// ── real-outcome linkage ──────────────────────────────────────
+   798→
+   799→/** Called right after db.signal.create — binds the freshest PASS-side verdict
+   800→ * for this symbol|direction to the real serial so the settle sweep can close
+   801→ * the loop with the REAL outcome. */
+   802→export async function linkRealDeploy(serial: number, symbol: string, direction: string): Promise<void> {
+   803→  try {
+   804→    if (!serial) return;
+   805→    await shadowVetoReady();
+   806→    const key = `${symbol}|${direction}`;
+   807→    const now = Date.now();
+   808→    const candidate = [...verdicts]
+   809→      .reverse()
+   810→      .find((v) => `${v.symbol}|${v.direction}` === key && v.side === "PASS" && v.serial === null && now - v.at < 15 * 60_000);
+   811→    if (candidate) {
+   812→      candidate.serial = serial;
+   813→      void persist({ k: "v", v: candidate });
+   814→    }
+   815→  } catch {
+   816→    /* linkage must never break the deploy */
+   817→  }
+   818→}
+   819→
+   820→const SETTLED = ["TP1", "TP2", "TP3", "SL", "EXPIRED", "CLOSED"];
+   821→
+   822→/** v8.4.3 RETRO-LINK SWEEP → v10.16 WIDE-WINDOW DRAIN (audit 4-f).
+   823→ *
+   824→ * Root cause (operator report 2026-09-12: «شاخص‌های REAL پر نمی‌شود»): the
+   825→ * fence BATCH (offerFenceAdjudication on journal rows) adjudicates a deploy's
+   826→ * own hair-pass row minutes AFTER the deploy already ran linkRealDeploy —
+   827→ * the verdict is born with serial=null after the only live-link chance has
+   828→ * passed. Result: 35/36 PASS verdicts never bound to the trades they
+   829→ * described, and the REAL arms stayed 0/30.
+   830→ *
+   831→ * v10.16: the sweep still could NOT drain its own backlog — (a) the match
+   832→ * window (−15min pre-deploy … +40min post-deploy) missed verdicts born at the
+   833→ * edges of that envelope, and (b) the trade lookback was fixed at 24h, so a
+   834→ * PASS verdict older than 24h could NEVER find its deploy again — the
+   835→ * "125 PASS verdicts older than 24h never linked" telemetry alert was
+   836→ * structurally permanent. Fixes, evidence-honesty preserved:
+   837→ *   · match window widened to ±90min (verdict born up to 90min before or after
+   838→ *     the deploy it describes — nearest-Δt greedy still picks the tightest
+   839→ *     pair);
+   840→ *   · the trade lookback now covers the OLDEST unlinked verdict (minus the
+   841→ *     90min pre-warm margin), bounded at 7 days, so the stale backlog drains
+   842→ *     instead of aging out.
+   843→ * Identity constraints UNCHANGED: same symbol|direction, one-to-one (a serial
+   844→ * binds at most one verdict and vice versa), never touches REJECT-side
+   845→ * verdicts or already-linked ones. Outcome closure stays with the existing
+   846→ * closeRealOutcomes sweep. Invoked on the engine's existing tick-%40 cadence
+   847→ * (same block as closeRealOutcomes / maybeAutoPromote), so the backlog drains
+   848→ * automatically without any new scheduler. */
+   849→export async function retroLinkRealDeploys(): Promise<number> {
+   850→  try {
+   851→    await shadowVetoReady();
+   852→    const unlinked = verdicts.filter((v) => v.side === "PASS" && v.serial === null);
+   853→    if (unlinked.length === 0) return 0;
+   854→    const taken = new Set(verdicts.filter((v) => v.serial !== null).map((v) => v.serial!));
+   855→    // v10.16 — look back far enough to reach the OLDEST unlinked verdict's
+   856→    // deploy window (±90min), bounded at 7 days so the query stays cheap.
+   857→    const oldestUnlinked = unlinked.reduce((a, v) => Math.min(a, v.at), Date.now());
+   858→    const sinceMs = Math.max(Date.now() - 7 * 24 * 3600_000, oldestUnlinked - 90 * 60_000);
+   859→    const sigs = await db.signal.findMany({
+   860→      where: { createdAt: { gte: new Date(sinceMs) } }, // serial is non-nullable on Signal — no extra filter needed
+   861→      select: { serial: true, symbol: true, direction: true, createdAt: true },
+   862→      orderBy: { createdAt: "desc" },
+   863→      take: 400,
+   864→    });
+   865→    let bound = 0;
+   866→    // v10.19 ORPHAN SWEEP — coverage bounds of the fetch (take-400 desc): when
+   867→    // the query returns its FULL take, the oldest fetched row bounds coverage;
+   868→    // otherwise the query reaches sinceMs. A verdict is only stampable as an
+   869→    // orphan when its ENTIRE ±90min fence window lies inside covered ground —
+   870→    // absence is then PROOF no deploy ever existed, not a fetch artifact.
+   871→    const coverageLower = sigs.length === 400 && sigs.length > 0 ? sigs[sigs.length - 1]!.createdAt.getTime() : sinceMs;
+   872→    let swept = 0;
+   873→    for (const v of unlinked) {
+   874→      let anyInWindow = false; // v10.19 — a matching deploy exists (even if claimed)
+   875→      let best: { serial: number; dt: number } | null = null;
+   876→      for (const s of sigs) {
+   877→        if (s.symbol !== v.symbol || s.direction !== v.direction) continue;
+   878→        const dt = v.at - s.createdAt.getTime(); // <0 = verdict pre-warmed the deploy, >0 = fence batch after it
+   879→        // v10.16 — match window widened 15min→90min (both sides) so edge-born
+   880→        // verdicts and the >24h stale backlog can bind their own trades.
+   881→        if (dt < -90 * 60_000 || dt > 90 * 60_000) continue;
+   882→        anyInWindow = true;
+   883→        if (taken.has(s.serial!)) continue;
+   884→        if (!best || Math.abs(dt) < Math.abs(best.dt)) best = { serial: s.serial!, dt };
+   885→      }
+   886→      if (best) {
+   887→        v.serial = best.serial;
+   888→        taken.add(best.serial);
+   889→        void persist({ k: "v", v });
+   890→        bound++;
+   891→      } else if (
+   892→        v.sweptAt === undefined &&
+   893→        v.at + 90 * 60_000 < Date.now() && // fence window fully closed — a late deploy can no longer arrive
+   894→        v.at - 90 * 60_000 >= coverageLower && // window fully inside the query reach
+   895→        !anyInWindow // no same-symbol|direction deploy existed at all → structural orphan, promotion-inert
+   896→      ) {
+   897→        v.sweptAt = Date.now();
+   898→        void persist({ k: "v", v });
+   899→        swept++;
+   900→      }
+   901→    }
+   902→    if (swept > 0) console.log(`[shadow-veto] retro-link: bound=${bound} swept-orphans=${swept}`);
+   903→    return bound;
+   904→  } catch {
+   905→    return 0; // evidence plumbing must never throw into the tick
+   906→  }
+   907→}
+   908→
+   909→/** Periodic (engine tick %40): close real outcomes for linked verdicts. */
+   910→export async function closeRealOutcomes(): Promise<number> {
+   911→  try {
+   912→    await shadowVetoReady();
+   913→    const pending = verdicts.filter((v) => v.serial !== null && v.outcome === null);
+   914→    if (pending.length === 0) return 0;
+   915→    let closed = 0;
+   916→    for (const v of pending.slice(-40)) {
+   917→      const sig = await db.signal.findFirst({ where: { serial: v.serial! }, select: { status: true, pnlPercent: true, marginUsd: true, reachedTp: true, closedAt: true } });
+   918→      if (!sig) continue;
+   919→      if (!SETTLED.includes(sig.status)) continue;
+   920→      const pnlUsd = (sig.marginUsd * sig.pnlPercent) / 100;
+   921→      v.outcome = {
+   922→        status: sig.status,
+   923→        pnlPercent: sig.pnlPercent,
+   924→        pnlUsd: Number(pnlUsd.toFixed(3)),
+   925→        win: sig.pnlPercent > 0 || sig.reachedTp >= 1,
+   926→        closedAt: sig.closedAt?.getTime() ?? Date.now(),
+   927→      };
+   928→      void persist({ k: "o", v: { id: v.id, outcome: v.outcome } });
+   929→      closed++;
+   930→    }
+   931→    return closed;
+   932→  } catch {
+   933→    return 0;
+   934→  }
+   935→}
+   936→
+   937→// ── paper engine (engine-identical accounting, honest PAPER label) ──
+   938→
+   939→const TTL_BY_STRATEGY: Record<string, [number, number]> = {
+   940→  "AI-SCALP": [60, 120],
+   941→  "MEAN-REVERT": [90, 180],
+   942→  MOMENTUM: [90, 180],
+   943→  BREAKOUT: [90, 180],
+   944→  "AI-SWING": [240, 480],
+   945→};
+   946→const RR_BASE: Record<string, number> = { "AI-SCALP": 2.1, "MEAN-REVERT": 2.4, MOMENTUM: 2.8, BREAKOUT: 3.1, "AI-SWING": 3.4 };
+   947→
+   948→interface PaperGeometry {
+   949→  entry: number;
+   950→  stop: number;
+   951→  initialStop: number;
+   952→  tp1: number;
+   953→  tp2: number;
+   954→  tp3: number;
+   955→  leverage: number;
+   956→  slDistPct: number;
+   957→  rr: number;
+   958→  ttlMinutes: number;
+   959→}
+   960→
+   961→/** Base geometry for paper trades: slAtrMult × ATR stop (no regime/vol/flow
+   962→ * drivers — those are deploy-time only), levered-risk-capped leverage, base RR.
+   963→ * Direction-aware. Documented simplification: the paper arm measures
+   964→ * DIRECTIONAL edge at the fence, not perfect PnL replication. */
+   965→async function paperGeometry(symbol: string, direction: "LONG" | "SHORT", strategy: string, entryOverride: number | null): Promise<PaperGeometry> {
+   966→  const gate = await getGateSettings();
+   967→  const candles = await fetchKlines(symbol, "15m", 160).catch(() => null);
+   968→  const snap = candles ? buildSnapshot(symbol, candles) : null;
+   969→  const entry = entryOverride ?? snap?.price ?? 0;
+   970→  if (!entry) throw new Error("no price");
+   971→  const atrPct = snap?.atrPct ?? 1.5;
+   972→  const slDistPct = Math.min(5, Math.max(0.7, gate.slAtrMult * atrPct)) / 100;
+   973→  const levRaw = Math.round(Math.min(20, Math.max(5, 60 / (slDistPct * 100))));
+   974→  const leverage = gate.leveredRiskCap > 0 && slDistPct * 100 * levRaw > gate.leveredRiskCap ? Math.max(5, Math.floor(gate.leveredRiskCap / (slDistPct * 100))) : levRaw;
+   975→  const rr = RR_BASE[strategy] ?? 2.6;
+   976→  const tp2Mult = Math.min(2.2, Math.max(1.5, 1.2 + rr * 0.22));
+   977→  const [ttlMin, ttlMax] = TTL_BY_STRATEGY[strategy] ?? [90, 180];
+   978→  const isLong = direction === "LONG";
+   979→  const risk = entry * slDistPct;
+   980→  const fx = (v: number) => Number(v.toFixed(entry > 100 ? 2 : 6));
+   981→  return {
+   982→    entry: fx(entry),
+   983→    initialStop: fx(isLong ? entry - risk : entry + risk),
+   984→    stop: fx(isLong ? entry - risk : entry + risk),
+   985→    tp1: fx(isLong ? entry + risk : entry - risk),
+   986→    tp2: fx(isLong ? entry + risk * tp2Mult : entry - risk * tp2Mult),
+   987→    tp3: fx(isLong ? entry + risk * rr : entry - risk * rr),
+   988→    leverage,
+   989→    slDistPct,
+   990→    rr,
+   991→    ttlMinutes: Math.round(ttlMin + Math.random() * (ttlMax - ttlMin)),
+   992→  };
+   993→}
+   994→
+   995→function newPaperShell(id: string, verdict: ShadowVerdict, cfg: ShadowVetoConfig, geo: PaperGeometry): PaperTrade {
+   996→  return {
+   997→    id,
+   998→    verdictId: verdict.id,
+   999→    originSide: verdict.side,
+  1000→    originVerdict: verdict.verdict,
+  1001→    at: Date.now(),
+  1002→    symbol: verdict.symbol,
+  1003→    direction: verdict.direction,
+  1004→    strategy: verdict.strategy,
+  1005→    entry: geo.entry,
+  1006→    stop: geo.stop,
+  1007→    initialStop: geo.initialStop,
+  1008→    tp1: geo.tp1,
+  1009→    tp2: geo.tp2,
+  1010→    tp3: geo.tp3,
+  1011→    leverage: geo.leverage,
+  1012→    marginUsd: cfg.paperMarginUsd,
+  1013→    slDistPct: geo.slDistPct,
+  1014→    rr: geo.rr,
+  1015→    ttlMinutes: geo.ttlMinutes,
+  1016→    status: "OPEN",
+  1017→    reachedTp: 0,
+  1018→    maxPnlPercent: 0,
+  1019→    pnlPercent: 0,
+  1020→    pnlUsd: 0,
+  1021→    outcome: null,
+  1022→    closeNote: null,
+  1023→    epoch: ARM_EPOCH, // v10.7 — born into the current evidence epoch
+  1024→  };
+  1025→}
+  1026→
+  1027→/** Open the counterfactual paper trade for a REJECT-side TRADE verdict. */
+  1028→async function openPaperTrade(verdict: ShadowVerdict, paperMarginUsd: number): Promise<void> {
+  1029→  try {
+  1030→    void paperMarginUsd;
+  1031→    const cfg = await getShadowVetoConfig();
+  1032→    const asset = await db.marketAsset.findUnique({ where: { symbol: verdict.symbol }, select: { price: true } });
+  1033→    if (!asset?.price) return;
+  1034→    const geo = await paperGeometry(verdict.symbol, verdict.direction, verdict.strategy, asset.price);
+  1035→    seq++;
+  1036→    const paper = newPaperShell(`PP-${String(seq).padStart(4, "0")}`, verdict, cfg, geo);
+  1037→    papers.push(paper);
+  1038→    trimPapers();
+  1039→    void persist({ k: "p", v: paper });
+  1040→  } catch {
+  1041→    /* paper must never break anything */
+  1042→  }
+  1043→}
+  1044→
+  1045→const movePctAt = (p: PaperTrade, px: number): number => ((px - p.entry) / p.entry) * (p.direction === "LONG" ? 1 : -1) * 100;
+  1046→
+  1047→/** Cheap tick-guard: only build the price map when paper positions exist. */
+  1048→export function shadowPaperCount(): number {
+  1049→  let open = 0;
+  1050→  for (const p of papers) if (!p.outcome) open++;
+  1051→  return open;
+  1052→}
+  1053→
+  1054→/** Per-tick sweep — engine passes the fresh price map. Mirrors the real
+  1055→ * resolver: rung ladders with trailing stops, tranche-weighted closes, fees
+  1056→ * via feeBreakdown, TTL expiry. In-memory, cheap, never throws. */
+  1057→export async function shadowPaperSweep(priceMap: Map<string, number>): Promise<number> {
+  1058→  try {
+  1059→    if (papers.length === 0) return 0;
+  1060→    const now = Date.now();
+  1061→    let closed = 0;
+  1062→    for (const p of papers) {
+  1063→      if (p.outcome) continue;
+  1064→      const price = priceMap.get(p.symbol);
+  1065→      if (!price) continue;
+  1066→      const isLong = p.direction === "LONG";
+  1067→      const hitSl = isLong ? price <= p.stop : price >= p.stop;
+  1068→      const hitTp1 = isLong ? price >= p.tp1 : price <= p.tp1;
+  1069→      const hitTp2 = isLong ? price >= p.tp2 : price <= p.tp2;
+  1070→      const hitTp3 = isLong ? price >= p.tp3 : price <= p.tp3;
+  1071→
+  1072→      if (hitSl) {
+  1073→        closePaper(p, "SL", movePctAt(p, p.stop), now, `stopped @ ${p.stop} (trailed)`);
+  1074→        closed++;
+  1075→      } else if (hitTp3) {
+  1076→        p.reachedTp = 3;
+  1077→        closePaper(p, "TP3", movePctAt(p, p.tp3), now, `final target ${p.rr.toFixed(1)}R secured`);
+  1078→        closed++;
+  1079→      } else if (hitTp2 && p.reachedTp < 2) {
+  1080→        p.reachedTp = 2;
+  1081→        p.status = "TP2";
+  1082→        p.stop = p.tp1; // trail to TP1 — +1R locked (engine semantics)
+  1083→      } else if (hitTp1 && p.reachedTp < 1) {
+  1084→        p.reachedTp = Math.max(p.reachedTp, 1);
+  1085→        p.status = "TP1";
+  1086→        p.stop = p.entry; // breakeven trail (engine semantics)
+  1087→      } else if (now > p.at + p.ttlMinutes * 60_000) {
+  1088→        closePaper(p, "EXPIRED", movePctAt(p, price), now, `TTL ${p.ttlMinutes}m elapsed at mark`);
+  1089→        closed++;
+  1090→      }
+  1091→      // track MFE
+  1092→      p.maxPnlPercent = Math.max(p.maxPnlPercent, Number((movePctAt(p, price) * p.leverage).toFixed(2)));
+  1093→    }
+  1094→    return closed;
+  1095→  } catch {
+  1096→    return 0;
+  1097→  }
+  1098→}
+  1099→
+  1100→/** Tranche-aware close — identical math to the real resolver (v6.6). */
+  1101→function closePaper(p: PaperTrade, status: PaperTrade["status"], exitMovePct: number, closedAt: number, note: string): void {
+  1102→  const rung = (px: number) => movePctAt(p, px);
+  1103→  const grossPct = p.reachedTp >= 1 ? ladderWeightedMove([{ weight: LADDER_TRANCHES.tp1, movePct: rung(p.tp1) }, ...(p.reachedTp >= 2 ? [{ weight: LADDER_TRANCHES.tp2, movePct: rung(p.tp2) }] : []), { weight: LADDER_TRANCHES.runner, movePct: status === "TP3" ? rung(p.tp3) : exitMovePct }]) : exitMovePct;
+  1104→  const heldMin = Math.max(0, (closedAt - p.at) / 60_000);
+  1105→  const fb = feeBreakdown(p.marginUsd, p.leverage, grossPct, heldMin);
+  1106→  p.status = status;
+  1107→  p.pnlPercent = Number(fb.netPct.toFixed(2));
+  1108→  p.pnlUsd = Number(fb.netUsd.toFixed(3));
+  1109→  p.outcome = {
+  1110→    status,
+  1111→    pnlPercent: p.pnlPercent,
+  1112→    pnlUsd: p.pnlUsd,
+  1113→    win: p.pnlPercent > 0 || p.reachedTp >= 1,
+  1114→    closedAt,
+  1115→  };
+  1116→  p.closeNote = note;
+  1117→  void persist({ k: "pc", v: { id: p.id, status: p.status, reachedTp: p.reachedTp, pnlPercent: p.pnlPercent, pnlUsd: p.pnlUsd, stop: p.stop, outcome: p.outcome, closeNote: note } });
+  1118→}
+  1119→
+  1120→// ── arms + promotion evidence ─────────────────────────────────
+  1121→
+  1122→/**
+  1123→ * v10.16 CAPTURE-ORIGIN PROVENANCE (audit 4-f) — is this verdict a RAW-CAL
+  1124→ * capture-observe adjudication? Records created after the v10.16 stamp carry
+  1125→ * the explicit `origin: "capture"` field; legacy records (born between v10.6
+  1126→ * and the stamp, before the field existed) are identified by the
+  1127→ * "[CAPTURE-OBSERVE]" reason suffix the observe path has appended to EVERY
+  1128→ * capture adjudication since v10.6 (adjudicateCore's `tag` parameter).
+  1129→ * Anything else — including un-stamped pre-v10.6 records — is fence evidence.
+  1130→ */
+  1131→function isCaptureOrigin(v: ShadowVerdict): boolean {
+  1132→  return v.origin === "capture" || (v.origin === undefined && typeof v.reason === "string" && v.reason.includes("[CAPTURE-OBSERVE]"));
+  1133→}
+  1134→
+  1135→export interface ArmRow {
+  1136→  id: "real-keep" | "real-veto" | "paper-keep" | "paper-veto";
+  1137→  label: string;
+  1138→  n: number;
+  1139→  wins: number;
+  1140→  winRatePct: number | null;
+  1141→  wilsonLB: number | null;
+  1142→  netUsd: number;
+  1143→  target: number;
+  1144→  epoch: string; // v10.7 — the evidence epoch these cohorts belong to
+  1145→  frozenAt?: number; // v10.11 COHORT-FREEZE — set when the row is read from the frozen snapshot (live recompute = monitoring-only)
+  1146→}
+  1147→
+  1148→function armOf(rows: Array<{ pnlPercent: number; pnlUsd: number; win: boolean }>): { n: number; wins: number; netUsd: number } {
+  1149→  const wins = rows.filter((r) => r.win).length;
+  1150→  return { n: rows.length, wins, netUsd: Number(rows.reduce((a, r) => a + r.pnlUsd, 0).toFixed(2)) };
+  1151→}
+  1152→
+  1153→/** v10.7 ARM-EPOCH COHORTS → v10.10 REGIME-ALIGNED ROLLING-30 COHORTS →
+  1154→ * v10.16 FENCE-ORIGIN ONLY (audit 4-f). Each arm reports its MOST-RECENT
+  1155→ * ROLLING_WINDOW (30) settled, epoch-STAMPED outcomes (any stamp — a stale row
+  1156→ * ages out as 30 fresher settles slide past it). v10.16: capture-observe
+  1157→ * verdicts are EXCLUDED from BOTH real arms — they adjudicate RAW-CAL deploys
+  1158→ * that ran with ALL quality gates bypassed (baseMin 0, passed:true), so they
+  1159→ * are observe-only instrumentation on a NON-FENCE cohort; counting them let
+  1160→ * promotion evidence accrue on rows the fence never judged (contaminated
+  1161→ * real-keep 19/30 live). Filtering here feeds shadowArms() → promotionEvidence
+  1162→ * → COHORT-FREEZE from one honest source: n/WR/net are computed over
+  1163→ * fence-origin rows only, and the existing n-minimum criteria in
+  1164→ * promotionEvidence then demand a FULL fence cohort before any promotion.
+  1165→ * Legacy (un-stamped) non-capture records remain in the rings for
+  1166→ * audit/history and still feed the feed-diagnostics + aggregate stats, but
+  1167→ * they still never vote (v10.7 hygiene preserved): a pre-v10.6 regime must
+  1168→ * never outvote the live one. */
+  1169→function lastSettled<T extends { outcome: ShadowOutcome | null }>(rows: T[], k: number): T[] {
+  1170→  return rows
+  1171→    .filter((r) => r.outcome)
+  1172→    .sort((a, b) => b.outcome!.closedAt - a.outcome!.closedAt)
+  1173→    .slice(0, k);
+  1174→}
+  1175→
+  1176→/** v10.11 LIVE real-arm aggregates (pre-freeze overlay) — the truth the
+  1177→ * COHORT-FREEZE snapshot is taken FROM and what monitoring compares against.
+  1178→ * v10.16 — fence-origin only (see lastSettled doc): capture-origin verdicts
+  1179→ * never enter the promotion cohorts. */
+  1180→function liveRealArmAggregates(): { keep: { n: number; wins: number; netUsd: number }; veto: { n: number; wins: number; netUsd: number } } {
+  1181→  const realPass = verdicts.filter((v) => v.side === "PASS" && v.epoch && v.outcome && !isCaptureOrigin(v));
+  1182→  return {
+  1183→    keep: armOf(lastSettled(realPass.filter((v) => v.verdict === "TRADE"), ROLLING_WINDOW).map((v) => ({ pnlPercent: v.outcome!.pnlPercent, pnlUsd: v.outcome!.pnlUsd, win: v.outcome!.win }))),
+  1184→    veto: armOf(lastSettled(realPass.filter((v) => v.verdict === "VETO"), ROLLING_WINDOW).map((v) => ({ pnlPercent: v.outcome!.pnlPercent, pnlUsd: v.outcome!.pnlUsd, win: v.outcome!.win }))),
+  1185→  };
+  1186→}
+  1187→
+  1188→export function shadowArms(): ArmRow[] {
+  1189→  const live = liveRealArmAggregates();
+  1190→  // v10.11 COHORT-FREEZE: once a decision-grade snapshot exists for the current
+  1191→  // epoch, the REAL arms read the FROZEN aggregates (append-only, unfreezable
+  1192→  // except by epoch rotation or revocation pressure) — the rolling window can
+  1193→  // no longer re-sample under an open decision. Live values stay observable via
+  1194→  // getShadowVetoState().armsLive.
+  1195→  const frozen = cohortFreeze && cohortFreeze.epoch === ARM_EPOCH ? cohortFreeze : null;
+  1196→  const realKeep = frozen ? { ...frozen.realKeep } : live.keep;
+  1197→  const realVeto = frozen ? { ...frozen.realVeto } : live.veto;
+  1198→  const paperSettled = papers.filter((p) => p.epoch && p.outcome);
+  1199→  const paperKeep = armOf(lastSettled(paperSettled.filter((p) => p.originSide === "REJECT" && p.originVerdict === "TRADE"), ROLLING_WINDOW).map((p) => ({ pnlPercent: p.outcome!.pnlPercent, pnlUsd: p.outcome!.pnlUsd, win: p.outcome!.win })));
+  1200→  const paperVeto = armOf(lastSettled(paperSettled.filter((p) => p.originSide === "PASS" && p.originVerdict === "VETO"), ROLLING_WINDOW).map((p) => ({ pnlPercent: p.outcome!.pnlPercent, pnlUsd: p.outcome!.pnlUsd, win: p.outcome!.win })));
+  1201→  const mk = (id: ArmRow["id"], label: string, a: { n: number; wins: number; netUsd: number }, target: number): Omit<ArmRow, "epoch"> => ({
+  1202→    id,
+  1203→    label,
+  1204→    n: a.n,
+  1205→    wins: a.wins,
+  1206→    winRatePct: a.n ? Number(((a.wins / a.n) * 100).toFixed(1)) : null,
+  1207→    wilsonLB: wilsonLB(a.wins, a.n),
+  1208→    netUsd: a.netUsd,
+  1209→    target,
+  1210→  });
+  1211→  return [
+  1212→    mk("real-keep", "REAL · core said TRADE", realKeep, 30),
+  1213→    mk("real-veto", "REAL · core said VETO (still traded)", realVeto, 30),
+  1214→    mk("paper-keep", "PAPER · reject the core would trade", paperKeep, 30),
+  1215→    mk("paper-veto", "PAPER · pass the core blocked", paperVeto, 30),
+  1216→  ].map((r) => ({
+  1217→    ...r,
+  1218→    epoch: ARM_EPOCH,
+  1219→    ...(frozen && (r.id === "real-keep" || r.id === "real-veto") ? { frozenAt: frozen.frozenAt } : {}),
+  1220→  }));
+  1221→}
+  1222→
+  1223→// ── v10.11 COHORT-FREEZE (SUPERVISOR proposal, operator APPROVE 2026-09-17) ──
+  1224→// COHORT-FREEZE diagnosis: rolling-30 re-sampling lets the evidence window move
+  1225→// UNDER an open decision (paper-keep re-sampling swings 20→26→30 wins in hours
+  1226→// were observed live on 2026-09-16/17). Snapshot-first discipline, minimal
+  1227→// form: the moment the real-arm evidence becomes decision-grade (both arms
+  1228→// n≥30 = FILL, or SEQ-STOP reaches a terminal always-valid state), the real
+  1229→// arm aggregates are frozen to an append-only snapshot; promotionEvidence
+  1230→// reads the FROZEN cohort while live recompute continues as monitoring only.
+  1231→// Unfreeze paths (evidence re-opens): epoch rotation (ARM_EPOCH changes) or
+  1232→// revocation pressure firing while frozen. Paper arms are NEVER frozen — the
+  1233→// revocation monitor must stay live.
+  1234→export interface CohortFreeze {
+  1235→  epoch: string;
+  1236→  frozenAt: number;
+  1237→  reason: "FILL" | "SEQ-STOP";
+  1238→  seqState: SeqStopResult["state"];
+  1239→  realKeep: { n: number; wins: number; netUsd: number };
+  1240→  realVeto: { n: number; wins: number; netUsd: number };
+  1241→}
+  1242→
+  1243→const FREEZE_FILE = path.join(DATA_DIR, "sv-cohort-freeze.json");
+  1244→let cohortFreeze: CohortFreeze | null = null;
+  1245→let cohortFreezeLoaded = false;
+  1246→
+  1247→async function loadCohortFreeze(): Promise<void> {
+  1248→  if (cohortFreezeLoaded) return;
+  1249→  cohortFreezeLoaded = true;
+  1250→  try {
+  1251→    const raw = await readFile(FREEZE_FILE, "utf8");
+  1252→    const parsed = JSON.parse(raw) as CohortFreeze | null;
+  1253→    if (parsed && typeof parsed.frozenAt === "number" && typeof parsed.epoch === "string") {
+  1254→      if (parsed.epoch !== ARM_EPOCH) {
+  1255→        await rename(FREEZE_FILE, `${FREEZE_FILE}.prev-epoch`).catch(() => undefined); // epoch rotation → evidence re-opens
+  1256→        cohortFreeze = null;
+  1257→        return;
+  1258→      }
+  1259→      cohortFreeze = parsed;
+  1260→    }
+  1261→  } catch {
+  1262→    cohortFreeze = null; // no snapshot yet — normal
+  1263→  }
+  1264→}
+  1265→
+  1266→/** Called from the async promotion consumers before promotionEvidence —
+  1267→ * creates the freeze at the decision-grade moment, enforces revocation
+  1268→ * unfreeze, and is a no-op thereafter (append-only). Never throws. */
+  1269→export async function syncCohortFreeze(): Promise<CohortFreeze | null> {
+  1270→  try {
+  1271→    await loadCohortFreeze();
+  1272→    const live = liveRealArmAggregates();
+  1273→    // revocation unfreeze: frozen evidence + live paper-veto pressure → re-open
+  1274→    if (cohortFreeze && cohortFreeze.epoch === ARM_EPOCH) {
+  1275→      const paperSettled = papers.filter((p) => p.epoch && p.outcome);
+  1276→      const pv = armOf(lastSettled(paperSettled.filter((p) => p.originSide === "PASS" && p.originVerdict === "VETO"), ROLLING_WINDOW).map((p) => ({ pnlPercent: p.outcome!.pnlPercent, pnlUsd: p.outcome!.pnlUsd, win: p.outcome!.win })));
+  1277→      const pvLB = wilsonLB(pv.wins, pv.n);
+  1278→      if (pv.n >= 15 && (pvLB ?? 0) >= 55 && pv.netUsd > 0) {
+  1279→        await rename(FREEZE_FILE, `${FREEZE_FILE}.revoked-${Date.now()}`).catch(() => undefined);
+  1280→        cohortFreeze = null;
+  1281→      }
+  1282→      return cohortFreeze;
+  1283→    }
+  1284→    // creation: decision-grade evidence gate
+  1285→    if (!cohortFreeze) {
+  1286→      const seq = seqStopEvaluate({ wins: live.keep.wins, n: live.keep.n, netUsd: live.keep.netUsd }, { wins: live.veto.wins, n: live.veto.n, netUsd: live.veto.netUsd });
+  1287→      const fill = live.keep.n >= ROLLING_WINDOW && live.veto.n >= ROLLING_WINDOW;
+  1288→      const seqTerminal = seq.state === "PROMOTE-EARLY" || seq.state === "ABORT-EARLY";
+  1289→      if (fill || seqTerminal) {
+  1290→        const snapshot: CohortFreeze = {
+  1291→          epoch: ARM_EPOCH,
+  1292→          frozenAt: Date.now(),
+  1293→          reason: fill ? "FILL" : "SEQ-STOP",
+  1294→          seqState: seq.state,
+  1295→          realKeep: { ...live.keep },
+  1296→          realVeto: { ...live.veto },
+  1297→        };
+  1298→        await mkdir(DATA_DIR, { recursive: true });
+  1299→        await writeFile(FREEZE_FILE, JSON.stringify(snapshot, null, 1), "utf8");
+  1300→        cohortFreeze = snapshot;
+  1301→      }
+  1302→    }
+  1303→    return cohortFreeze;
+  1304→  } catch {
+  1305→    return cohortFreeze; // fail-open: freeze is an integrity layer, not a dependency
+  1306→  }
+  1307→}
+  1308→
+  1309→export interface PromotionEvidence {
+  1310→  ready: boolean;
+  1311→  criteria: Array<{ id: string; ok: boolean; detail: string }>;
+  1312→  revocation: { pressure: boolean; detail: string };
+  1313→  sequential: SeqStopResult; // v10.11 SEQ-STOP — always-valid early decision layer
+  1314→}
+  1315→
+  1316→/** v10.7 REAL-ONLY promotion evidence → v10.10 ROLLING-30 EVIDENCE WINDOW →
+  1317→ * v10.16 FENCE-ORIGIN COHORTS (audit 4-f). Cohort qualification, per real arm
+  1318→ * (over the rolling-30 settled window — see shadowArms(); since v10.16 the
+  1319→ * arms themselves are computed over fence-origin verdicts ONLY — the capture-
+  1320→ * observe path stamps origin:"capture" and is filtered in
+  1321→ * liveRealArmAggregates, so the n/WR/net below are fence-pure and a fence arm
+  1322→ * below its minimum simply fails okN → no promotion):
+  1323→ *   FULL  — n ≥ 30 settled (original bar), or
+  1324→ *   FAST  — n ≥ 20 AND Wilson-LB95 ≥ 50% (guardrail min-sample practice: the
+  1325→ *           lower bound of the win rate already clears coin-flip odds, so
+  1326→ *           waiting for 30 adds latency without adding certainty).
+  1327→ * Wilson separation + negative would-veto net are UNCHANGED. Epoch is a
+  1328→ * hygiene tag only — the evidence window is the rolling-30 (v10.10). */
+  1329→export function promotionEvidence(arms: ArmRow[]): PromotionEvidence {
+  1330→  const realKeep = arms[0]!;
+  1331→  const realVeto = arms[1]!;
+  1332→  const paperVeto = arms[3]!;
+  1333→  const both = realKeep.n >= 30 && realVeto.n >= 30;
+  1334→  // v10.11 SEQ-STOP — the sequential early-decision layer (always-valid, OF
+  1335→  // alpha-spending). It computes on the SAME arms the fixed gate sees (frozen
+  1336→  // when a COHORT-FREEZE exists): a PROMOTE-EARLY state satisfies promotion
+  1337→  // WITHOUT waiting for n=30 (min-n guard 12/arm inside), ABORT-EARLY vetoes
+  1338→  // the hypothesis outright, CONTINUE leaves the fixed gate as sole path.
+  1339→  const sequential = seqStopEvaluate(
+  1340→    { wins: realKeep.wins, n: realKeep.n, netUsd: realKeep.netUsd },
+  1341→    { wins: realVeto.wins, n: realVeto.n, netUsd: realVeto.netUsd },
+  1342→  );
+  1343→  const okN = (a: ArmRow): boolean => a.n >= 30 || (a.n >= 20 && (a.wilsonLB ?? 0) >= 50);
+  1344→  const nDetail = (role: string, a: ArmRow): string => {
+  1345→    const fast = a.n >= 20 && a.n < 30 && (a.wilsonLB ?? 0) >= 50;
+  1346→    return `rolling-30 ${role} cohort ${a.n}/30${a.n >= 20 && a.n < 30 ? ` (fast path n≥20 + LB≥50%: ${fast ? "MET" : "unmet — LB " + (a.wilsonLB !== null ? a.wilsonLB.toFixed(1) : "n/a") + "%"})` : ""}`;
+  1347→  };
+  1348→  const criteria = [
+  1349→    { id: "n-veto", ok: okN(realVeto), detail: nDetail("would-veto", realVeto) },
+  1350→    { id: "n-keep", ok: okN(realKeep), detail: nDetail("would-keep", realKeep) },
+  1351→    { id: "wr-sep", ok: both && (realVeto.wilsonLB ?? 0) < (realKeep.wilsonLB ?? 100), detail: `Wilson-LB veto ${realVeto.wilsonLB !== null ? `${realVeto.wilsonLB.toFixed(1)}%` : "n/a"} < keep ${realKeep.wilsonLB !== null ? `${realKeep.wilsonLB.toFixed(1)}%` : "n/a"} (95% separation)` },
+  1352→    { id: "net", ok: realVeto.netUsd < 0, detail: `would-veto cohort net $${realVeto.netUsd.toFixed(2)} (must be negative)` },
+  1353→  ];
+  1354→  const legacyReady = criteria.every((c) => c.ok);
+  1355→  const ready = legacyReady || sequential.state === "PROMOTE-EARLY";
+  1356→  criteria.push({
+  1357→    id: "seq-stop",
+  1358→    ok: sequential.state === "PROMOTE-EARLY",
+  1359→    detail: `${sequential.detail}${legacyReady ? " — legacy gate already satisfied, sequential is confirmatory" : ""}`,
+  1360→  });
+  1361→  const revPressure = paperVeto.n >= 15 && (paperVeto.wilsonLB ?? 0) >= 55 && paperVeto.netUsd > 0;
+  1362→  return {
+  1363→    ready,
+  1364→    criteria,
+  1365→    sequential,
+  1366→    revocation: {
+  1367→      pressure: revPressure,
+  1368→      detail: revPressure
+  1369→        ? `blocked-pass counterfactuals are winning without the veto (n=${paperVeto.n}, LB ${paperVeto.wilsonLB!.toFixed(1)}%, net $${paperVeto.netUsd.toFixed(2)}) — consider demoting to shadow`
+  1370→        : `no revocation pressure (paper-veto n=${paperVeto.n}/15, LB ${paperVeto.wilsonLB !== null ? `${paperVeto.wilsonLB.toFixed(1)}%` : "n/a"}, net $${paperVeto.netUsd.toFixed(2)})`,
+  1371→    },
+  1372→  };
+  1373→}
+  1374→
+  1375→// ── v9.3 AUTO-PROMOTION WATCHDOG (operator mandate ج) ─────────
+  1376→// The evidence gate (promotionEvidence) was always the ONLY sanctioned path to
+  1377→// mode=veto, but it required an operator/API flip AFTER the arms filled — so a
+  1378→// fully-qualified evidence stack sat idle. This watchdog closes that loop:
+  1379→// every engine tick batch it re-checks the promotion criteria and, the moment
+  1380→// ALL of them pass (n≥30/30 settled per arm + Wilson-LB95 separation + negative
+  1381→// would-veto cohort net), flips mode shadow→veto ITSELF. The criteria are
+  1382→// UNCHANGED — automation removes the latency, never the evidence. Reversible:
+  1383→// revocation pressure (paper-veto arm winning without the veto) is reported on
+  1384→// every promotion event so the operator/governor can demote.
+  1385→let lastPromoteCheckAt = 0;
+  1386→let lastBacklogBlockLogAt = 0; // v10.16 — rate-limit the audited block event (30min)
+  1387→
+  1388→export async function maybeAutoPromote(): Promise<{ promoted: boolean; detail: string }> {
+  1389→  const cfg = await getShadowVetoConfig(true);
+  1390→  if (cfg.mode === "veto") return { promoted: false, detail: "already in veto mode" };
+  1391→  if (!cfg.autoPromote) return { promoted: false, detail: "auto-promotion disabled by config" };
+  1392→  if (Date.now() - lastPromoteCheckAt < 5 * 60_000) return { promoted: false, detail: "throttled" };
+  1393→  lastPromoteCheckAt = Date.now();
+  1394→  await shadowVetoReady();
+  1395→  await shadowVetoRefresh(0); // judge on fresh rings, never a stale bite
+  1396→  await syncCohortFreeze(); // v10.11 — freeze decision-grade evidence before judging; read frozen when present
+  1397→  const ev = promotionEvidence(shadowArms());
+  1398→  if (!ev.ready) return { promoted: false, detail: `evidence not ready (${ev.criteria.map((c) => `${c.id}:${c.ok ? "✓" : "✗"}`).join(" ")})` };
+  1399→  // ── v10.16 PROMOTION BACKLOG GATE (audit 4-f) → v10.19 ACTIVE-LEAK SCOPING —
+  1400→  // evidence-ready is not enough while the REAL-arm feed is under-linked.
+  1401→  // v10.19: unlinkedPassStale counts ACTIVE leaks only (stale unlinked, not
+  1402→  // swept-orphan, within link reach). Structural orphans (fence candidates
+  1403→  // whose deploy was refused downstream — 84% of the historic backlog per the
+  1404→  // 2026-09-24 forensic) and aged-out verdicts are promotion-inert; counting
+  1405→  // them deadlocked this gate permanently (201 “stale” → never clearable).
+  1406→  // Block >10 ACTIVE leaks, audited via the existing fireEvent pattern
+  1407→  // (rate-limited — the block can persist for hours).
+  1408→  const backlog = shadowPipelineDiag().unlinkedPassStale;
+  1409→  if (backlog > 10) {
+  1410→    const blockDetail = `SHADOW-VETO AUTO-PROMOTION BLOCKED (v10.19 backlog gate) — REAL-arm ACTIVE feed leak: ${backlog} unlinked PASS verdict(s) within link reach (> 10). Evidence could be reading an under-linked cohort; promotion deferred until retro-link drains the backlog.`;
+  1411→    if (Date.now() - lastBacklogBlockLogAt > 30 * 60_000) {
+  1412→      lastBacklogBlockLogAt = Date.now();
+  1413→      await import("@/lib/engine")
+  1414→        .then((m) => m.fireEvent(null, null, "ENGINE", "warn", blockDetail))
+  1415→        .catch(() => undefined);
+  1416→    }
+  1417→    return { promoted: false, detail: blockDetail };
+  1418→  }
+  1419→  await saveShadowVetoConfig({ mode: "veto" });
+  1420→  const detail = `SHADOW-VETO AUTO-PROMOTION — all evidence criteria met: ${ev.criteria.map((c) => `${c.detail} ✓`).join(" · ")} → mode=VETO ACTIVE (real veto authority, fail-open, revocable; revocation pressure: ${ev.revocation.pressure ? "YES — monitor paper-veto arm" : "none"}).`;
+  1421→  return { promoted: true, detail };
+  1422→}
+  1423→
+  1424→// ── state + core grounding ────────────────────────────────────
+  1425→
+  1426→export interface ShadowVetoHealth {
+  1427→  verdicts: number;
+  1428→  papers: number;
+  1429→  fileKB: number;
+  1430→  pending: number;
+  1431→  callsLastHour: number;
+  1432→  auditViolations: number; // v8.2.1 — discarded hallucinated verdicts
+  1433→  hydratedAt: number; // v8.2.1 — 0 = cold rings
+  1434→}
+  1435→
+  1436→export async function getShadowVetoState(): Promise<{
+  1437→  armEpoch: string; // v10.7 tag, v10.10 — arms are rolling-30; epoch is a regime tag, not the evidence window
+  1438→  config: ShadowVetoConfig;
+  1439→  stats: { total: number; passSide: number; rejectSide: number; vetoCount: number; tradeCount: number; modelSharePct: number | null; modelGroundedPct: number | null; avgConfidence: number | null; gateAgreement: number; paperOpen: number; paperSettled: number; recent24h: { n: number; modelSharePct: number | null; lastModelAgeH: number | null; lastVerdictAgeH: number | null } };
+  1440→  arms: ArmRow[];
+  1441→  armsLive: ArmRow[]; // v10.11 — unfrozen live recompute (monitoring-only while a COHORT-FREEZE exists)
+  1442→  cohortFreeze: CohortFreeze | null; // v10.11 — decision-grade snapshot pointer
+  1443→  promotion: PromotionEvidence;
+  1444→  recent: ShadowVerdict[];
+  1445→  paper: PaperTrade[];
+  1446→  health: ShadowVetoHealth;
+  1447→}> {
+  1448→  await shadowVetoReady();
+  1449→  await shadowVetoRefresh(); // stay live across module-instance splits
+  1450→  const cfg = await getShadowVetoConfig();
+  1451→  await syncCohortFreeze(); // v10.11 — create/refresh the decision-grade snapshot before evidence is read
+  1452→  const modelN = verdicts.filter((v) => v.label === "MODEL").length;
+  1453→  const audited = verdicts.filter((v) => v.label === "MODEL" && v.audit !== null);
+  1454→  const groundedN = audited.filter((v) => v.audit!.verdict !== "VIOLATION").length;
+  1455→  const auditViolations = verdicts.filter((v) => v.audit?.verdict === "VIOLATION").length;
+  1456→  const rejectSideVerdicts = verdicts.filter((v) => v.side === "REJECT");
+  1457→  const gateAgreement = rejectSideVerdicts.filter((v) => v.verdict === "VETO").length;
+  1458→  const arms = shadowArms();
+  1459→  // v10.11 — unfrozen live view for monitoring (identical to arms when no freeze exists)
+  1460→  const liveAgg = liveRealArmAggregates();
+  1461→  const frozen = cohortFreeze && cohortFreeze.epoch === ARM_EPOCH ? cohortFreeze : null;
+  1462→  const armsLive: ArmRow[] = frozen
+  1463→    ? arms.map((a) =>
+  1464→        a.id === "real-keep"
+  1465→          ? { ...a, ...liveAgg.keep, winRatePct: liveAgg.keep.n ? Number(((liveAgg.keep.wins / liveAgg.keep.n) * 100).toFixed(1)) : null, wilsonLB: wilsonLB(liveAgg.keep.wins, liveAgg.keep.n), frozenAt: undefined }
+  1466→          : a.id === "real-veto"
+  1467→            ? { ...a, ...liveAgg.veto, winRatePct: liveAgg.veto.n ? Number(((liveAgg.veto.wins / liveAgg.veto.n) * 100).toFixed(1)) : null, wilsonLB: wilsonLB(liveAgg.veto.wins, liveAgg.veto.n), frozenAt: undefined }
+  1468→            : a,
+  1469→      )
+  1470→    : arms;
+  1471→  const now = Date.now();
+  1472→  while (callStamps.length && now - callStamps[0]! > 3600_000) callStamps.shift();
+  1473→  // v10.21.2 RECENCY TRUTH (operator finding: window-aggregated MODEL SHARE masked
+  1474→  // the 401 outage — 78% share over a week-old ring while every fresh call was
+  1475→  // heuristic). The dashboard shows both: window share + last-24h share + link age.
+  1476→  const dayAgo = now - 86_400_000;
+  1477→  const w24 = verdicts.filter((v) => v.at >= dayAgo);
+  1478→  const w24Model = w24.filter((v) => v.label === "MODEL").length;
+  1479→  const lastModelAt = verdicts.reduce((a, v) => (v.label === "MODEL" && v.at > a ? v.at : a), 0);
+  1480→  const lastVerdictAt = verdicts.reduce((a, v) => (v.at > a ? v.at : a), 0);
+  1481→  return {
+  1482→    armEpoch: ARM_EPOCH,
+  1483→    config: cfg,
+  1484→    stats: {
+  1485→      total: verdicts.length,
+  1486→      passSide: verdicts.filter((v) => v.side === "PASS").length,
+  1487→      rejectSide: rejectSideVerdicts.length,
+  1488→      vetoCount: verdicts.filter((v) => v.verdict === "VETO").length,
+  1489→      tradeCount: verdicts.filter((v) => v.verdict === "TRADE").length,
+  1490→      modelSharePct: verdicts.length ? Number(((modelN / verdicts.length) * 100).toFixed(1)) : null,
+  1491→      modelGroundedPct: audited.length ? Number(((groundedN / audited.length) * 100).toFixed(1)) : null,
+  1492→      avgConfidence: verdicts.length ? Number((verdicts.reduce((a, v) => a + v.confidence, 0) / verdicts.length).toFixed(1)) : null,
+  1493→      gateAgreement,
+  1494→      paperOpen: papers.filter((p) => !p.outcome).length,
+  1495→      paperSettled: papers.filter((p) => p.outcome).length,
+  1496→      recent24h: {
+  1497→        n: w24.length,
+  1498→        modelSharePct: w24.length ? Number(((w24Model / w24.length) * 100).toFixed(1)) : null,
+  1499→        lastModelAgeH: lastModelAt ? Number(((now - lastModelAt) / 3_600_000).toFixed(1)) : null,
+  1500→        lastVerdictAgeH: lastVerdictAt ? Number(((now - lastVerdictAt) / 3_600_000).toFixed(1)) : null,
+  1501→      },
+  1502→    },
+  1503→    arms,
+  1504→    armsLive,
+  1505→    cohortFreeze: frozen,
+  1506→    promotion: promotionEvidence(arms),
+  1507→    recent: [...verdicts].sort((a, b) => b.at - a.at).slice(0, 14), // v8.2.1 — time-sorted (ingest order is interleaved across instances)
+  1508→    paper: [...papers].sort((a, b) => b.at - a.at).slice(0, 10),
+  1509→    health: {
+  1510→      verdicts: verdicts.length,
+  1511→      papers: papers.length,
+  1512→      fileKB: Math.round(persisted / 1024),
+  1513→      pending: pendingCount,
+  1514→      callsLastHour: callStamps.length,
+  1515→      auditViolations,
+  1516→      hydratedAt,
+  1517→    },
+  1518→  };
+  1519→}
+  1520→
+  1521→/** Deep-learn / verdict-core grounding — measured arm numbers only. */
+  1522→export async function shadowVetoForCore(maxVerdicts = 6): Promise<{ narrative: string; verdictFiles: string[] }> {
+  1523→  await shadowVetoReady();
+  1524→  await shadowVetoRefresh(0); // grounding consumers always see fresh rings
+  1525→  const cfg = await getShadowVetoConfig();
+  1526→  const arms = shadowArms();
+  1527→  const promo = promotionEvidence(arms);
+  1528→  const frozen = cohortFreeze && cohortFreeze.epoch === ARM_EPOCH ? cohortFreeze : null; // v10.11
+  1529→  const rej = verdicts.filter((v) => v.side === "REJECT");
+  1530→  const agreement = rej.length ? Math.round((rej.filter((v) => v.verdict === "VETO").length / rej.length) * 100) : null;
+  1531→  const audited = verdicts.filter((v) => v.label === "MODEL" && v.audit !== null);
+  1532→  const groundedN = audited.filter((v) => v.audit!.verdict !== "VIOLATION").length;
+  1533→  const verdictFiles = verdicts
+  1534→    .slice(-maxVerdicts)
+  1535→    .reverse()
+  1536→    .map((v) => `${new Date(v.at).toISOString()} ${v.symbol} ${v.direction} ${v.side === "PASS" ? "hair-pass" : "fence-reject"} gap ${v.gap.toFixed(1)} → ${v.verdict} @${v.confidence}% [${v.label}${v.audit ? `·audit:${v.audit.verdict}` : ""}] ${v.reason.slice(0, 120)}${v.outcome ? ` → settled ${v.outcome.status} ${v.outcome.pnlPercent >= 0 ? "+" : ""}${v.outcome.pnlPercent}%` : ""}`);
+  1537→  const narrative = [
+  1538→    `SHADOW-VETO (AI-core Phase 0, mode ${cfg.mode}): ${verdicts.length} adjudications — ${verdicts.filter((v) => v.side === "PASS").length} hair-thin passes / ${rej.length} fence rejects; ${verdicts.filter((v) => v.verdict === "VETO").length} VETO vs ${verdicts.filter((v) => v.verdict === "TRADE").length} TRADE; fence-reject agreement with the numeric gate ${agreement !== null ? `${agreement}%` : "n/a"}.`,
+  1539→    `GROUNDING AUDIT: ${audited.length} MODEL verdicts audited number-by-number against their evidence bundles — ${groundedN} grounded, ${audited.length - groundedN} violations (violations are DISCARDED, the deterministic heuristic speaks instead; audit rate will lag legacy verdicts which predate the instrument).`,
+  1540→    `A/B arms (rolling-30 settled, tag ${ARM_EPOCH}, win-rate / Wilson-LB95 / net): real-keep ${fmtArm(arms[0]!)} · real-veto ${fmtArm(arms[1]!)} · paper-keep ${fmtArm(arms[2]!)} · paper-veto ${fmtArm(arms[3]!)}. Cohorts are regime-aligned rolling-30 (v10.10 REGIME-ALIGNED SHADOW COHORTS) — legacy un-stamped regimes never vote.`,
+  1541→    `Promotion to veto mode ${promo.ready ? "EVIDENCE-READY" : "not ready"} (${promo.criteria.map((c) => `${c.id}:${c.ok ? "✓" : "✗"}`).join(" ")}). ${promo.revocation.detail}.`,
+  1542→    `SEQ-STOP (v10.11 always-valid early decision): ${promo.sequential.detail}. COHORT-FREEZE: ${frozen ? `REAL arms FROZEN since ${new Date(frozen.frozenAt).toISOString()} (${frozen.reason}); live recompute is monitoring-only` : "no snapshot — evidence window still open"}.`,
+  1543→    "DOCTRINE: veto-only, fail-open, revocable, GROUNDED (no veto voice may rest on ungrounded reasoning). Paper arms use base geometry (slAtrMult×ATR stop, base RR) — directional-edge evidence, not PnL replication.",
+  1544→  ].join(" ");
+  1545→  return { narrative, verdictFiles };
+  1546→}
+  1547→
+  1548→function fmtArm(a: ArmRow): string {
+  1549→  if (a.n === 0) return "n=0";
+  1550→  return `n=${a.n} wr=${a.winRatePct}% lb=${a.wilsonLB !== null ? a.wilsonLB.toFixed(1) : "n/a"}% net=$${a.netUsd}`;
+  1551→}
+  1552→
+  1553→// ── v10.2 ARM FEED DIAGNOSTICS (sv-telemetry wiring audit) ────
+  1554→// Operator mandate 2026-09-15: «داده‌های مورد نیاز به تمام بازوها سیم‌کشی و
+  1555→// ارسال شود» — the telemetry hub needs per-arm feed visibility the summary
+  1556→// DTO never carried: WHO feeds each arm, WHEN it was last fed/settled, and
+  1557→// whether the feed is starving while the rest of the pipeline is alive.
+  1558→// Pure ring reads — no extra I/O, fail-open by construction.
+  1559→
+  1560→export interface ArmFeedDiag {
+  1561→  id: ArmRow["id"];
+  1562→  feedSource: string; // human-readable wiring description of what feeds this arm
+  1563→  fed: number; // records that ever entered this arm's feed
+  1564→  open: number; // awaiting settlement
+  1565→  settled: number;
+  1566→  lastFedAt: number; // 0 = never fed
+  1567→  lastSettledAt: number; // 0 = never settled
+  1568→  neverFed: boolean;
+  1569→  starved: boolean; // fed before, but nothing new within starveMs while the adjudicator is active
+  1570→  starveDetail: string | null;
+  1571→}
+  1572→
+  1573→/** Per-arm feed wiring audit over the FULL rings (not the capped DTO slices). */
+  1574→export function shadowArmFeedDiagnostics(mode: ShadowVetoMode, starveMs = 12 * 3600_000): ArmFeedDiag[] {
+  1575→  const now = Date.now();
+  1576→  const lastAnyVerdictAt = verdicts.reduce((a, v) => Math.max(a, v.at), 0);
+  1577→  const quietAdjudicator = lastAnyVerdictAt === 0 || now - lastAnyVerdictAt > starveMs;
+  1578→
+  1579→  const diag = (
+  1580→    id: ArmRow["id"],
+  1581→    feedSource: string,
+  1582→    fedRows: Array<{ at: number; outcome: ShadowOutcome | null }>,
+  1583→  ): ArmFeedDiag => {
+  1584→    const lastFedAt = fedRows.reduce((a, r) => Math.max(a, r.at), 0);
+  1585→    const settledRows = fedRows.filter((r) => r.outcome);
+  1586→    const lastSettledAt = settledRows.reduce((a, r) => Math.max(a, r.outcome!.closedAt), 0);
+  1587→    const neverFed = fedRows.length === 0;
+  1588→    const starved = mode !== "off" && !neverFed && now - lastFedAt > starveMs;
+  1589→    let starveDetail: string | null = null;
+  1590→    if (neverFed) {
+  1591→      starveDetail = "feed wired, awaiting first qualifying record (disagreement/fence events are rare by design)";
+  1592→    } else if (starved) {
+  1593→      starveDetail = quietAdjudicator
+  1594→        ? `whole adjudicator quiet — no fence candidates in window (last verdict ${lastAnyVerdictAt ? agoShort(now - lastAnyVerdictAt) : "never"})`
+  1595→        : `arm-specific starvation — adjudicator active (last verdict ${agoShort(now - lastAnyVerdictAt)}) but nothing entered this arm in ${agoShort(now - lastFedAt)}`;
+  1596→    }
+  1597→    return { id, feedSource, fed: fedRows.length, open: fedRows.length - settledRows.length, settled: settledRows.length, lastFedAt, lastSettledAt, neverFed, starved, starveDetail };
+  1598→  };
+  1599→
+  1600→  return [
+  1601→    diag("real-keep", "hair-thin PASS → core TRADE → real serial link → real settle", verdicts.filter((v) => v.side === "PASS" && v.verdict === "TRADE").map((v) => ({ at: v.at, outcome: v.outcome }))),
+  1602→    diag("real-veto", "hair-thin PASS → core VETO → real trade still deploys (counterfactual) → real settle", verdicts.filter((v) => v.side === "PASS" && v.verdict === "VETO").map((v) => ({ at: v.at, outcome: v.outcome }))),
+  1603→    diag("paper-keep", "fence REJECT → core TRADE → paper ledger (would-have-won) → paper sweep", papers.filter((p) => p.originSide === "REJECT" && p.originVerdict === "TRADE").map((p) => ({ at: p.at, outcome: p.outcome }))),
+  1604→    diag("paper-veto", "hair-thin PASS → core VETO blocks deploy → paper track (revocation pressure)", papers.filter((p) => p.originSide === "PASS" && p.originVerdict === "VETO").map((p) => ({ at: p.at, outcome: p.outcome }))),
+  1605→  ];
+  1606→}
+  1607→
+  1608→function agoShort(ms: number): string {
+  1609→  const s = Math.max(0, Math.round(ms / 1000));
+  1610→  if (s < 60) return `${s}s`;
+  1611→  if (s < 3600) return `${Math.round(s / 60)}m`;
+  1612→  if (s < 86400) return `${Math.round(s / 3600)}h`;
+  1613→  return `${Math.round(s / 86400)}d`;
+  1614→}
+  1615→
+  1616→/** Pipeline leak counters — the REAL-arm feed leak (v8.4.3) and closure
+  1617→ * backlog visibility the telemetry hub reports on every capture. */
+  1618→export interface ShadowPipelineDiag {
+  1619→  unlinkedPass24h: number; // PASS verdicts still serial=null within retro-link reach
+  1620→  unlinkedPassStale: number; // v10.19 ACTIVE LEAKS ONLY — stale unlinked PASS verdicts, not swept as orphans, still within the 7-day link reach (the promotion backlog gate + sv-telemetry alert read THIS)
+  1621→  unlinkedPassOrphan: number; // v10.19 — swept: fence window closed with no bindable deploy; structural non-evidence, promotion-inert
+  1622→  unlinkedPassAged: number; // v10.19 — stale unlinked, unswept, but OLDER than the 7-day link reach; can never link again (historic residue, counted separately)
+  1623→  pendingRealOutcomes: number; // linked but not yet settled
+  1624→  pendingPapers: number; // paper positions awaiting sweep
+  1625→  lastVerdictAt: number;
+  1626→  lastPaperOpenAt: number;
+  1627→  verdicts24h: number;
+  1628→  papers24h: number;
+  1629→}
+  1630→
+  1631→export function shadowPipelineDiag(): ShadowPipelineDiag {
+  1632→  const now = Date.now();
+  1633→  const d24 = now - 24 * 3600_000;
+  1634→  const REACH_MS = 7 * 24 * 3600_000 + 90 * 60_000; // retro-link query reach (7d bound + 90min pre-warm margin)
+  1635→  const unlinked = verdicts.filter((v) => v.side === "PASS" && v.serial === null);
+  1636→  return {
+  1637→    unlinkedPass24h: unlinked.filter((v) => now - v.at <= 24 * 3600_000).length,
+  1638→    // v10.19 — ACTIVE leak = stale, unlinked, NOT swept-orphan, still within
+  1639→    // link reach. Structural orphans and aged-out verdicts are counted
+  1640→    // separately so the promotion backlog gate measures UNDER-LINKING (fixable
+  1641→    // evidence loss), not the inherent orphan rate of fence adjudication
+  1642→    // (2026-09-24 forensic: 235 orphans vs 44 true leaks in the stale backlog).
+  1643→    unlinkedPassStale: unlinked.filter((v) => now - v.at > 24 * 3600_000 && v.sweptAt === undefined && now - v.at <= REACH_MS).length,
+  1644→    unlinkedPassOrphan: unlinked.filter((v) => v.sweptAt !== undefined).length,
+  1645→    unlinkedPassAged: unlinked.filter((v) => now - v.at > 24 * 3600_000 && v.sweptAt === undefined && now - v.at > REACH_MS).length,
+  1646→    pendingRealOutcomes: verdicts.filter((v) => v.serial !== null && v.outcome === null).length,
+  1647→    pendingPapers: papers.filter((p) => !p.outcome).length,
+  1648→    lastVerdictAt: verdicts.reduce((a, v) => Math.max(a, v.at), 0),
+  1649→    lastPaperOpenAt: papers.reduce((a, p) => Math.max(a, p.at), 0),
+  1650→    verdicts24h: verdicts.filter((v) => v.at >= d24).length,
+  1651→    papers24h: papers.filter((p) => p.at >= d24).length,
+  1652→  };
+  1653→}
+  1654→
+  1655→/** Operator reset (keeps config, wipes evidence) — used by the API POST reset. */
+  1656→export async function resetShadowEvidence(): Promise<void> {
+  1657→  await shadowVetoReady();
+  1658→  verdicts.length = 0;
+  1659→  papers.length = 0;
+  1660→  verdictCache.clear();
+  1661→  lastAdjAt.clear();
+  1662→  callStamps.length = 0;
+  1663→  try {
+  1664→    await rename(FILE, `${FILE}.old.${Date.now()}`).catch(() => undefined);
+  1665→    persisted = 0;
+  1666→  } catch {
+  1667→    /* non-fatal */
+  1668→  }
+  1669→}
+  1670→

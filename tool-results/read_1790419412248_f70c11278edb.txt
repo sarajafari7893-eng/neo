@@ -1,0 +1,596 @@
+     1→"use client";
+     2→
+     3→import { useCallback, useEffect, useState } from "react";
+     4→import { Activity, FlaskConical, Gauge, Microscope, Power, Scale, ShieldCheck, TrendingUp, TriangleAlert } from "lucide-react";
+     5→import { toast } from "sonner";
+     6→import { BentoCard, LiveDot, NeonBadge } from "@/components/shared/primitives";
+     7→import { cn } from "@/lib/utils";
+     8→
+     9→/**
+    10→ * RawCalCard — v9.2 RAW-CAL CAPTURE MODE control + PACE MONITOR (operator
+    11→ * mandate 2026-09-13: «پایش ریتم صدور RAW-CAL و رشد کتاب EPOCH-2 به سمت ۱۰۰»)
+    12→ * + v9.3 SAMPLE QUALITY LAB (operator mandate 2026-09-13: «کیفیت نمونه‌های
+    13→ * خام را بررسی کنیم تا کالیبراسیون R6 روی داده سالم بنشیند»). Arms/disarms
+    14→ * the UNFILTERED signal-issuance capture that feeds the engine-memory book
+    15→ * toward the AI CALIBRATION bar (100 EPOCH-2 settled). Pace monitor:
+    16→ * issue/settle rates, observed spacing, ETA to the bar, pipeline projection,
+    17→ * cadence grade, stall detection, milestone ledger (50→100), book-growth
+    18→ * sparkline. Quality lab: per-sample health scores (capture integrity, plan
+    19→ * completeness, outcome informativeness, representativeness), cohort health
+    20→ * tiles, warnings, and the R6 DATA-HEALTH GATE verdict. Feed: /api/rawcal
+    21→ * (10s poll).
+    22→ */
+    23→
+    24→interface PaceInfo {
+    25→  armed: boolean;
+    26→  settledE2: number;
+    27→  needed: number;
+    28→  target: number;
+    29→  issueRate3hPerH: number;
+    30→  issueRateSinceArmPerH: number;
+    31→  observedSpacingMin: { mean: number | null; min: number | null; max: number | null; samples: number };
+    32→  openRaw: number;
+    33→  maxOpen: number;
+    34→  spacingMin: number;
+    35→  settleRate3hPerH: number;
+    36→  settleRate6hPerH: number;
+    37→  meanSettleMin: number | null;
+    38→  etaHours: number | null;
+    39→  etaAt: string | null;
+    40→  steadyRatePerH?: number | null;
+    41→  etaSteadyHours?: number | null;
+    42→  etaSteadyAt?: string | null;
+    43→  openE2?: number;
+    44→  pipelineProjection: number;
+    45→  cadenceGrade: "A" | "B" | "C" | "D" | "OFF";
+    46→  stalls: { issueStallMin: number | null; settleStallMin: number | null; lastBlockNote: string | null };
+    47→  sparkline: Array<{ t: string; v: number }>;
+    48→  journalRows: number;
+    49→}
+    50→
+    51→interface SampleQuality {
+    52→  serial: number;
+    53→  symbol: string;
+    54→  direction: string;
+    55→  strategy: string;
+    56→  status: string;
+    57→  settled: boolean;
+    58→  pnlPercent: number;
+    59→  holdMin: number | null;
+    60→  score: number;
+    61→  cls: "HEALTHY" | "REVIEW" | "CENSORED" | "PENDING";
+    62→  flags: string[];
+    63→}
+    64→
+    65→interface QualityInfo {
+    66→  at: string;
+    67→  issuedTotal: number;
+    68→  openRaw: number;
+    69→  settledRaw: number;
+    70→  healthy: number;
+    71→  review: number;
+    72→  censored: number;
+    73→  healthyPct: number | null;
+    74→  informativePct: number | null;
+    75→  expiredNoTouch: number;
+    76→  snapshotPct: number | null;
+    77→  symbols: number;
+    78→  topSymbolShare: number | null;
+    79→  longPct: number | null;
+    80→  shortPct: number | null;
+    81→  meanAbsPnl: number | null;
+    82→  meanHoldMin: number | null;
+    83→  clusterCount: number;
+    84→  warnings: string[];
+    85→  gate: { verdict: "WARMING" | "GREEN" | "AMBER" | "RED"; healthFloor: number; blockers: string[] };
+    86→  samples: SampleQuality[];
+    87→}
+    88→
+    89→interface RawCalStatus {
+    90→  armed: boolean;
+    91→  armedAt: string | null;
+    92→  armedBy: string;
+    93→  disarmReason: string | null;
+    94→  disarmedAt: string | null;
+    95→  issued: number;
+    96→  issuedTotal: number;
+    97→  lastIssueAt: string | null;
+    98→  lastIssueSerial: number | null;
+    99→  target: number;
+   100→  spacingMin: number;
+   101→  maxOpen: number;
+   102→  autoLiftAt: string | null;
+   103→  settledN: number;
+   104→  needed: number;
+   105→  openRaw: number;
+   106→  settledRaw: number;
+   107→  winsRaw: number;
+   108→  rawWinRatePct: number | null;
+   109→  pace?: PaceInfo | null;
+   110→  milestones?: { steps: Array<{ step: number; fired: boolean; at: string | null; pending: boolean }>; settledE2: number } | null;
+   111→  blocks?: Array<{ t: number; note: string }>;
+   112→  quality?: QualityInfo | null;
+   113→}
+   114→
+   115→function ago(iso: string | null): string {
+   116→  if (!iso) return "—";
+   117→  const s = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
+   118→  if (s < 60) return `${s}s`;
+   119→  if (s < 3600) return `${Math.round(s / 60)}m`;
+   120→  if (s < 86400) return `${Math.round(s / 3600)}h`;
+   121→  return `${Math.round(s / 86400)}d`;
+   122→}
+   123→
+   124→function etaClock(iso: string | null): string {
+   125→  if (!iso) return "—";
+   126→  try {
+   127→    return new Date(iso).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+   128→  } catch {
+   129→    return "—";
+   130→  }
+   131→}
+   132→
+   133→/** Inline SVG book-growth sparkline (settled EPOCH-2 over the journal window). */
+   134→function GrowthSpark({ series }: { series: Array<{ t: string; v: number }> }) {
+   135→  if (series.length < 2) {
+   136→    return (
+   137→      <div className="flex h-9 items-center justify-center font-terminal text-[9px] text-ink-3">
+   138→        BOOK CURVE WARMING — journal fills every 10min
+   139→      </div>
+   140→    );
+   141→  }
+   142→  const W = 100;
+   143→  const H = 26;
+   144→  // NaN guard (v9.4.2): journal rows can carry null/gap equity values — any
+   145→  // non-finite point would turn vMin/vMax into NaN and crash React children.
+   146→  const vs = series.map((p) => p.v).filter((v) => Number.isFinite(v));
+   147→  if (vs.length < 2) {
+   148→    return (
+   149→      <div className="flex h-9 items-center justify-center font-terminal text-[9px] text-ink-3">
+   150→        BOOK CURVE WARMING — journal fills every 10min
+   151→      </div>
+   152→    );
+   153→  }
+   154→  const vMin = Math.min(...vs);
+   155→  const vMax = Math.max(...vs);
+   156→  const span = Math.max(1, vMax - vMin);
+   157→  const pts = series
+   158→    .map((p, i) => ({ x: (i / (series.length - 1)) * W, v: p.v }))
+   159→    .filter((p): p is { x: number; v: number } => Number.isFinite(p.v))
+   160→    .map((p) => {
+   161→      const y = H - ((p.v - vMin) / span) * (H - 4) - 2;
+   162→      return `${p.x.toFixed(1)},${y.toFixed(1)}`;
+   163→    });
+   164→  const area = `M0,${H} L${pts.join(" L")} L${W},${H} Z`;
+   165→  return (
+   166→    <div className="relative">
+   167→      <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" className="h-9 w-full" aria-hidden>
+   168→        <path d={area} fill="url(#rawcalSparkFill)" opacity={0.35} />
+   169→        <polyline points={pts.join(" ")} fill="none" stroke="var(--amber-neon)" strokeWidth={1.4} vectorEffect="non-scaling-stroke" strokeLinejoin="round" />
+   170→        <defs>
+   171→          <linearGradient id="rawcalSparkFill" x1="0" y1="0" x2="0" y2="1">
+   172→            <stop offset="0%" stopColor="var(--amber-neon)" stopOpacity={0.8} />
+   173→            <stop offset="100%" stopColor="var(--amber-neon)" stopOpacity={0} />
+   174→          </linearGradient>
+   175→        </defs>
+   176→      </svg>
+   177→      <span className="absolute left-0 top-0 font-terminal text-[8px] text-ink-3">{vMin.toFixed(2)}</span>
+   178→      <span className="absolute right-0 top-0 font-terminal text-[8px] text-amber-neon">{vMax.toFixed(2)}</span>
+   179→    </div>
+   180→  );
+   181→}
+   182→
+   183→const GRADE_TONE: Record<string, string> = {
+   184→  A: "border-mint-neon/50 bg-mint-neon/10 text-mint-neon",
+   185→  B: "border-cyan-neon/50 bg-cyan-neon/10 text-cyan-neon",
+   186→  C: "border-amber-neon/50 bg-amber-neon/10 text-amber-neon",
+   187→  D: "border-danger-neon/50 bg-danger-neon/10 text-danger-neon",
+   188→  OFF: "border-white/10 bg-white/5 text-ink-3",
+   189→};
+   190→
+   191→const GATE_TONE: Record<string, string> = {
+   192→  GREEN: "border-mint-neon/50 bg-mint-neon/10 text-mint-neon",
+   193→  AMBER: "border-amber-neon/50 bg-amber-neon/10 text-amber-neon",
+   194→  RED: "border-danger-neon/50 bg-danger-neon/10 text-danger-neon",
+   195→  WARMING: "border-white/10 bg-white/5 text-ink-3",
+   196→};
+   197→
+   198→const CLS_TONE: Record<string, string> = {
+   199→  HEALTHY: "border-mint-neon/40 bg-mint-neon/10 text-mint-neon",
+   200→  REVIEW: "border-amber-neon/40 bg-amber-neon/10 text-amber-neon",
+   201→  CENSORED: "border-danger-neon/40 bg-danger-neon/10 text-danger-neon",
+   202→  PENDING: "border-white/10 bg-white/5 text-ink-3",
+   203→};
+   204→
+   205→export default function RawCalCard() {
+   206→  const [st, setSt] = useState<RawCalStatus | null>(null);
+   207→  const [busy, setBusy] = useState(false);
+   208→
+   209→  const pull = useCallback(async () => {
+   210→    try {
+   211→      const res = await fetch("/api/rawcal", { cache: "no-store" });
+   212→      if (res.ok) setSt((await res.json()) as RawCalStatus);
+   213→    } catch {
+   214→      /* next tick retries */
+   215→    }
+   216→  }, []);
+   217→
+   218→  useEffect(() => {
+   219→    void pull();
+   220→    const id = setInterval(pull, 10_000);
+   221→    return () => clearInterval(id);
+   222→  }, [pull]);
+   223→
+   224→  const act = useCallback(
+   225→    async (action: "arm" | "disarm") => {
+   226→      setBusy(true);
+   227→      try {
+   228→        const res = await fetch("/api/rawcal", {
+   229→          method: "POST",
+   230→          headers: { "content-type": "application/json" },
+   231→          body: JSON.stringify({ action, reason: action === "disarm" ? "operator command — return to filtered operation" : undefined }),
+   232→        });
+   233→        const json = (await res.json()) as { ok?: boolean; error?: string };
+   234→        if (res.ok && json.ok) {
+   235→          toast.success(action === "arm" ? "RAW-CAL capture mode ARMED" : "RAW-CAL mode disarmed — filtered operation restored");
+   236→        } else {
+   237→          toast.error(json.error ?? "rawcal action failed");
+   238→        }
+   239→      } catch {
+   240→        toast.error("rawcal action failed");
+   241→      } finally {
+   242→        setBusy(false);
+   243→        void pull();
+   244→      }
+   245→    },
+   246→    [pull],
+   247→  );
+   248→
+   249→  const pct = st ? Math.min(100, (st.settledN / st.target) * 100) : 0;
+   250→  const pace = st?.pace ?? null;
+   251→  const stallIssue = !!pace?.stalls.issueStallMin;
+   252→  const stallSettle = !!pace?.stalls.settleStallMin;
+   253→  const anyStall = stallIssue || stallSettle;
+   254→
+   255→  return (
+   256→    <BentoCard>
+   257→      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+   258→        <div className="flex items-center gap-2.5">
+   259→          <FlaskConical className={cn("h-4 w-4", st?.armed ? "text-amber-neon" : "text-ink-3")} aria-hidden />
+   260→          <span className="label-tech">RAW-CAL · Capture Mode — unfiltered calibration issuance</span>
+   261→          {st?.armed && <LiveDot />}
+   262→        </div>
+   263→        <NeonBadge tone={st?.armed ? "amber" : "muted"} glow={!!st?.armed}>
+   264→          {st?.armed ? "ARMED — UNFILTERED" : "OFF — FILTERED"}
+   265→        </NeonBadge>
+   266→      </div>
+   267→      {!st ? (
+   268→        <div className="flex min-h-[120px] items-center justify-center font-terminal text-[10px] text-ink-3">LOADING CAPTURE STATE…</div>
+   269→      ) : (
+   270→        <div className="min-w-0">
+   271→          {/* doctrine line */}
+   272→          <p className="text-[11px] leading-relaxed text-ink-2">
+   273→            {st.armed
+   274→              ? "Unfiltered issuance is LIVE — every scan's best flow is recorded as a RAW-CAL signal (data capture + tracking + journaling to ENGINE MEMORY). Auto-cancels at the calibration bar."
+   275→              : "Filtered operation under central-intelligence command. Arm to issue unfiltered RAW-CAL records and accelerate the AI CALIBRATION bar."}
+   276→          </p>
+   277→
+   278→          {/* progress toward 100 */}
+   279→          <div className="mt-3">
+   280→            <div className="flex items-center gap-2 font-terminal text-[10px]">
+   281→              <Scale className="size-3 text-amber-neon" aria-hidden />
+   282→              <span className="font-bold text-ink-2">AI CALIBRATION BAR</span>
+   283→              <span className="ml-auto tabular-nums text-ink">
+   284→                <b className="text-amber-neon">{st.settledN}</b>/{st.target} settled · {st.needed} to go
+   285→              </span>
+   286→            </div>
+   287→            <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-white/8">
+   288→              <div className="h-full rounded-full bg-gradient-to-r from-amber-neon/70 to-amber-neon" style={{ width: `${pct}%` }} />
+   289→            </div>
+   290→            {pace && (
+   291→              <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 font-terminal text-[9px] text-ink-3">
+   292→                <span>
+   293→                  PIPELINE+BOOK ≈ <b className="text-ink">{pace.pipelineProjection}</b> (open EPOCH-2 will still settle)
+   294→                </span>
+   295→                {pace.meanSettleMin !== null && (
+   296→                  <span>
+   297→                    MEAN SETTLE <b className="text-ink">{pace.meanSettleMin}m</b>
+   298→                  </span>
+   299→                )}
+   300→              </div>
+   301→            )}
+   302→          </div>
+   303→
+   304→          {/* stats grid */}
+   305→          <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+   306→            <div className="rounded-lg border border-white/8 bg-white/[0.02] px-2.5 py-2">
+   307→              <div className="label-tech truncate text-ink-3">ISSUED</div>
+   308→              <div className="mt-0.5 font-terminal text-base font-bold tabular-nums text-amber-neon">{st.issuedTotal}</div>
+   309→              <div className="font-terminal text-[9px] text-ink-3">{st.settledRaw} settled · {st.winsRaw}✓{st.rawWinRatePct !== null ? ` · ${st.rawWinRatePct}%` : ""}</div>
+   310→            </div>
+   311→            <div className="rounded-lg border border-white/8 bg-white/[0.02] px-2.5 py-2">
+   312→              <div className="label-tech truncate text-ink-3">OPEN</div>
+   313→              <div className="mt-0.5 font-terminal text-base font-bold tabular-nums text-ink">{st.openRaw}<span className="text-ink-3">/{st.maxOpen}</span></div>
+   314→              <div className="font-terminal text-[9px] text-ink-3">cap rail</div>
+   315→            </div>
+   316→            <div className="rounded-lg border border-white/8 bg-white/[0.02] px-2.5 py-2">
+   317→              <div className="label-tech truncate text-ink-3">LAST</div>
+   318→              <div className="mt-0.5 font-terminal text-base font-bold tabular-nums text-ink">{st.lastIssueSerial ? `NX-${String(st.lastIssueSerial).padStart(4, "0")}` : "—"}</div>
+   319→              <div className="font-terminal text-[9px] text-ink-3">{ago(st.lastIssueAt)} ago</div>
+   320→            </div>
+   321→            <div className="rounded-lg border border-white/8 bg-white/[0.02] px-2.5 py-2">
+   322→              <div className="label-tech truncate text-ink-3">SPACING</div>
+   323→              <div className="mt-0.5 font-terminal text-base font-bold tabular-nums text-ink">≥{st.spacingMin}m</div>
+   324→              <div className="font-terminal text-[9px] text-ink-3">anti-flood rail</div>
+   325→            </div>
+   326→          </div>
+   327→
+   328→          {/* ── v9.2 PACE MONITOR ── */}
+   329→          {pace && (
+   330→            <div className="mt-3 rounded-lg border border-white/8 bg-white/[0.02] p-2.5">
+   331→              <div className="flex flex-wrap items-center justify-between gap-2">
+   332→                <div className="flex items-center gap-2 font-terminal text-[10px] font-bold text-ink-2">
+   333→                  <Gauge className={cn("size-3", anyStall ? "text-danger-neon" : "text-mint-neon")} aria-hidden />
+   334→                  PACE MONITOR — issuance rhythm · book growth
+   335→                </div>
+   336→                <span
+   337→                  className={cn("rounded border px-1.5 py-0.5 font-terminal text-[9px] font-bold tracking-wider", GRADE_TONE[pace.cadenceGrade] ?? GRADE_TONE.OFF)}
+   338→                  title={`cadence grade ${pace.cadenceGrade} — A ≥3/h, B ≥1.5/h, C ≥0.5/h, D stalled`}
+   339→                >
+   340→                  CADENCE {pace.cadenceGrade}
+   341→                </span>
+   342→              </div>
+   343→
+   344→              {/* pace tiles */}
+   345→              <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
+   346→                <div className="rounded-md border border-white/8 bg-white/[0.02] px-2 py-1.5">
+   347→                  <div className="label-tech truncate text-ink-3">ISSUE/H</div>
+   348→                  <div className="mt-0.5 font-terminal text-sm font-bold tabular-nums text-ink">{pace.issueRate3hPerH.toFixed(1)}</div>
+   349→                  <div className="font-terminal text-[9px] text-ink-3">3h · arm {pace.issueRateSinceArmPerH.toFixed(1)}/h</div>
+   350→                </div>
+   351→                <div className="rounded-md border border-white/8 bg-white/[0.02] px-2 py-1.5">
+   352→                  <div className="label-tech truncate text-ink-3">SETTLE/H</div>
+   353→                  <div className="mt-0.5 font-terminal text-sm font-bold tabular-nums text-mint-neon">{pace.settleRate3hPerH.toFixed(1)}</div>
+   354→                  <div className="font-terminal text-[9px] text-ink-3">3h · 6h {pace.settleRate6hPerH.toFixed(1)}/h</div>
+   355→                </div>
+   356→                <div className="rounded-md border border-white/8 bg-white/[0.02] px-2 py-1.5">
+   357→                  <div className="label-tech truncate text-ink-3">OBS. SPACING</div>
+   358→                  <div className="mt-0.5 font-terminal text-sm font-bold tabular-nums text-ink">
+   359→                    {pace.observedSpacingMin.mean !== null ? `${pace.observedSpacingMin.mean}m` : "—"}
+   360→                  </div>
+   361→                  <div className="font-terminal text-[9px] text-ink-3">{pace.observedSpacingMin.samples} gaps {pace.observedSpacingMin.min !== null ? `· ${pace.observedSpacingMin.min}–${pace.observedSpacingMin.max}m` : ""}</div>
+   362→                </div>
+   363→                <div className="rounded-md border border-white/8 bg-white/[0.02] px-2 py-1.5">
+   364→                  <div className="label-tech truncate text-ink-3">ETA TO 100</div>
+   365→                  <div className="mt-0.5 font-terminal text-sm font-bold tabular-nums text-amber-neon">{pace.etaHours !== null ? `${pace.etaHours >= 100 ? "99+" : pace.etaHours.toFixed(1)}h` : "N/A"}</div>
+   366→                  <div className="font-terminal text-[9px] text-ink-3">
+   367→                    {pace.etaSteadyHours != null ? (
+   368→                      <span title="steady-state projection — raw cadence ∩ settle-throughput cap (open slots ÷ mean settle time)">
+   369→                        SS {pace.etaSteadyHours >= 100 ? "99+" : pace.etaSteadyHours.toFixed(1)}h @ {pace.steadyRatePerH ?? "—"}/h
+   370→                      </span>
+   371→                    ) : (
+   372→                      <span>{pace.etaAt ? `≈ ${etaClock(pace.etaAt)} local` : "no settle signal yet"}</span>
+   373→                    )}
+   374→                  </div>
+   375→                </div>
+   376→              </div>
+   377→
+   378→              {/* book-growth sparkline */}
+   379→              <div className="mt-2 rounded-md border border-white/8 bg-white/[0.02] px-2 pb-1.5 pt-2">
+   380→                <div className="flex items-center gap-1.5 font-terminal text-[9px] text-ink-3">
+   381→                  <TrendingUp className="size-3 text-amber-neon" aria-hidden />
+   382→                  EPOCH-2 BOOK GROWTH <span className="ml-auto">{pace.journalRows} snapshots · 10min cadence</span>
+   383→                </div>
+   384→                <GrowthSpark series={pace.sparkline} />
+   385→              </div>
+   386→
+   387→              {/* stall / cadence line */}
+   388→              <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 font-terminal text-[9px]">
+   389→                {anyStall ? (
+   390→                  <>
+   391→                    <span className="rounded border border-danger-neon/40 bg-danger-neon/10 px-1.5 py-0.5 font-bold text-danger-neon">
+   392→                      {stallIssue ? `ISSUE STALL ${pace.stalls.issueStallMin}m` : ""}
+   393→                      {stallIssue && stallSettle ? " · " : ""}
+   394→                      {stallSettle ? `SETTLE STALL ${pace.stalls.settleStallMin}m` : ""}
+   395→                    </span>
+   396→                    <span className="text-ink-3">last block: {pace.stalls.lastBlockNote ?? "—"}</span>
+   397→                  </>
+   398→                ) : (
+   399→                  <span className={cn("inline-flex items-center gap-1 rounded border border-mint-neon/30 bg-mint-neon/5 px-1.5 py-0.5 font-bold text-mint-neon", st.armed && "animate-pulse")}>
+   400→                    <Activity className="size-2.5" aria-hidden />
+   401→                    {st.armed ? "CADENCE NOMINAL — rails holding" : "MODE OFF — filtered command"}
+   402→                  </span>
+   403→                )}
+   404→              </div>
+   405→
+   406→              {/* milestone ledger */}
+   407→              {st.milestones && (
+   408→                <div className="mt-2 flex flex-wrap items-center gap-1.5 border-t border-white/5 pt-2">
+   409→                  <span className="label-tech text-ink-3">MILESTONES</span>
+   410→                  {st.milestones.steps.map((m) => {
+   411→                    const next = !m.fired && m.step === st.milestones!.steps.find((x) => !x.fired)?.step;
+   412→                    return (
+   413→                      <span
+   414→                        key={m.step}
+   415→                        title={m.fired ? `fired ${ago(m.at)} ago` : `pending — book at ${st.milestones?.settledE2 ?? "—"}`}
+   416→                        className={cn(
+   417→                          "rounded border px-1.5 py-0.5 font-terminal text-[9px] font-bold tabular-nums",
+   418→                          m.fired
+   419→                            ? "border-mint-neon/40 bg-mint-neon/10 text-mint-neon"
+   420→                            : next
+   421→                              ? "border-amber-neon/50 bg-amber-neon/10 text-amber-neon animate-pulse"
+   422→                              : "border-white/10 bg-white/[0.03] text-ink-3",
+   423→                        )}
+   424→                      >
+   425→                        {m.step}
+   426→                        {m.fired ? "✓" : ""}
+   427→                      </span>
+   428→                    );
+   429→                  })}
+   430→                </div>
+   431→              )}
+   432→
+   433→              {/* recent block notes (why issuance last paused) */}
+   434→              {st.blocks && st.blocks.length > 0 && (
+   435→                <div className="mt-2 max-h-16 overflow-y-auto border-t border-white/5 pt-1.5" title="recent issuance-block reasons">
+   436→                  {st.blocks.slice(-4).reverse().map((b, i) => (
+   437→                    <div key={`${b.t}-${i}`} className="flex items-baseline gap-2 font-terminal text-[8.5px] leading-relaxed text-ink-3">
+   438→                      <span className="shrink-0 tabular-nums text-ink-3/70">{ago(new Date(b.t).toISOString())} ago</span>
+   439→                      <span className="truncate">{b.note}</span>
+   440→                    </div>
+   441→                  ))}
+   442→                </div>
+   443→              )}
+   444→            </div>
+   445→          )}
+   446→
+   447→          {/* ── v9.3 SAMPLE QUALITY LAB — R6 DATA HEALTH ── */}
+   448→          {st.quality && (
+   449→            <div className="mt-3 rounded-lg border border-white/8 bg-white/[0.02] p-2.5">
+   450→              <div className="flex flex-wrap items-center justify-between gap-2">
+   451→                <div className="flex items-center gap-2 font-terminal text-[10px] font-bold text-ink-2">
+   452→                  <Microscope className={cn("size-3", st.quality.gate.verdict === "RED" ? "text-danger-neon" : st.quality.gate.verdict === "WARMING" ? "text-ink-3" : "text-mint-neon")} aria-hidden />
+   453→                  SAMPLE QUALITY — R6 DATA HEALTH
+   454→                </div>
+   455→                <span
+   456→                  className={cn("rounded border px-1.5 py-0.5 font-terminal text-[9px] font-bold tracking-wider", GATE_TONE[st.quality.gate.verdict] ?? GATE_TONE.WARMING)}
+   457→                  title={`R6 data-health gate — floor ${st.quality.gate.healthFloor}% healthy cohort`}
+   458→                >
+   459→                  GATE {st.quality.gate.verdict}
+   460→                </span>
+   461→              </div>
+   462→              <p className="mt-1 font-terminal text-[9px] leading-relaxed text-ink-3">
+   463→                cohort {st.quality.settledRaw} settled / {st.quality.issuedTotal} issued ({st.quality.openRaw} in flight) · {st.quality.healthy}✓ healthy · {st.quality.review}? review · {st.quality.censored}✗ censored
+   464→              </p>
+   465→
+   466→              {/* health tiles — 2×2 (the terminal column is narrow; 4-up truncates) */}
+   467→              <div className="mt-2 grid grid-cols-2 gap-2">
+   468→                <div className="rounded-md border border-white/8 bg-white/[0.02] px-2 py-1.5">
+   469→                  <div className="label-tech truncate text-ink-3">HEALTHY</div>
+   470→                  <div className={cn("mt-0.5 font-terminal text-sm font-bold tabular-nums", st.quality.healthyPct === null ? "text-ink-3" : st.quality.healthyPct >= st.quality.gate.healthFloor ? "text-mint-neon" : st.quality.healthyPct >= 70 ? "text-amber-neon" : "text-danger-neon")}>
+   471→                    {st.quality.healthyPct !== null ? `${st.quality.healthyPct}%` : "—"}
+   472→                  </div>
+   473→                  <div className="font-terminal text-[9px] text-ink-3">floor {st.quality.gate.healthFloor}%</div>
+   474→                </div>
+   475→                <div className="rounded-md border border-white/8 bg-white/[0.02] px-2 py-1.5">
+   476→                  <div className="label-tech truncate text-ink-3">INFORMATIVE</div>
+   477→                  <div className="mt-0.5 font-terminal text-sm font-bold tabular-nums text-ink">{st.quality.informativePct !== null ? `${st.quality.informativePct}%` : "—"}</div>
+   478→                  <div className="font-terminal text-[9px] text-ink-3">TP/SL proved · {st.quality.expiredNoTouch} censored</div>
+   479→                </div>
+   480→                <div className="rounded-md border border-white/8 bg-white/[0.02] px-2 py-1.5">
+   481→                  <div className="label-tech truncate text-ink-3">SNAPSHOTS</div>
+   482→                  <div className={cn("mt-0.5 font-terminal text-sm font-bold tabular-nums", st.quality.snapshotPct !== null && st.quality.snapshotPct < 80 ? "text-amber-neon" : "text-ink")}>{st.quality.snapshotPct !== null ? `${st.quality.snapshotPct}%` : "—"}</div>
+   483→                  <div className="font-terminal text-[9px] text-ink-3">factors+flow+MTF kept</div>
+   484→                </div>
+   485→                <div className="rounded-md border border-white/8 bg-white/[0.02] px-2 py-1.5">
+   486→                  <div className="label-tech truncate text-ink-3">COVERAGE</div>
+   487→                  <div className="mt-0.5 font-terminal text-sm font-bold tabular-nums text-ink">
+   488→                    {st.quality.longPct !== null ? `${st.quality.longPct}L/${st.quality.shortPct}S` : "—"}
+   489→                  </div>
+   490→                  <div className="font-terminal text-[9px] text-ink-3">{st.quality.symbols} sym{st.quality.topSymbolShare !== null ? ` · top ${st.quality.topSymbolShare}%` : ""}</div>
+   491→                </div>
+   492→              </div>
+   493→
+   494→              {/* warnings */}
+   495→              {st.quality.warnings.length > 0 && (
+   496→                <div className="mt-2 space-y-1">
+   497→                  {st.quality.warnings.slice(0, 3).map((w, i) => (
+   498→                    <div key={i} className="flex items-start gap-1.5 font-terminal text-[9px] leading-relaxed text-amber-neon/90">
+   499→                      <TriangleAlert className="mt-0.5 size-2.5 shrink-0" aria-hidden />
+   500→                      <span>{w}</span>
+   501→                    </div>
+   502→                  ))}
+   503→                </div>
+   504→              )}
+   505→
+   506→              {/* per-sample table */}
+   507→              {st.quality.samples.length > 0 && (
+   508→                <div className="mt-2 max-h-44 overflow-y-auto rounded-md border border-white/8 bg-white/[0.02]" title="RAW-CAL samples — settled cohort first, then in-flight (score = integrity+plan+outcome+representativeness, 0-100)">
+   509→                  <table className="w-full border-collapse font-terminal text-[9px]">
+   510→                    <thead>
+   511→                      <tr className="border-b border-white/8 text-left text-ink-3">
+   512→                        <th className="px-2 py-1 font-medium">SAMPLE</th>
+   513→                        <th className="px-1 py-1 font-medium">SIDE</th>
+   514→                        <th className="px-1 py-1 font-medium">STATUS</th>
+   515→                        <th className="px-1 py-1 text-right font-medium">PNL</th>
+   516→                        <th className="px-1 py-1 text-right font-medium">HELD</th>
+   517→                        <th className="px-2 py-1 text-right font-medium">GRADE</th>
+   518→                      </tr>
+   519→                    </thead>
+   520→                    <tbody>
+   521→                      {st.quality.samples.map((s) => (
+   522→                        <tr key={s.serial} className="border-b border-white/5 last:border-0 text-ink-2">
+   523→                          <td className="px-2 py-1">
+   524→                            <span className="font-bold text-ink">NX-{String(s.serial).padStart(4, "0")}</span>{" "}
+   525→                            <span className="text-ink-3">{s.symbol}</span>
+   526→                            {s.flags.length > 0 && <span className="ml-1 text-amber-neon/70" title={s.flags.join(" · ")}>⚑{s.flags.length}</span>}
+   527→                          </td>
+   528→                          <td className={cn("px-1 py-1 font-bold", s.direction === "LONG" ? "text-mint-neon" : "text-danger-neon")}>{s.direction === "LONG" ? "L" : "S"}</td>
+   529→                          <td className="px-1 py-1">{s.status}</td>
+   530→                          <td className={cn("px-1 py-1 text-right tabular-nums", s.pnlPercent > 0 ? "text-mint-neon" : s.pnlPercent < 0 ? "text-danger-neon" : "text-ink-3")}>
+   531→                            {s.settled ? `${s.pnlPercent > 0 ? "+" : ""}${s.pnlPercent}%` : "—"}
+   532→                          </td>
+   533→                          <td className="px-1 py-1 text-right tabular-nums text-ink-3">{s.holdMin !== null ? `${s.holdMin}m` : s.settled ? "—" : "open"}</td>
+   534→                          <td className="px-2 py-1 text-right">
+   535→                            <span className={cn("inline-block rounded border px-1 py-0.5 text-[8.5px] font-bold tabular-nums", CLS_TONE[s.cls])} title={`score ${s.score}/100 — HEALTHY ≥75, REVIEW ≥50, CENSORED <50`}>
+   536→                              {s.cls === "PENDING" ? "PEND" : s.score}
+   537→                            </span>
+   538→                          </td>
+   539→                        </tr>
+   540→                      ))}
+   541→                    </tbody>
+   542→                  </table>
+   543→                </div>
+   544→              )}
+   545→
+   546→              {/* gate footer */}
+   547→              <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-0.5 border-t border-white/5 pt-1.5 font-terminal text-[9px] leading-relaxed">
+   548→                <ShieldCheck className={cn("size-2.5 shrink-0", st.quality.gate.verdict === "RED" ? "text-danger-neon" : "text-mint-neon")} aria-hidden />
+   549→                {st.quality.gate.verdict === "WARMING" ? (
+   550→                  <span className="text-ink-3">grading starts at the first raw settle — every settle re-scores the cohort</span>
+   551→                ) : st.quality.gate.blockers.length > 0 ? (
+   552→                  <span className="text-danger-neon/90">BLOCKERS: {st.quality.gate.blockers.join(" · ")}</span>
+   553→                ) : (
+   554→                  <span className="text-mint-neon/80">R6 recalibration may rest on this cohort — no blockers</span>
+   555→                )}
+   556→                {st.quality.meanAbsPnl !== null && <span className="ml-auto text-ink-3">mean |pnl| {st.quality.meanAbsPnl}% · mean hold {st.quality.meanHoldMin ?? "—"}m</span>}
+   557→              </div>
+   558→            </div>
+   559→          )}
+   560→
+   561→
+   562→          {/* arm/disarm control */}
+   563→          <div className="mt-3 flex flex-wrap items-center gap-2">
+   564→            {st.armed ? (
+   565→              <button
+   566→                onClick={() => void act("disarm")}
+   567→                disabled={busy}
+   568→                className="inline-flex items-center gap-1.5 rounded-md border border-danger-neon/40 bg-danger-neon/10 px-3 py-2 font-terminal text-[10px] font-bold tracking-wider text-danger-neon transition hover:bg-danger-neon/20 disabled:opacity-50"
+   569→              >
+   570→                <Power className="size-3" aria-hidden />
+   571→                {busy ? "DISARMING…" : "DISARM — RETURN TO FILTERED"}
+   572→              </button>
+   573→            ) : (
+   574→              <button
+   575→                onClick={() => void act("arm")}
+   576→                disabled={busy}
+   577→                className="inline-flex items-center gap-1.5 rounded-md border border-amber-neon/40 bg-amber-neon/10 px-3 py-2 font-terminal text-[10px] font-bold tracking-wider text-amber-neon transition hover:bg-amber-neon/20 disabled:opacity-50"
+   578→              >
+   579→                <FlaskConical className="size-3" aria-hidden />
+   580→                {busy ? "ARMING…" : "ARM — ISSUE UNFILTERED RAW-CAL"}
+   581→              </button>
+   582→            )}
+   583→            <span className="font-terminal text-[9px] leading-relaxed text-ink-3">
+   584→              {st.armed ? `ARMED ${ago(st.armedAt)} AGO BY ${st.armedBy || "OPERATOR"}` : st.autoLiftAt ? `AUTO-LIFTED ${ago(st.autoLiftAt)} AGO — NEW CALIBRATION IN COMMAND` : st.disarmReason ? `DISARMED: ${st.disarmReason.slice(0, 60)}` : "IDLE"}
+   585→            </span>
+   586→          </div>
+   587→
+   588→          <p className="mt-2 font-terminal text-[9px] leading-relaxed tracking-[0.06em] text-ink-3">
+   589→            HONESTY RAILS STAY HARD (FEED-FRESH + SIM-PRICE BAN) · RAW RECORDS KEEP REAL FACTOR VOTES SO THE R6 RECALIBRATION AT N≥100 ATTRIBUTES OUTCOMES TO ACTUAL FACTORS
+   590→          </p>
+   591→        </div>
+   592→      )}
+   593→    </BentoCard>
+   594→  );
+   595→}
+   596→
