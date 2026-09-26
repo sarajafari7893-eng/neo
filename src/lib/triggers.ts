@@ -15,7 +15,7 @@
 //            readings fire contrarian context triggers; unreachable source
 //            keeps the honest OBSERVING declaration, never fabricated.
 
-import { FUTURES_FAPI } from "./market-feed";
+import { gateFetch } from "./fapi-gate";
 import { getLiquidationSnapshot } from "./liquidations";
 import { fetchFlowMetrics, getFlowHistory } from "./flow";
 import { peekRegime } from "./regime";
@@ -100,18 +100,11 @@ const measCache = new Map<string, { at: number; v: unknown }>();
 const MEAS_TTL = 35_000;
 
 // ── measurement primitives (all real endpoints, cached) ────────
+// v10.24 Task 34-a: through the central fapi-gate, CRITICAL lane — the
+// reaction layer rides ahead of the telemetry scanners when the weight
+// budget tightens (one 250ms negative retry, then an honest null).
 async function fapi<T>(path: string, timeoutMs = 5500): Promise<T | null> {
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
-  try {
-    const res = await fetch(`${FUTURES_FAPI}${path}`, { signal: ctrl.signal, cache: "no-store" });
-    if (!res.ok) return null;
-    return (await res.json()) as T;
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(timer);
-  }
+  return gateFetch<T>(path, { priority: "critical", timeoutMs });
 }
 
 interface AggTrade {

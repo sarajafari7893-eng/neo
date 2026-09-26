@@ -6,6 +6,12 @@
 // for universe symbols the futures response does not carry, and those rows
 // stay source:"live". If BOTH fail the caller's sim fallback is unchanged.
 // Resilience ladder: LIVE → STALE (≤5min grace) → SIMULATED drift.
+// v10.24 Task 34-a FAPI GATE: every futures (fapi) REST call now goes through
+// the process-wide weight gate (src/lib/fapi-gate.ts) — budget, global IP-ban
+// awareness and single-flight. SPOT calls (api.binance.com) stay direct —
+// they have their own separate IP budget.
+
+import { gateFetch } from "./fapi-gate";
 
 const BINANCE_HOSTS = ["https://api.binance.com", "https://data-api.binance.vision"];
 const FAPI = "https://fapi.binance.com";
@@ -79,7 +85,7 @@ export async function fetchTickers(symbols: string[]): Promise<Map<string, Ticke
   const out = new Map<string, Ticker24h>();
   const want = new Set(symbols);
   try {
-    const all = await fetchJson<Ticker24h[]>("/fapi/v1/ticker/24hr", FAPI_HOSTS);
+    const all = await fetchJsonFapi<Ticker24h[]>("/fapi/v1/ticker/24hr", { priority: "critical", weight: 40 }); // full-universe ticker — heavy, gated
     for (const t of all) if (want.has(t.symbol)) out.set(t.symbol, t);
   } catch {
     /* fall through to the spot overlay below */
@@ -118,7 +124,7 @@ function mapKlines(raw: (string | number)[][]): Candle[] {
  */
 export async function fetchKlines(symbol: string, interval: string, limit: number): Promise<Candle[]> {
   try {
-    const perp = await fetchJson<(string | number)[][]>(`/fapi/v1/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`, FAPI_HOSTS);
+    const perp = await fetchJsonFapi<(string | number)[][]>(`/fapi/v1/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`, { priority: "critical" });
     if (perp.length) return mapKlines(perp);
   } catch {
     /* spot fallback below */
@@ -127,9 +133,9 @@ export async function fetchKlines(symbol: string, interval: string, limit: numbe
   return mapKlines(raw);
 }
 
-/** Futures klines (USDT-M) — same payload shape. */
+/** Futures klines (USDT-M) — same payload shape (gated, critical). */
 export async function fetchFuturesKlines(symbol: string, interval: string, limit: number): Promise<Candle[]> {
-  const raw = await fetchJson<(string | number)[][]>(`/fapi/v1/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`, FAPI_HOSTS);
+  const raw = await fetchJsonFapi<(string | number)[][]>(`/fapi/v1/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`, { priority: "critical" });
   return mapKlines(raw);
 }
 
@@ -149,7 +155,7 @@ export interface UniverseRow {
 
 /** Rank ALL Binance USDT-M futures (PERPETUAL, TRADING) by real 24h quote volume. */
 export async function fetchFuturesUniverse(n: number): Promise<UniverseRow[]> {
-  const tickers = await fetchJson<Ticker24h[]>("/fapi/v1/ticker/24hr", [FAPI]);
+  const tickers = await fetchJsonFapi<Ticker24h[]>("/fapi/v1/ticker/24hr", { priority: "critical", weight: 40 });
   return tickers
     .filter((t) => t.symbol.endsWith("USDT"))
     .filter((t) => !LEVERAGED.test(t.symbol))
@@ -161,7 +167,7 @@ export async function fetchFuturesUniverse(n: number): Promise<UniverseRow[]> {
 
 /** Validate a symbol is a live USDT-M perpetual right now. */
 export async function fetchFuturesSymbols(): Promise<Set<string>> {
-  const info = await fetchJson<{ symbols: Array<{ symbol: string; contractType: string; status: string; quoteAsset: string }> }>("/fapi/v1/exchangeInfo", [FAPI]);
+  const info = await fetchJsonFapi<{ symbols: Array<{ symbol: string; contractType: string; status: string; quoteAsset: string }> }>("/fapi/v1/exchangeInfo", { priority: "critical", weight: 1 });
   return new Set(info.symbols.filter((s) => s.contractType === "PERPETUAL" && s.status === "TRADING" && s.quoteAsset === "USDT").map((s) => s.symbol));
 }
 
@@ -179,7 +185,7 @@ const POOL_TTL = 15 * 60_000;
 export async function fetchFuturesPoolStats(): Promise<FuturesPoolStats> {
   if (poolCache && Date.now() - poolCache.at < POOL_TTL) return poolCache.value;
   try {
-    const tickers = await fetchJson<Ticker24h[]>("/fapi/v1/ticker/24hr", [FAPI]);
+    const tickers = await fetchJsonFapi<Ticker24h[]>("/fapi/v1/ticker/24hr", { priority: "telemetry", weight: 40 }); // 15min-cached board stat — sheddable
     const usdtPerps = tickers.filter((t) => t.symbol.endsWith("USDT") && !LEVERAGED.test(t.symbol));
     const value: FuturesPoolStats = {
       totalUsdtPerps: usdtPerps.length,
@@ -194,3 +200,28 @@ export async function fetchFuturesPoolStats(): Promise<FuturesPoolStats> {
 }
 
 export const FUTURES_FAPI = FAPI;
+
+// ── v10.24 Task 34-a — gated futures fetch (fapi plane ONLY) ───────────────
+// Same contract as fetchJson (resolve JSON or THROW) so every existing caller
+// keeps its exact semantics; failures just become MORE common under weight
+// pressure / IP bans — by design (callers are throw-tolerant with fallbacks).
+// Walks FAPI_HOSTS through the gate: bans/weight are per-IP, so the alt host
+// shares the same budget/ban state (a ban nulls the alt attempt instantly).
+async function fetchJsonFapi<T>(path: string, opts?: { priority?: "critical" | "telemetry"; weight?: number }): Promise<T> {
+  let lastErr: unknown;
+  for (const host of FAPI_HOSTS) {
+    const t0 = Date.now();
+    const json = await gateFetch<T>(path, { ...opts, host });
+    if (json !== null) {
+      feedStatus.lastOkAt = Date.now();
+      feedStatus.latencyMs = Date.now() - t0;
+      feedStatus.consecutiveFailures = 0;
+      feedStatus.host = host.replace("https://", "");
+      if (feedStatus.source !== "LIVE") feedStatus.source = "LIVE";
+      return json;
+    }
+    feedStatus.consecutiveFailures++;
+    lastErr = new Error(`fapi ${path} unavailable via ${host}`);
+  }
+  throw lastErr;
+}

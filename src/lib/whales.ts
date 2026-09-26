@@ -34,8 +34,8 @@
 // measured vs not-yet-reswept.
 
 import { db } from "@/lib/db";
+import { gateFetch } from "./fapi-gate";
 
-const FUTURES_FAPI = "https://fapi.binance.com";
 const WHALE_MIN_USD = 150_000;
 const WHALE_WINDOW_MS = 15 * 60_000;
 const CACHE_TTL = 60_000;
@@ -46,16 +46,13 @@ const HIT_DEEP_CAP = 8;           // max hit-ring symbols promoted to deep reads
 const OPEN_PIN_CAP = 8;           // max open-signal symbols deep-read per bundle
 const READS_CAP = 14;             // final display cap, sorted by |net whale flow|
 
+// v10.24 Task 34-a: routed through the central fapi-gate (telemetry lane —
+// sheddable; discovery sweep simply retries next rotation). Throw semantics
+// preserved for the allSettled/catch callers below.
 async function fapi<T>(path: string, timeoutMs = 6000): Promise<T> {
-  const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), timeoutMs);
-  try {
-    const res = await fetch(`${FUTURES_FAPI}${path}`, { signal: ctrl.signal, cache: "no-store" });
-    if (!res.ok) throw new Error(`fapi ${path} → ${res.status}`);
-    return (await res.json()) as T;
-  } finally {
-    clearTimeout(t);
-  }
+  const v = await gateFetch<T>(path, { priority: "telemetry", timeoutMs });
+  if (v === null) throw new Error(`fapi ${path} → unavailable`);
+  return v;
 }
 
 export interface WhaleSymbolRead {

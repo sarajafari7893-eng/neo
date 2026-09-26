@@ -1,0 +1,111 @@
+{
+ "ver": "supervisor-cron 1.0.0",
+ "pid": 16205,
+ "startedAt": "2026-09-26T11:16:53.726Z",
+ "updatedAt": "2026-09-26T11:17:45.298Z",
+ "jobs": {
+  "sweep": {
+   "lastRunAt": 1790421430192,
+   "nextRunAt": 1790422030207,
+   "lastStatus": "ok",
+   "lastDurationMs": 14,
+   "lastError": null,
+   "runs": 2,
+   "failures": 0
+  },
+  "progress": {
+   "lastRunAt": null,
+   "nextRunAt": 1790443025726,
+   "lastStatus": null,
+   "lastDurationMs": null,
+   "lastError": null,
+   "runs": 0,
+   "failures": 0
+  },
+  "review": {
+   "lastRunAt": 1790421464658,
+   "nextRunAt": 1790464665298,
+   "lastStatus": "ok",
+   "lastDurationMs": 639,
+   "lastError": null,
+   "runs": 1,
+   "failures": 0
+  }
+ },
+ "lastSweep": {
+  "at": "2026-09-26T11:17:10.206Z",
+  "verdict": "RED",
+  "reason": "sentinel verdict RED",
+  "services": {
+   "app": {
+    "up": true,
+    "status": 200,
+    "ms": 10
+   },
+   "liq": {
+    "up": true,
+    "status": 200,
+    "ms": 0
+   },
+   "trade": {
+    "up": true,
+    "status": 200,
+    "ms": 0
+   },
+   "armor": {
+    "up": true,
+    "status": 200,
+    "ms": 1
+   },
+   "watchdog": {
+    "up": true,
+    "status": 200,
+    "ms": 1
+   },
+   "sentinel": {
+    "up": true,
+    "status": 200,
+    "ms": 0
+   }
+  },
+  "anomalies": [
+   {
+    "class": "sentinel-red",
+    "sev": "crit",
+    "msg": "sentinel :3030 verdict RED"
+   }
+  ]
+ },
+ "lastReview": {
+  "at": "2026-09-26T11:17:45.066Z",
+  "status": "llm_unavailable",
+  "verdict": null
+ },
+ "lastProgress": null,
+ "alertLedger": {
+  "sentinel-red": 1790421426373
+ },
+ "history": [
+  {
+   "id": "sweep",
+   "at": 1790421425727,
+   "status": "ok",
+   "durationMs": 647,
+   "detail": "RED: sentinel verdict RED"
+  },
+  {
+   "id": "sweep",
+   "at": 1790421430192,
+   "status": "ok",
+   "durationMs": 14,
+   "detail": "RED: sentinel verdict RED"
+  },
+  {
+   "id": "review",
+   "at": 1790421464658,
+   "status": "ok",
+   "durationMs": 639,
+   "detail": "llm=llm_unavailable"
+  }
+ ]
+}

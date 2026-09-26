@@ -21,7 +21,7 @@
 // forecast cache ≤64 rows. No unbounded state, no invented numbers.
 
 import { db } from "@/lib/db";
-import { FUTURES_FAPI } from "./market-feed";
+import { gateFetch } from "./fapi-gate";
 
 export type VolRegime = "LOW" | "NORMAL" | "ELEVATED" | "EXTREME";
 
@@ -88,12 +88,11 @@ export async function getKlines15m(symbol: string): Promise<K15[] | null> {
   const existing = k15InFlight.get(symbol);
   if (existing) return existing;
   const p = (async (): Promise<K15[] | null> => {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 6500);
     try {
-      const res = await fetch(`${FUTURES_FAPI}/fapi/v1/klines?symbol=${symbol}&interval=15m&limit=97`, { signal: ctrl.signal, cache: "no-store" });
-      if (!res.ok) throw new Error(`klines ${symbol} → ${res.status}`);
-      const raw = (await res.json()) as (string | number)[][];
+      // v10.24 Task 34-a: klines through the central fapi-gate (telemetry lane
+      // — sheddable; the deploy path's volGeometry(null) is fail-open NORMAL).
+      const raw = await gateFetch<(string | number)[][]>(`/fapi/v1/klines?symbol=${symbol}&interval=15m&limit=97`, { priority: "telemetry", timeoutMs: 6500 });
+      if (!raw) return null;
       const candles = raw.map((k) => ({ openTime: Number(k[0]), open: Number(k[1]), high: Number(k[2]), low: Number(k[3]), close: Number(k[4]) }));
       k15Cache.set(symbol, { at: Date.now(), candles });
       if (k15Cache.size > 64) {
@@ -104,7 +103,6 @@ export async function getKlines15m(symbol: string): Promise<K15[] | null> {
     } catch {
       return null;
     } finally {
-      clearTimeout(timer);
       k15InFlight.delete(symbol);
     }
   })();

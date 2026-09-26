@@ -2,8 +2,11 @@
 // Real Binance USDT-M flow metrics: OI delta, taker CVD, crowd L/S, funding.
 // scoreFlow → ±25 along candidate direction · OI-notional weighting (v4.5)
 // · in-memory per-symbol history ring for sparklines (R17).
+// v10.24 Task 34-a: fapi REST now goes through the process-wide fapi-gate
+// (weight budget + global ban awareness + single-flight). Telemetry lane —
+// sheddable under pressure; every caller is throw/null-tolerant already.
 
-import { FUTURES_FAPI } from "./market-feed";
+import { gateFetch } from "./fapi-gate";
 import { liquidationPressure } from "./liquidations";
 
 const TIMEOUT_MS = 6500;
@@ -82,15 +85,9 @@ export function getFlowStatus(): { covered: number; lastOkAt: number | null; las
 }
 
 async function fapi<T>(path: string): Promise<T> {
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
-  try {
-    const res = await fetch(`${FUTURES_FAPI}${path}`, { signal: ctrl.signal, cache: "no-store" });
-    if (!res.ok) throw new Error(`fapi ${path} → ${res.status}`);
-    return (await res.json()) as T;
-  } finally {
-    clearTimeout(timer);
-  }
+  const v = await gateFetch<T>(path, { priority: "telemetry", timeoutMs: TIMEOUT_MS });
+  if (v === null) throw new Error(`fapi ${path} → unavailable`); // preserved throw semantics — allSettled callers treat it as partial absence
+  return v;
 }
 
 export async function fetchFlowMetrics(symbol: string): Promise<FlowMetrics | null> {

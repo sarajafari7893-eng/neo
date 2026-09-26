@@ -6,8 +6,12 @@
 // OKX = instType SWAP, Bybit = category linear. A venue that errors degrades
 // to "no quote for that venue" — never to sim; the terminal price stays live
 // if ANY real venue responded.
+// v10.24 Task 34-a: ONLY the Binance futures leg goes through the fapi-gate
+// (weight 40 full-universe ticker, critical lane). OKX/Bybit/Hyperliquid are
+// different hosts with different budgets — they keep their direct fetch.
 
-import { getFeedStatus, FUTURES_FAPI } from "./market-feed";
+import { getFeedStatus } from "./market-feed";
+import { gateFetch } from "./fapi-gate";
 
 const TIMEOUT_MS = 6500;
 
@@ -95,9 +99,9 @@ async function binanceFuturesBatch(symbols: string[]): Promise<Map<string, numbe
     return out;
   }
   const out = new Map<string, number>();
-  const res = await fetchWithTimeout(`${FUTURES_FAPI}/fapi/v1/ticker/24hr`);
-  if (!res.ok) return out;
-  const json = (await res.json()) as Array<{ symbol: string; lastPrice: string }>;
+  // v10.24 Task 34-a: full-universe /fapi/v1/ticker/24hr — weight 40, gated.
+  const json = await gateFetch<Array<{ symbol: string; lastPrice: string }>>("/fapi/v1/ticker/24hr", { priority: "critical", weight: 40, timeoutMs: TIMEOUT_MS });
+  if (!json) return out;
   const all = new Map<string, number>();
   for (const row of json) {
     const p = Number(row.lastPrice);

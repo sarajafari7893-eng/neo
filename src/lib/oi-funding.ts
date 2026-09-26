@@ -14,7 +14,7 @@
 // (race-free by construction), in-memory map bounded at 64 symbols.
 
 import { db } from "@/lib/db";
-import { FUTURES_FAPI } from "./market-feed";
+import { gateFetch } from "./fapi-gate";
 
 const BOARD_KEY = "oifund.board";
 const BATCH = 6;
@@ -62,18 +62,11 @@ async function persistBoard(): Promise<void> {
   await db.engineSetting.upsert({ where: { key: BOARD_KEY }, create: { key: BOARD_KEY, value }, update: { value } });
 }
 
+// v10.24 Task 34-a: fapi REST goes through the central fapi-gate (telemetry
+// lane — a shedded rotation returns nulls and the board keeps its previous
+// rows; the op-audit-20260908 carry-over semantics still apply downstream).
 async function fapi<T>(path: string, timeoutMs = 6000): Promise<T | null> {
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
-  try {
-    const res = await fetch(`${FUTURES_FAPI}${path}`, { signal: ctrl.signal, cache: "no-store" });
-    if (!res.ok) return null;
-    return (await res.json()) as T;
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(timer);
-  }
+  return gateFetch<T>(path, { priority: "telemetry", timeoutMs });
 }
 
 interface PremRow { lastFundingRate: string; markPrice: string; nextFundingTime: number }

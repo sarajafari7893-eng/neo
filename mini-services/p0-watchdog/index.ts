@@ -1,4 +1,10 @@
-// NEXUS//SIGNALS — P0 WATCHDOG v1.1.0 (task ref OP-P0-WD-0909 · 4-b control gate)
+// NEXUS//SIGNALS — P0 WATCHDOG v1.4.0 (task ref OP-P0-WD-0909 · 4-b control gate)
+// v1.4.0 (2026-09-26, Task 34-c): supervisor-cron :3015 added as 8th guarded
+//   service. LESSON (Task 30-b, kept as a hard rule): a new SvcKey MUST be
+//   added in BOTH places — (1) the SvcKey type + SVCS map AND (2) the state
+//   initializer below (`state.cron = freshSvc()`) — missing (2) throws
+//   TypeError on the first tick and kills the watchdog. Heal command mirrors
+//   the service's battle-tested start (`bun --hot index.ts` from its own dir).
 // v1.1.0 (task 4-b · audit P0-1): `x-nexus-key` header (matching
 //   NEXUS_CONTROL_KEY from env/.env) is now REQUIRED on POST /pause and
 //   POST /probe-now (trigger endpoints). GET /health + GET /status stay open
@@ -29,7 +35,7 @@
 import { Database } from "bun:sqlite";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 
-const VER = "p0-watchdog 1.3.0";
+const VER = "p0-watchdog 1.4.0";
 const ROOT = "/home/z/my-project";
 const DIR = `${ROOT}/.data/p0-watchdog`;
 const LOCK = `${DIR}/lock.json`;
@@ -54,7 +60,7 @@ const MEM_CRIT_MB = 250;
 // The 2026-09-20 restore resurrected bridge :3005 / trade :3011 / sentinel :3030
 // WITHOUT guardians — trade ran down for hours unnoticed. All six are now
 // probe+heal covered; heal commands mirror each service's battle-tested start.
-type SvcKey = "app" | "liq" | "ws" | "bridge" | "trade" | "sentinel" | "armor";
+type SvcKey = "app" | "liq" | "ws" | "bridge" | "trade" | "sentinel" | "armor" | "cron";
 type Mode = "init" | "ok" | "degraded" | "healing" | "escalated";
 
 interface SvcCfg {
@@ -118,6 +124,16 @@ const SVCS: Record<SvcKey, SvcCfg> = {
     expectNote: "200",
     healCmd: `cd ${ROOT}/mini-services/push-armor && nohup bun --hot index.ts >> ${ROOT}/logs/push-armor.log 2>&1 &`,
   },
+  // v1.4.0 (2026-09-26, Task 34-c): supervisor-cron :3015 — the senior-supervisor
+  // cron (sweep 10m / progress 6h / LLM review 12h) rebuilt after rollback #4.
+  // TWO-PLACE RULE respected: type+map here AND state initializer below.
+  cron: {
+    label: "cron :3015",
+    url: "http://127.0.0.1:3015/health",
+    expect: (s) => s === 200,
+    expectNote: "200",
+    healCmd: `cd ${ROOT}/mini-services/supervisor-cron && nohup bun --hot index.ts >> ${ROOT}/logs/supervisor-cron.log 2>&1 &`,
+  },
 };
 
 interface SvcState {
@@ -141,6 +157,7 @@ const state: Record<SvcKey, SvcState> = {
   app: freshSvc(), liq: freshSvc(), ws: freshSvc(),
   bridge: freshSvc(), trade: freshSvc(), sentinel: freshSvc(),
   armor: freshSvc(),
+  cron: freshSvc(), // v1.4.0 two-place rule (Task 30-b lesson) — DO NOT remove
 };
 function freshSvc(): SvcState {
   return { mode: "init", fails: 0, heals: 0, lastProbeAt: null, lastOkAt: null, lastStatus: null, lastLatencyMs: null, lastDownAt: null, lastHealAt: null, healingUntil: null, nextHealAllowedAt: null, recoveries: 0 };
@@ -460,7 +477,7 @@ try {
   process.exit(0);
 }
 log("info", "boot", { ver: VER, pid: process.pid, port: PORT });
-console.log(`[${tehran()}] ${VER} armed on :${PORT} — app:3000 ws:3003 bridge:3005 liq:3010 trade:3011 sentinel:3030 armor:3016`);
+console.log(`[${tehran()}] ${VER} armed on :${PORT} — app:3000 ws:3003 bridge:3005 liq:3010 trade:3011 sentinel:3030 armor:3016 cron:3015`);
 persistState();
 
 process.on("SIGTERM", () => { log("info", "shutdown", { sig: "SIGTERM" }); releaseLock(); process.exit(0); });

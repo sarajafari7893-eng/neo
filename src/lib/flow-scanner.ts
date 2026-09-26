@@ -18,7 +18,7 @@
 // "flowscan.board" (single-row upsert — race-free by construction).
 
 import { db } from "@/lib/db";
-import { FUTURES_FAPI } from "./market-feed";
+import { gateFetch } from "./fapi-gate";
 import { fetchFlowMetrics } from "./flow";
 
 export const SCAN_TFS = ["4h", "1h", "15m", "5m"] as const;
@@ -80,12 +80,11 @@ async function fetchKlinesFlow(symbol: string, tf: ScanTf): Promise<FlowCandle[]
   const existing = klineFlowInFlight.get(key);
   if (existing) return existing;
   const p = (async (): Promise<FlowCandle[] | null> => {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 6500);
     try {
-      const res = await fetch(`${FUTURES_FAPI}/fapi/v1/klines?symbol=${symbol}&interval=${tf}&limit=${TF_LIMIT[tf]}`, { signal: ctrl.signal, cache: "no-store" });
-      if (!res.ok) throw new Error(`klines ${symbol} ${tf} → ${res.status}`);
-      const raw = (await res.json()) as (string | number)[][];
+      // v10.24 Task 34-a: klines through the central fapi-gate (telemetry lane
+      // — a shedded (symbol,tf) simply re-scans on the next rotation).
+      const raw = await gateFetch<(string | number)[][]>(`/fapi/v1/klines?symbol=${symbol}&interval=${tf}&limit=${TF_LIMIT[tf]}`, { priority: "telemetry", timeoutMs: 6500 });
+      if (!raw) return null;
       const candles = raw.map((k) => ({
         openTime: Number(k[0]),
         open: Number(k[1]),
@@ -100,7 +99,6 @@ async function fetchKlinesFlow(symbol: string, tf: ScanTf): Promise<FlowCandle[]
     } catch {
       return null;
     } finally {
-      clearTimeout(timer);
       klineFlowInFlight.delete(key);
     }
   })();

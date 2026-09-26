@@ -1,11 +1,7 @@
-// ── NEXUS//SIGNALS trade-service (v4.7 RESEARCH FACTORS · P0-a) ───────────
-// REAL aggressor tape for the order-flow gate. Connects to the Binance
-// USDT-M ALL-MARKET aggregate-trade stream (public, key-less):
-//
-//   wss://fstream.binance.com/ws/!aggTrade
-//
-// Every frame is an actual executed trade aggregated by the exchange —
-// NOT a derivation. From the raw tape the service maintains, per symbol:
+// ── NEXUS//SIGNALS trade-service (v4.8 SPOT-MIRROR · 34-b) ───────────
+// REAL aggressor tape for the order-flow gate. Every frame is an actual
+// executed trade aggregated by the exchange — NOT a derivation. From the
+// raw tape the service maintains, per symbol:
 //   · minute buckets (120 min) of { delta, buyUsd, sellUsd, lastPrice }
 //     → real CVD over 15m / 1h in USD and as % of taker volume
 //   · classic + hidden CVD-vs-price divergence detection (ZitaPlus/LuxAlgo
@@ -14,25 +10,44 @@
 //     (Easley/López de Prado/O'Hara) from per-symbol volume buckets
 //
 // Endpoints:
-//   GET  /health              → { ok, connected, stalled, symbols, trades, source, reconnects, uptimeMs }
+//   GET  /health              → { ok, connected, dataStalled, source, watch, lastFrameAt,
+//                                 spotConnected, spotFrames, spotLastFrameAt, spotStreams,
+//                                 spotReconnects, restBannedUntil, symbols, trades, restPolls,
+//                                 restErrors, reconnects, uptimeMs }
 //   GET  /flow?symbol=BTCUSDT → per-symbol real CVD / divergence / VPIN block
 //   GET  /top                 → busiest symbols by 15m taker volume (ops)
-//   POST /watch               → { symbols: [] } — REST fallback watchlist
+//   POST /watch               → { symbols: [] } — watchlist: REST fallback + SPOT-MIRROR subs
 //
-// EGRESS REALITY (v4.7): some hosts (this sandbox) open the Binance WS but
-// strip data frames. The service therefore runs DUAL INGEST:
-//   · WS  wss://fstream.binance.com/ws/!aggTrade  (when frames arrive)
-//   · REST https://fapi.binance.com/fapi/v1/aggTrades incremental fromId
-//     polling over the engine's watchlist (3 symbols / 2s round-robin)
-// REST fills the same minute buckets; trades are de-duplicated by their
-// exchange trade id so both paths can run concurrently.
+// DUAL-LANE INGEST (v4.8) — empirically, this sandbox's IP pool OPENS the
+// fstream WS but suppresses its data frames, while SPOT aggTrade frames
+// flow fine and fapi REST carries a multi-hour auto-ban history (418):
+//   LANE 1 (futures) wss://fstream.binance.com/ws/!aggTrade — kept alive;
+//                    it may recover one day, frames always win the label
+//   LANE 2 (mirror)  wss://stream.binance.com:9443 stream.binance.com spot aggTrade over
+//                    the engine watchlist (1 sym → /ws/<s>@aggTrade, multi →
+//                    /stream?streams=a@aggTrade/b@aggTrade), diff-resubscribed on
+//                    watchlist change, reconnect 1s→30s exponential backoff
+//   LANE 3 (fallback) https://fapi.binance.com/fapi/v1/aggTrades incremental fromId
+//                    polling — weight slashed 3 syms/2s (~1800 wt/min) → 1 sym/5s
+//                    (~240 wt/min); any 418/429 body "banned until <ms>" pauses ALL
+//                    REST polling until that timestamp (capped +35min) → restBannedUntil
 //
-// HONESTY CONTRACT: when neither path reaches the exchange the response
-// says so (stalled flag / null block) — the engine never invents numbers
-// from a silent feed.
+// SPOT-MIRROR frames feed the SAME minute buckets in their OWN lane:
+// separate de-dup boundary (lastSpotId), separate counters (spotFrames /
+// spotConnected), honest labeling.
+//
+// SOURCE PRIORITY (honesty contract): WS (real futures frames flowing)
+//   > SPOT-MIRROR (spot frames flowing, futures silent) > REST >
+//   REST-WARMING / REST-IDLE > OFFLINE. A frame is a frame — spot counts
+//   as live data for dataStalled, but the source label always says which
+//   lane is doing the work. The engine never invents numbers from a
+//   silent feed (stalled flag / null block).
 
 const PORT = 3011;
 const WS_URL = "wss://fstream.binance.com/ws/!aggTrade";
+const SPOT_WS_HOST = "wss://stream.binance.com:9443"; // SPOT-MIRROR lane (verified working where fstream is suppressed)
+const SPOT_OPEN_GUARD_MS = 15_000; // handshake hang guard — recycle and let backoff retry
+const SPOT_BACKOFF_MAX_MS = 30_000; // reconnect backoff ceiling (1s → 30s ladder)
 const STALL_MS = 120_000; // no frame for 2min on this busy stream ⇒ egress stripped
 const MINUTE_CAP = 120; // 2h of per-minute buckets per symbol
 const SYMBOL_CAP = 700; // memory guard — prune least-recently-seen beyond this
@@ -62,25 +77,42 @@ interface SymbolState {
   bucketTargetAt: number;
   lastPrice: number;
   lastSeen: number;
-  lastId: number; // exchange aggTrade id — WS/REST de-dup boundary
+  lastId: number; // exchange aggTrade id — futures WS/REST de-dup boundary
+  lastSpotId: number; // spot aggTrade id — SEPARATE de-dup boundary for the mirror lane
 }
 
 const symbols = new Map<string, SymbolState>();
-let connected = false;
-let lastFrameAt: number | null = null;
-let trades = 0;
+let connected = false; // futures lane socket (fstream !aggTrade)
+let lastFrameAt: number | null = null; // last futures WS frame
+let trades = 0; // total recorded trades across BOTH lanes
 let restPolls = 0;
 let restErrors = 0;
 let reconnects = 0;
 let wsTimer: ReturnType<typeof setTimeout> | null = null;
 const startedAt = Date.now();
 
+// ── SPOT-MIRROR lane state (34-b) — spot aggTrade frames, counted separately ──
+let spotConnected = false;
+let spotFrames = 0;
+let spotLastFrameAt: number | null = null;
+let spotReconnects = 0;
+let spotWs: WebSocket | null = null;
+let spotWsTimer: ReturnType<typeof setTimeout> | null = null;
+let spotOpenGuard: ReturnType<typeof setTimeout> | null = null;
+let spotBackoffMs = 1000; // 1s → 30s exponential ladder, reset on successful open
+let spotSubSeq = 0;
+let spotSubs = new Set<string>(); // streams subscribed on the live spot socket
+
 // REST fallback ingest — the engine registers its active universe here
 const watch = new Set<string>();
 let watchCursor = 0;
 const REST_HOST = "https://fapi.binance.com";
-const REST_BATCH = 3; // symbols per 2s tick → 24-symbol watch cycles ≈16s
-const REST_POLL_MS = 2_000;
+// 34-b ban-storm fix: REST weight slashed ~7.5× — 1 sym/5s ≈ 240 weight/min (was 3 syms/2s ≈ 1800)
+const REST_BATCH = 1;
+const REST_POLL_MS = 5_000;
+const REST_BAN_CAP_MS = 35 * 60_000; // cap a reported ban window at +35min
+const REST_SOFT_BAN_MS = 60_000; // 418/429 without a "banned until" body — back off anyway
+let restBannedUntil: number | null = null; // ms epoch — ALL REST polling paused until then
 
 function stateFor(sym: string): SymbolState {
   let st = symbols.get(sym);
@@ -94,6 +126,7 @@ function stateFor(sym: string): SymbolState {
       lastPrice: 0,
       lastSeen: Date.now(),
       lastId: 0,
+      lastSpotId: 0,
     };
     symbols.set(sym, st);
   }
@@ -108,20 +141,30 @@ interface RestTrade {
   m: boolean;
 }
 
-function record(tr: AggTrade, id?: number): void {
+function record(tr: AggTrade, id?: number, lane: "FUT" | "SPOT" = "FUT"): void {
   if (tr?.e !== "aggTrade" || !tr.s || !tr.p || !tr.q) return;
   const st0 = symbols.get(tr.s);
   const tradeId = id ?? 0;
-  // de-dup boundary: REST poller only advances forward past lastId;
-  // WS frames for already-counted ids are dropped
-  if (st0 && tradeId > 0 && tradeId <= st0.lastId) return;
+  // de-dup boundary (per lane): pollers/WS only advance forward past the
+  // lane's last id; frames for already-counted ids are dropped. Spot ids
+  // live in a different id-space, so the mirror keeps its own boundary.
+  if (st0 && tradeId > 0) {
+    const boundary = lane === "SPOT" ? st0.lastSpotId : st0.lastId;
+    if (tradeId <= boundary) return;
+  }
   const price = parseFloat(tr.p);
   const qty = parseFloat(tr.q);
   if (!Number.isFinite(price) || !Number.isFinite(qty) || price <= 0) return;
   const usd = price * qty;
   const minute = Math.floor((tr.T || Date.now()) / 60_000) * 60_000;
   const st = stateFor(tr.s);
-  if (tradeId > st.lastId) st.lastId = tradeId;
+  if (tradeId > 0) {
+    if (lane === "SPOT") {
+      if (tradeId > st.lastSpotId) st.lastSpotId = tradeId;
+    } else if (tradeId > st.lastId) {
+      st.lastId = tradeId;
+    }
+  }
   st.lastSeen = Date.now();
   st.lastPrice = price;
   trades++;
@@ -166,7 +209,25 @@ function record(tr: AggTrade, id?: number): void {
   }
 }
 
-/* ── REST fallback ingest (incremental aggTrades by fromId) ──── */
+/* ── REST fallback ingest (incremental aggTrades by fromId) ────
+   34-b ban-storm guard: a 418/429 body like
+   {"code":418,"msg":"IP has been auto-banned. Temporary banned until 1727350000000."}
+   pauses ALL REST polling until that timestamp (capped at +35min). */
+
+function parseBanUntil(bodyText: string): number | null {
+  const m = bodyText.match(/banned until (\d{10,16})/i);
+  if (!m) return null;
+  let ts = Number(m[1]);
+  if (!Number.isFinite(ts) || ts <= 0) return null;
+  if (ts < 10_000_000_000) ts *= 1000; // seconds-scaled body → ms
+  return ts;
+}
+
+function applyRestBan(untilMs: number): void {
+  const capped = Math.min(untilMs, Date.now() + REST_BAN_CAP_MS);
+  if (restBannedUntil === null || capped > restBannedUntil) restBannedUntil = capped;
+  console.error(`[tape] Binance REST ban — ALL REST polling paused until ${new Date(restBannedUntil).toISOString()}`);
+}
 
 async function restPollSymbol(sym: string): Promise<void> {
   const st = stateFor(sym);
@@ -178,6 +239,18 @@ async function restPollSymbol(sym: string): Promise<void> {
     const t = setTimeout(() => ctrl.abort(), 6000);
     const res = await fetch(url, { signal: ctrl.signal, cache: "no-store" });
     clearTimeout(t);
+    if (res.status === 418 || res.status === 429) {
+      // ban-storm guard: honor "banned until <ms>" bodies, else back off softly
+      let until: number | null = null;
+      try {
+        until = parseBanUntil(await res.text());
+      } catch {
+        /* body unreadable */
+      }
+      applyRestBan(until ?? Date.now() + REST_SOFT_BAN_MS);
+      restErrors++;
+      return;
+    }
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const rows = (await res.json()) as RestTrade[];
     if (!Array.isArray(rows) || rows.length === 0) return;
@@ -190,6 +263,11 @@ async function restPollSymbol(sym: string): Promise<void> {
 }
 
 function restPollTick(): void {
+  if (restBannedUntil !== null) {
+    if (Date.now() < restBannedUntil) return; // hard pause — zero REST weight while banned
+    restBannedUntil = null;
+    console.log("[tape] REST ban window elapsed — polling resumed");
+  }
   const list = [...watch];
   if (list.length === 0) return;
   for (let i = 0; i < Math.min(REST_BATCH, list.length); i++) {
@@ -311,10 +389,36 @@ function symbolFlow(sym: string): SymbolFlow | null {
 
 /* ── connection (same resilience pattern as liq-service) ─────── */
 
+function futFlowing(): boolean {
+  return connected && lastFrameAt !== null && Date.now() - lastFrameAt < STALL_MS;
+}
+
+function spotFlowing(): boolean {
+  return spotConnected && spotLastFrameAt !== null && Date.now() - spotLastFrameAt < STALL_MS;
+}
+
+/** A frame is a frame — futures OR SPOT-MIRROR counts as live data (34-b). */
 function dataStalled(): boolean {
-  if (!connected) return true;
-  if (lastFrameAt === null) return Date.now() - startedAt > STALL_MS;
-  return Date.now() - lastFrameAt > STALL_MS;
+  if (!connected && !spotConnected) return true;
+  const last =
+    lastFrameAt === null
+      ? spotLastFrameAt
+      : spotLastFrameAt === null
+        ? lastFrameAt
+        : Math.max(lastFrameAt, spotLastFrameAt);
+  return Date.now() - (last ?? startedAt) > STALL_MS;
+}
+
+/** Source priority: WS > SPOT-MIRROR > REST > REST-WARMING/REST-IDLE > OFFLINE. */
+function currentSource(): string {
+  if (futFlowing()) return "WS"; // real futures aggTrade frames flowing
+  if (spotFlowing()) return "SPOT-MIRROR"; // spot frames flowing, futures silent
+  if (restOk()) {
+    if (restLive()) return "REST";
+    return watch.size > 0 ? "REST-WARMING" : "REST-IDLE";
+  }
+  if (connected) return "WS"; // futures socket open, frames not yet proven (legacy warming label)
+  return "OFFLINE";
 }
 
 /** REST ingest reached the exchange at least once and last poll window had data. */
@@ -365,6 +469,147 @@ function connect(): void {
   }
 }
 
+/* ── SPOT-MIRROR lane (34-b): spot aggTrade over stream.binance.com ──
+   This egress pool suppresses fstream aggTrade frames while SPOT aggTrade
+   flows fine. The mirror feeds the SAME minute buckets (CVD / divergence /
+   VPIN) in its own lane: separate de-dup boundary (lastSpotId), separate
+   counters, and an honest SPOT-MIRROR source label whenever it is the
+   lane doing the work. */
+
+function spotStreams(): string[] {
+  return [...watch].map((s) => `${s.toLowerCase()}@aggTrade`);
+}
+
+function spotUrl(streams: string[]): string {
+  return streams.length === 1
+    ? `${SPOT_WS_HOST}/ws/${streams[0]}`
+    : `${SPOT_WS_HOST}/stream?streams=${streams.join("/")}`;
+}
+
+function handleSpotFrame(raw: string): void {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return; // malformed frame — ignore
+  }
+  // combined stream: {stream, data} · raw stream: payload itself · acks: {result, id}
+  const payload = (parsed as { data?: unknown }).data ?? parsed;
+  if (!payload || typeof payload !== "object") return;
+  const tr = payload as AggTrade & { a?: number };
+  if (tr.e !== "aggTrade" || !tr.s || !tr.p || !tr.q) return;
+  spotFrames++;
+  spotLastFrameAt = Date.now();
+  record({ e: tr.e, s: tr.s, p: tr.p, q: tr.q, m: tr.m, T: tr.T }, tr.a, "SPOT");
+}
+
+function connectSpot(): void {
+  if (spotWsTimer) {
+    clearTimeout(spotWsTimer);
+    spotWsTimer = null;
+  }
+  if (spotOpenGuard) {
+    clearTimeout(spotOpenGuard);
+    spotOpenGuard = null;
+  }
+  const streams = spotStreams();
+  if (streams.length === 0) return; // nothing to mirror — lane stays down
+  if (spotWs) {
+    try {
+      spotWs.close();
+    } catch {
+      /* already dead */
+    }
+    spotWs = null;
+  }
+  const url = spotUrl(streams);
+  try {
+    const ws = new WebSocket(url);
+    spotWs = ws;
+    spotOpenGuard = setTimeout(() => {
+      console.error("[tape] spot open timeout — recycling socket");
+      try {
+        ws.close();
+      } catch {
+        /* ignore */
+      }
+    }, SPOT_OPEN_GUARD_MS);
+    ws.onopen = () => {
+      if (spotOpenGuard) {
+        clearTimeout(spotOpenGuard);
+        spotOpenGuard = null;
+      }
+      spotConnected = true;
+      spotBackoffMs = 1000; // success resets the backoff ladder
+      spotSubs = new Set(streams);
+      console.log(`[tape] SPOT-MIRROR connected — ${streams.length} stream(s) via stream.binance.com`);
+    };
+    ws.onmessage = (e) => handleSpotFrame(String(e.data));
+    ws.onerror = (err) => {
+      console.error("[tape] spot ws error", err instanceof Error ? err.message : err);
+    };
+    ws.onclose = () => {
+      if (spotOpenGuard) {
+        clearTimeout(spotOpenGuard);
+        spotOpenGuard = null;
+      }
+      spotConnected = false;
+      spotSubs = new Set();
+      spotWs = null;
+      spotReconnects++;
+      const wait = spotBackoffMs;
+      spotBackoffMs = Math.min(SPOT_BACKOFF_MAX_MS, spotBackoffMs * 2);
+      console.log(`[tape] spot closed — reconnect in ${wait}ms (attempt ${spotReconnects})`);
+      if (spotWsTimer) clearTimeout(spotWsTimer);
+      spotWsTimer = setTimeout(connectSpot, wait);
+    };
+  } catch (err) {
+    spotConnected = false;
+    spotWs = null;
+    spotReconnects++;
+    const wait = spotBackoffMs;
+    spotBackoffMs = Math.min(SPOT_BACKOFF_MAX_MS, spotBackoffMs * 2);
+    console.error("[tape] spot connect failed", err);
+    if (spotWsTimer) clearTimeout(spotWsTimer);
+    spotWsTimer = setTimeout(connectSpot, wait);
+  }
+}
+
+/** Watchlist changed (or periodic reconcile) — diff-resubscribe the live spot socket. */
+function syncSpotSubscriptions(): void {
+  const want = new Set(spotStreams());
+  if (want.size === 0) {
+    if (spotWs) {
+      try {
+        spotWs.close(); // onclose schedules a reconnect that no-ops on an empty watchlist
+      } catch {
+        /* ignore */
+      }
+    }
+    return;
+  }
+  if (spotWs && spotConnected) {
+    const add = [...want].filter((s) => !spotSubs.has(s));
+    const del = [...spotSubs].filter((s) => !want.has(s));
+    if (add.length === 0 && del.length === 0) return;
+    try {
+      if (del.length > 0) spotWs.send(JSON.stringify({ method: "UNSUBSCRIBE", params: del, id: ++spotSubSeq }));
+      if (add.length > 0) spotWs.send(JSON.stringify({ method: "SUBSCRIBE", params: add, id: ++spotSubSeq }));
+      spotSubs = want;
+      console.log(`[tape] spot resubscribed (+${add.length}/-${del.length}) — ${want.size} stream(s)`);
+    } catch (err) {
+      console.error("[tape] spot resubscribe failed — forcing reconnect", err);
+      try {
+        spotWs.close(); // onclose schedules the backoff reconnect with the fresh list
+      } catch {
+        /* ignore */
+      }
+    }
+    return;
+  }
+  if (!spotWs && !spotWsTimer) connectSpot(); // first sync, or the lane is fully down
+}
+
 /* ── HTTP surface ── */
 
 function json(data: unknown, status = 200): Response {
@@ -384,9 +629,15 @@ Bun.serve({
         service: "trade-service",
         connected,
         dataStalled: dataStalled(),
-        source: restOk() ? (restLive() ? "REST" : watch.size > 0 ? "REST-WARMING" : "REST-IDLE") : connected && !dataStalled() ? "WS" : "OFFLINE",
+        source: currentSource(),
         watch: watch.size,
         lastFrameAt,
+        spotConnected,
+        spotFrames,
+        spotLastFrameAt,
+        spotStreams: spotSubs.size,
+        spotReconnects,
+        restBannedUntil,
         symbols: symbols.size,
         trades,
         restPolls,
@@ -401,7 +652,8 @@ Bun.serve({
         const list = Array.isArray(body.symbols) ? body.symbols.filter((s) => typeof s === "string" && s.endsWith("USDT")).slice(0, 80) : [];
         watch.clear();
         for (const s of list) watch.add(s);
-        console.log(`[tape] watchlist synced — ${watch.size} symbols for REST ingest`);
+        syncSpotSubscriptions(); // 34-b: the watchlist now also drives the SPOT-MIRROR lane
+        console.log(`[tape] watchlist synced — ${watch.size} symbols (REST ingest + SPOT-MIRROR subs)`);
         return json({ ok: true, watch: watch.size });
       } catch {
         return json({ error: "bad body" }, 400);
@@ -415,9 +667,12 @@ Bun.serve({
         ts: Date.now(),
         connected,
         dataStalled: dataStalled(),
-        source: restOk() ? "REST" : "WS",
+        source: currentSource(),
         symbols: symbols.size,
         trades,
+        spotConnected,
+        spotFrames,
+        restBannedUntil,
         flow: stalled ? null : symbolFlow(sym),
       });
     }
@@ -439,5 +694,8 @@ Bun.serve({
 });
 
 connect();
+setInterval(syncSpotSubscriptions, 60_000); // reconcile spot subs — watchlist drift / missed diffs self-heal
 
-console.log(`[tape] trade-service listening on :${PORT} — streaming REAL Binance !aggTrade aggressor flow`);
+console.log(
+  `[tape] trade-service listening on :${PORT} — futures !aggTrade + SPOT-MIRROR lanes (source: WS > SPOT-MIRROR > REST)`,
+);

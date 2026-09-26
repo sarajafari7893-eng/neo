@@ -24,7 +24,7 @@
 //  · Nothing here touches the deploy path. Telemetry + learning only.
 
 import { db } from "@/lib/db";
-import { FUTURES_FAPI } from "./market-feed";
+import { fapiBanRemainingMs, gateFetch } from "./fapi-gate";
 import { getTape, getTapeHealth, syncTapeWatchlist } from "./trade-flow";
 import { getLiquidationSnapshot, getLiquidationStatus } from "./liquidations";
 
@@ -61,46 +61,18 @@ export function classifyQuadrant(priceDelta: number | null, oiDelta: number | nu
 
 // ── low-level fetchers (honest nulls — never invent) ───────────────────────────
 
-// v10.22 IP-BAN AWARENESS: the engine's rotating scanners already run close to
-// the fapi weight cap; a burst here must NEVER tip a -1003 IP ban into a
-// permanent black hole. Any 418/429 arms a module-level backoff (the ban end
-// when Binance reports it, else 10min) — sampler AND backfill both respect it
-// and self-heal when it lifts.
-let binanceBlockUntil = 0;
-
-function noteBinanceStatus(status: number, bodyText: string): void {
-  if (status !== 418 && status !== 429) return;
-  const m = /banned until (\d+)/.exec(bodyText);
-  if (m) {
-    const until = Math.min(Number(m[1]), Date.now() + 35 * 60_000);
-    binanceBlockUntil = Math.max(binanceBlockUntil, until);
-  } else {
-    binanceBlockUntil = Math.max(binanceBlockUntil, Date.now() + 10 * 60_000);
-  }
-}
-
+// v10.24 Task 34-a IP-BAN AWARENESS MOVED TO THE CENTER: the old module-level
+// binanceBlockUntil/noteBinanceStatus backoff is REPLACED by the process-wide
+// fapi-gate (weight budget + global 418/429 "banned until" parsing + zero-
+// network ban windows). binanceBackoffRemainingMs stays as a working export
+// for existing callers — it now delegates to the gate's ban clock so ALL
+// modules share ONE truth about the IP-ban state.
 export function binanceBackoffRemainingMs(): number {
-  return Math.max(0, binanceBlockUntil - Date.now());
+  return fapiBanRemainingMs();
 }
 
 async function fapi<T>(path: string, timeoutMs = 6500): Promise<T | null> {
-  if (Date.now() < binanceBlockUntil) return null;
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
-  try {
-    const res = await fetch(`${FUTURES_FAPI}${path}`, { signal: ctrl.signal, cache: "no-store" });
-    if (!res.ok) {
-      noteBinanceStatus(res.status, await res.text().catch(() => ""));
-      return null;
-    }
-    const text = await res.text();
-    if (!text) return null; // empty 200 — no invented rows
-    return JSON.parse(text) as T;
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(timer);
-  }
+  return gateFetch<T>(path, { priority: "telemetry", timeoutMs });
 }
 
 async function jsonUrl<T>(url: string, timeoutMs = 6500): Promise<T | null> {
@@ -280,7 +252,7 @@ export async function ensureBackfill(force = false): Promise<BackfillState | nul
   const pending = FUTURES_ANCHORS.filter((s) => !done.has(s));
   if (existing && pending.length === 0 && !force) return existing;
   if (!force && Date.now() - lastBackfillAttemptAt < BACKFILL_RETRY_MS) return null;
-  if (Date.now() < binanceBlockUntil) return null; // never hammer a live IP ban
+  if (fapiBanRemainingMs() > 0) return null; // never hammer a live IP ban (gate-shared ban clock)
   lastBackfillAttemptAt = Date.now();
   backfillInFlight = true;
   try {

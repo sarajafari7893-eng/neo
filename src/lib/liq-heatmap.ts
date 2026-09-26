@@ -20,7 +20,7 @@
 // (evict-oldest), klines reused from the flow scanner cache when fresh —
 // zero extra kline fetches on the hot path.
 
-import { FUTURES_FAPI } from "./market-feed";
+import { gateFetch } from "./fapi-gate";
 import { peekOiFund } from "./oi-funding";
 
 export interface LiqCluster {
@@ -66,19 +66,12 @@ function evictOldest(): void {
 
 interface K { openTime: number; open: number; high: number; low: number; close: number; volume: number }
 
+// v10.24 Task 34-a: klines fetch goes through the central fapi-gate
+// (telemetry lane — the heatmap degrades honestly to null when shed).
 async function fetchKlines15m(symbol: string): Promise<K[] | null> {
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 6500);
-  try {
-    const res = await fetch(`${FUTURES_FAPI}/fapi/v1/klines?symbol=${symbol}&interval=15m&limit=96`, { signal: ctrl.signal, cache: "no-store" });
-    if (!res.ok) return null;
-    const raw = (await res.json()) as (string | number)[][];
-    return raw.map((k) => ({ openTime: Number(k[0]), open: Number(k[1]), high: Number(k[2]), low: Number(k[3]), close: Number(k[4]), volume: Number(k[5]) }));
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(timer);
-  }
+  const raw = await gateFetch<(string | number)[][]>(`/fapi/v1/klines?symbol=${symbol}&interval=15m&limit=96`, { priority: "telemetry", timeoutMs: 6500 });
+  if (!raw) return null;
+  return raw.map((k) => ({ openTime: Number(k[0]), open: Number(k[1]), high: Number(k[2]), low: Number(k[3]), close: Number(k[4]), volume: Number(k[5]) }));
 }
 
 /** Compute the estimated heatmap for one symbol. Returns null when inputs are missing. */

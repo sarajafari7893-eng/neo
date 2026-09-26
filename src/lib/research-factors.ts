@@ -28,6 +28,10 @@ import type { Candle } from "@/lib/indicators";
 import type { FlowMetrics } from "@/lib/flow";
 import { getLiquidationSnapshot } from "@/lib/liquidations";
 import { getTape } from "@/lib/trade-flow";
+// v10.24 Task 34-a: these fapi.binance.com probes go through the central
+// fapi-gate (telemetry lane) — same host, same per-IP budget, so they must
+// share the process-wide weight bucket and ban awareness like everyone else.
+import { gateFetch } from "./fapi-gate";
 import { db } from "@/lib/db";
 
 /* ── settings (operator tunables, persisted) ─────────────────── */
@@ -289,20 +293,7 @@ interface DepthRow {
 }
 
 async function depthPoll(symbol: string): Promise<DepthRow | null> {
-  const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), 4000);
-  try {
-    const res = await fetch(`https://fapi.binance.com/fapi/v1/depth?symbol=${symbol}&limit=20`, {
-      signal: ctrl.signal,
-      cache: "no-store",
-    });
-    clearTimeout(t);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return (await res.json()) as DepthRow;
-  } catch {
-    clearTimeout(t);
-    return null;
-  }
+  return gateFetch<DepthRow>(`/fapi/v1/depth?symbol=${symbol}&limit=20`, { priority: "telemetry", timeoutMs: 4000, weight: 2 });
 }
 
 const sideUsd = (rows: Array<[string, string]>, n: number) =>
@@ -368,18 +359,10 @@ interface RawBasis {
 
 export async function basisRead(symbol: string): Promise<{ now: number; mean1h: number } | null> {
   try {
-    const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), 4500);
     // NOTE: /futures/data/basis requires `pair` (the base pair, = symbol for
     // USDT-M perpetuals) — passing `symbol` returns a VALIDATION error.
-    const res = await fetch(`https://fapi.binance.com/futures/data/basis?pair=${symbol}&contractType=PERPETUAL&period=5m&limit=12`, {
-      signal: ctrl.signal,
-      cache: "no-store",
-    });
-    clearTimeout(t);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const rows = (await res.json()) as RawBasis[];
-    if (!Array.isArray(rows) || rows.length < 6) return null;
+    const rows = await gateFetch<RawBasis[]>(`/futures/data/basis?pair=${symbol}&contractType=PERPETUAL&period=5m&limit=12`, { priority: "telemetry", timeoutMs: 4500, weight: 1 });
+    if (!rows || !Array.isArray(rows) || rows.length < 6) return null;
     const rates = rows.map((r) => parseFloat(r.basisRate) * 100); // → %
     const now = rates[rates.length - 1];
     const mean1h = rates.reduce((a, b) => a + b, 0) / rates.length;
@@ -397,16 +380,8 @@ interface RawRatio {
 
 export async function topTraderPositionRatio(symbol: string): Promise<number | null> {
   try {
-    const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), 4500);
-    const res = await fetch(`https://fapi.binance.com/futures/data/topLongShortPositionRatio?symbol=${symbol}&period=5m&limit=3`, {
-      signal: ctrl.signal,
-      cache: "no-store",
-    });
-    clearTimeout(t);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const rows = (await res.json()) as RawRatio[];
-    if (!Array.isArray(rows) || rows.length === 0) return null;
+    const rows = await gateFetch<RawRatio[]>(`/futures/data/topLongShortPositionRatio?symbol=${symbol}&period=5m&limit=3`, { priority: "telemetry", timeoutMs: 4500, weight: 1 });
+    if (!rows || !Array.isArray(rows) || rows.length === 0) return null;
     return parseFloat(rows[rows.length - 1].longShortRatio);
   } catch {
     return null;
