@@ -29411,3 +29411,23 @@ Work Log:
 Stage Summary:
 - شش خواسته اپراتور به ۳ ریشه واحد می‌رسد: (۱) auth session در UI، (۲) بن‌های fapi از اضافه‌وزن REST، (۳) کپ‌های حافظه shadow-veto
 - معماری اجرا: 34-a fapi-gate مرکزی · 34-b trade-service SPOT-MIRROR · 34-c supervisor-cron :3015 · 34-1 advisor auth UX · 34-2 RAW-CAL arms-coupled · 34-4 taxonomy resilience · 34-6 D1 entryGate+kill-switch — live همچنان DISABLED
+
+---
+Task ID: 34-b
+Agent: Z.ai Code
+Task: trade-service SPOT-MIRROR — خط سوخت جایگزین تیپ واقعی + اصلاح بن-استورم REST
+
+Work Log:
+- v4.8 SPOT-MIRROR در mini-services/trade-service/index.ts: لاین دوم WS به spot aggTrade روی stream.binance.com:9443 برای واچ‌لیست انجین — ۱ نماد → /ws/<s>@aggTrade، چند نماد → /stream?streams=a@aggTrade/b@aggTrade؛ resubscribe دیف-محور هنگام تغییر واچ‌لیست (SUBSCRIBE/UNSUBSCRIBE روی سوکت زنده + reconcile هر 60s)، reconnect نمایی 1s→30s با ریست روی open موفق + گارد 15s برای handshake معلق؛ واچ‌لیست خالی = لاین پایین (بدون اتصال بی‌دلیل).
+- فریم‌های spot به همان دقیقه-باکس‌های CVD/divergence/VPIN تزریق می‌شوند ولی در لاین جدا: de-dup مستقل با lastSpotId به‌ازای هر نماد (آیدی‌های spot فضای جدایی از فارچنز دارند)، شمارنده‌های مستقل spotFrames/spotConnected/spotLastFrameAt/spotStreams/spotReconnects؛ فریم WS فارچنز (!aggTrade) حفظ شد — متصل می‌ماند و اگر روزی فریم برسد اولویت برچسب را می‌گیرد.
+- اولویت source (قرارداد صداقت): WS (فریم واقعی فارچنز جاری) > SPOT-MIRROR (فریم spot جاری، فارچنز ساکت) > REST > REST-WARMING/REST-IDLE > OFFLINE؛ dataStalled حالا فریم spot را داده معتبر می‌شمارد (a frame is a frame) ولی برچسب همیشه لاین فعال را صادقانه اعلام می‌کند؛ در /flow هم فیلدهای افزودنی spot*/restBannedUntil خروج می‌گیرند.
+- بن-استورم فیکس: REST_BATCH 3→1 و REST_POLL_MS 2000→5000 = بودجه وزن ‎~1800 → ~240‎ weight/min (×7.5 کمتر)؛ هر پاسخ 418/429 با بدنه‌ی «banned until <ms>» همه‌ی REST را تا آن تایم‌استمپ متوقف می‌کند (سقف +35min) و restBannedUntil در /health می‌آید؛ 418/429 بدون مارکر = بک‌آف نرم 60s؛ پایان پنجره‌ی بن = resume با لاگ.
+- ری‌استارت سرویس: لیسنر قدیمی :3011 (که خودش قبلا توسط زنجیره‌ی شفا به شکل `bun run mini-services/trade-service/index.ts` احیا شده بود) kill و سرویس با `bun --hot index.ts` طبق پروتکل استاندارد اسپاون شد؛ tsc فایل سرویس صفر خطا؛ lint کل ریپو = همان بیس‌لاین قدیمی scripts/ (17 خطا) — صفر خطای جدید.
+- VERIFICATION زنده (پس از ~4 دقیقه): /health = {source:"SPOT-MIRROR", dataStalled:false, spotConnected:true, spotFrames:1678 و صعودی, spotStreams:2, spotReconnects:0, restBannedUntil فعال, restPolls منجمد حین بن}؛ /flow?symbol=BTCUSDT و ETHUSDT بلوک کامل CVD واقعی برگرداندند (cvd15mUsd/vol15mUsd/lastPrice نقدی، divergence/vpin صادقانه null تا تکمیل پنجره‌ها)؛ /api/pulse بلوک feed سالم پارس شد.
+- کشف عملیاتی مهم: استخر IP دقیقا حین تست بن فعال داشت — اولین 418 بلافاصله pause کامل REST را تا ‎+35min‎ فعال کرد = اثبات زنده‌ی فیکس؛ حین بن وزن REST = صفر و تمام سوخت از لاین spot می‌آید.
+- قرارداد مصرف‌کننده دست‌نخورده: src/lib/trade-flow.ts حتی یک خط تغییر نکرد — /flow، /watch و /health همه‌ی فیلدهای قبلی را عیناً برمی‌گردانند (فقط فیلدهای افزودنی)؛ getTape حالا چون dataStalled=false است بلوک flow را تحویل می‌گیرد.
+
+Stage Summary:
+- تیپ واقعی از مرگ خاموش نجات یافت: SPOT-MIRROR بدون هیچ عدد جعلی CVD/divergence/VPIN را زنده نگه می‌دارد و برچسب source همیشه می‌گوید کدام لاین کار می‌کند؛ اگر fstream روزی شفا یابد، WS خودکار بالا می‌آید.
+- ریشه‌ی اصلی بن‌های fapi مهار شد: بودجه REST ×7.5 کاهش و حین بن صفر شد — Trigger Bus و FUTURES TAXONOMY که از dataStalled گرسنه بودند دوباره سوخت‌گیری می‌کنند.
+- live همچنان DISABLED — این تغییر صرفا تله‌متری تحقیقاتی است؛ فایل‌ها داخل گیت commit شدند.
