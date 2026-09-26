@@ -110,6 +110,13 @@ interface RawCalStatus {
   milestones?: { steps: Array<{ step: number; fired: boolean; at: string | null; pending: boolean }>; settledE2: number } | null;
   blocks?: Array<{ t: number; note: string }>;
   quality?: QualityInfo | null;
+  // Task 34-2 — shadow-veto arms the AI CALIBRATION bar is geared to
+  armsCompletion?: {
+    arms: Array<{ id: string; n: number; target: number; fillPct: number; complete: boolean; waived: boolean }>;
+    allComplete: boolean;
+    pendingDeficit: number;
+    note: string;
+  } | null;
 }
 
 function ago(iso: string | null): string {
@@ -297,6 +304,46 @@ export default function RawCalCard() {
                     MEAN SETTLE <b className="text-ink">{pace.meanSettleMin}m</b>
                   </span>
                 )}
+              </div>
+            )}
+
+            {/* Task 34-2 — SHADOW-VETO ARMS the bar is geared to: capture stays
+                armed until the REAL evidence arms complete (paper-veto waived
+                in shadow mode); PACE MONITOR semantics follow this target. */}
+            {st.armsCompletion && st.armsCompletion.arms.length > 0 && (
+              <div className="mt-2 rounded-lg border border-[rgba(178,107,255,0.22)] bg-[rgba(178,107,255,0.04)] px-2.5 py-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <FlaskConical className="size-3 text-violet-neon" aria-hidden />
+                  <span className="font-terminal text-[9px] font-bold uppercase tracking-[0.12em] text-ink-2">
+                    BAR UNTIL SHADOW-VETO ARMS COMPLETE
+                  </span>
+                  <NeonBadge
+                    tone={st.armsCompletion.allComplete ? "neon" : "violet"}
+                    className="ml-auto"
+                  >
+                    {st.armsCompletion.allComplete ? "ARMS COMPLETE" : `OPEN ${st.armsCompletion.pendingDeficit}`}
+                  </NeonBadge>
+                </div>
+                <div className="mt-1.5 grid grid-cols-2 gap-1.5 sm:grid-cols-4">
+                  {st.armsCompletion.arms.map((a) => (
+                    <div
+                      key={a.id}
+                      title={`${a.id}${a.waived ? " — waived in shadow mode (fills only when veto-mode blocks deploys)" : a.complete ? " — complete" : " — feeding"}`}
+                      className={cn(
+                        "rounded border px-1.5 py-1",
+                        a.complete ? "border-[rgba(0,255,157,0.35)]" : a.waived ? "border-white/10 bg-white/[0.02]" : "border-[rgba(255,179,71,0.3)] bg-[rgba(255,179,71,0.04)]",
+                      )}
+                    >
+                      <div className={cn("font-terminal text-[8px] font-bold uppercase tracking-[0.08em]", a.waived ? "text-ink-3" : a.complete ? "text-neon" : "text-amber-neon")}>
+                        {a.id.replace("real-", "R·").replace("paper-", "P·")}
+                      </div>
+                      <div className={cn("font-terminal text-xs font-bold tabular-nums", a.waived ? "text-ink-3" : "text-ink")}>
+                        {a.n}/{a.target}
+                        {a.waived && <span className="ml-1 text-[8px] font-normal">WV</span>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
           </div>

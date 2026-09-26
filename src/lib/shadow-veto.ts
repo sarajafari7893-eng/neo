@@ -224,8 +224,33 @@ function ingestVerdict(v: ShadowVerdict): boolean {
   }
   seenIds.add(v.id);
   verdicts.push(v);
-  if (verdicts.length > VERDICT_CAP) verdicts.splice(0, verdicts.length - VERDICT_CAP);
+  trimVerdicts(); // Task 34-2: evidence-safety eviction (was: blind oldest-first splice)
   return true;
+}
+
+/**
+ * Task 34-2 (2026-09-26, operator mandate «RAW-CAL تا تکمیل بازوهای Shadow veto»):
+ * VERDICT_CAP eviction was a blind oldest-first splice — it silently dropped
+ * linked-but-UNSETTLED verdicts (46 of them, 09-15..09-23, signals settled in
+ * the DB while their arm outcome never closed). The real arms then starved
+ * (real-keep stuck 20/30, real-veto 9/30) with zero observability because
+ * closeRealOutcomes saw `pending.length === 0` in memory. Mirrors trimPapers
+ * doctrine: a SETTLED/resolved record can always be re-derived from the
+ * rotated journal, but OPEN evidence evicted mid-flight is lost forever.
+ * Resolved = outcome closed, OR unlinked-forever (orphan-swept with no serial).
+ */
+function trimVerdicts(): void {
+  if (verdicts.length <= VERDICT_CAP) return;
+  let overflow = verdicts.length - VERDICT_CAP;
+  for (let i = 0; i < verdicts.length && overflow > 0; ) {
+    const v = verdicts[i]!;
+    const resolved = !!v.outcome || (v.serial === null && v.sweptAt !== undefined);
+    if (resolved) {
+      verdicts.splice(i, 1);
+      overflow--;
+    } else i++;
+  }
+  if (verdicts.length > VERDICT_CAP) verdicts.splice(0, verdicts.length - VERDICT_CAP);
 }
 
 function ingestPaper(p: PaperTrade): boolean {
@@ -901,7 +926,10 @@ export async function retroLinkRealDeploys(): Promise<number> {
     }
     if (swept > 0) console.log(`[shadow-veto] retro-link: bound=${bound} swept-orphans=${swept}`);
     return bound;
-  } catch {
+  } catch (e) {
+    // Task 34-2: silent fail-open hid the retro-link stall (28 unlinked PASS
+    // in 24h with bound=0) — same observability lesson as closeRealOutcomes.
+    console.error("[shadow-veto] retroLinkRealDeploys failed", e);
     return 0; // evidence plumbing must never throw into the tick
   }
 }
@@ -910,24 +938,12 @@ export async function retroLinkRealDeploys(): Promise<number> {
 export async function closeRealOutcomes(): Promise<number> {
   try {
     await shadowVetoReady();
-    console.log("[PROBE-CLOSE] verdicts in memory:", verdicts.length);
-    {
-      const now = Date.now();
-      const byAge = { d1: 0, d3: 0, older: 0 } as Record<string, number>;
-      for (const v of verdicts) { const a = now - v.at; if (a < 86400e3) byAge.d1++; else if (a < 3*86400e3) byAge.d3++; else byAge.older++; }
-      console.log("[PROBE-CLOSE] memory age buckets:", JSON.stringify(byAge));
-      const unlinked24 = verdicts.filter(v => v.side === "PASS" && v.serial === null && now - v.at < 86400e3);
-      console.log("[PROBE-CLOSE] unlinked PASS last24h in memory:", unlinked24.length);
-      const minAt = Math.min(...verdicts.map(v => v.at)), maxAt = Math.max(...verdicts.map(v => v.at));
-      console.log("[PROBE-CLOSE] memory window:", new Date(minAt).toISOString(), "→", new Date(maxAt).toISOString());
-    }
     const pending = verdicts.filter((v) => v.serial !== null && v.outcome === null);
     if (pending.length === 0) return 0;
     let closed = 0;
-    console.log("[PROBE-CLOSE] pending:", pending.length);
     for (const v of pending.slice(-40)) {
       const sig = await db.signal.findFirst({ where: { serial: v.serial! }, select: { status: true, pnlPercent: true, marginUsd: true, reachedTp: true, closedAt: true } });
-      if (!sig) { console.log("[PROBE-CLOSE] no signal for serial", v.serial, v.id); continue; }
+      if (!sig) continue;
       if (!SETTLED.includes(sig.status)) continue;
       const pnlUsd = (sig.marginUsd * sig.pnlPercent) / 100;
       v.outcome = {
@@ -942,7 +958,9 @@ export async function closeRealOutcomes(): Promise<number> {
     }
     return closed;
   } catch (e) {
-    console.error("[PROBE-CLOSE] FATAL:", e);
+    // Task 34-2: silent fail-open hid a 3-day arms starvation (46 unclosed
+    // outcomes) — the closure loop must at least leave a forensic trace.
+    console.error("[shadow-veto] closeRealOutcomes failed", e);
     return 0;
   }
 }
@@ -1624,6 +1642,117 @@ function agoShort(ms: number): string {
   if (s < 3600) return `${Math.round(s / 60)}m`;
   if (s < 86400) return `${Math.round(s / 3600)}h`;
   return `${Math.round(s / 86400)}d`;
+}
+
+// ── Task 34-2 ARMS-COMPLETION PROBE (2026-09-26 operator mandate) ────────────
+// «RAW-CAL باید AI CALIBRATION BAR را تا زمان کامل شدن بازوهای Shadow veto
+// فعال باشد و PACE MONITOR بر این اساس تنظیم شود» — the AI CALIBRATION bar
+// (RAW-CAL capture) must stay ACTIVE until the shadow-veto evidence arms are
+// complete, and the PACE MONITOR must be geared to that completion. This probe
+// reuses shadowArms() — the EXACT same source the promotion criteria read —
+// so "arms complete" here means precisely what veto-mode unlock means.
+
+export interface ShadowArmCompletion {
+  id: ArmRow["id"];
+  label: string;
+  n: number;
+  target: number;
+  fillPct: number;
+  complete: boolean;
+  /** paper-veto can structurally only fill once veto-mode blocks deploys —
+   * in shadow mode it is waived from the completion bar (honest, documented). */
+  waived: boolean;
+}
+
+export interface ShadowArmsCompletion {
+  arms: ShadowArmCompletion[];
+  /** true only when every REAL arm has reached its target (waivers excluded). */
+  allComplete: boolean;
+  /** total still-needed settled rows across incomplete, unwaived arms. */
+  pendingDeficit: number;
+  note: string;
+}
+
+const ARM_COMPLETION_TARGET = 30; // mirrors the promotion criteria (rolling-30 full cohort)
+
+/**
+ * Task 34-2 — ARMS COMPLETION PROBE with CROSS-PROCESS SNAPSHOT MERGE.
+ * The shadow-veto state lives in per-process memory rings (VERDICT_CAP) fed
+ * by the journal tail; the SENTINEL service (:3030) is the long-lived arms
+ * publisher and writes .data/shadow-veto-latest.json every few minutes. A
+ * freshly-restarted Next.js instance can legitimately show FEWER settled rows
+ * per arm than the published snapshot (journal rotation trims old outcome
+ * records). Honest merge: per arm take the LARGER evidence view of the two —
+ * both derive from the same journal, and a rolling-30 cohort never shrinks
+ * because a process restarted. Read-only, fail-soft.
+ */
+async function publishedArmsSnapshot(): Promise<ArmRow[]> {
+  try {
+    const { readFile } = await import("node:fs/promises");
+    const raw = await readFile(path.join(DATA_DIR, "shadow-veto-latest.json"), "utf8");
+    const parsed = JSON.parse(raw) as { arms?: Array<{ id: ArmRow["id"]; n?: number; target?: number; label?: string }> };
+    if (!Array.isArray(parsed.arms)) return [];
+    return parsed.arms
+      .filter((a) => a && typeof a.id === "string")
+      .map((a) => ({
+        id: a.id,
+        label: a.label ?? a.id,
+        n: Number(a.n ?? 0) || 0,
+        wins: 0,
+        winRatePct: null,
+        wilsonLB: null,
+        netUsd: 0,
+        target: Number(a.target ?? ARM_COMPLETION_TARGET) || ARM_COMPLETION_TARGET,
+        epoch: "snapshot",
+      }));
+  } catch {
+    return []; // snapshot missing/unreadable — memory view alone is used
+  }
+}
+
+export async function shadowArmsCompletion(mode: ShadowVetoMode): Promise<ShadowArmsCompletion> {
+  try {
+    const [memoryArms, snapshotArms] = await Promise.all([Promise.resolve(shadowArms()), publishedArmsSnapshot()]);
+    const snapById = new Map(snapshotArms.map((a) => [a.id, a]));
+    const merged: ArmRow[] = memoryArms.map((a) => {
+      const snap = snapById.get(a.id);
+      return snap && snap.n > a.n ? { ...a, n: snap.n, target: Math.max(a.target, snap.target) } : a;
+    });
+    // an arm present ONLY in the snapshot (defensive — id set evolution)
+    for (const snap of snapshotArms) {
+      if (!merged.some((a) => a.id === snap.id)) merged.push(snap);
+    }
+    const rows: ShadowArmCompletion[] = merged.map((a) => {
+      // paper-veto arm feeds only when the adjudicator BLOCKS a deploy —
+      // structurally impossible in shadow mode (fail-open observe-only)
+      const waived = a.id === "paper-veto" && mode === "shadow";
+      const target = Math.max(a.target || ARM_COMPLETION_TARGET, 1);
+      return {
+        id: a.id,
+        label: a.label,
+        n: a.n,
+        target,
+        fillPct: Math.min(100, Math.round((a.n / target) * 100)),
+        complete: a.n >= target,
+        waived,
+      };
+    });
+    const active = rows.filter((r) => !r.waived);
+    const allComplete = active.length > 0 && active.every((r) => r.complete);
+    const pendingDeficit = active.reduce((sum, r) => sum + Math.max(0, r.target - r.n), 0);
+    const note = allComplete
+      ? "all real shadow-veto arms complete — capture bar may lift"
+      : `real arms incomplete (${active.filter((r) => !r.complete).map((r) => `${r.id} ${r.n}/${r.target}`).join(", ")}) — AI CALIBRATION bar stays active (operator mandate 2026-09-26)`;
+    return { arms: rows, allComplete, pendingDeficit, note };
+  } catch {
+    // fail-open with HONEST unknown: never claim completion we cannot prove
+    return {
+      arms: [],
+      allComplete: false,
+      pendingDeficit: 0,
+      note: "arms probe unavailable — treated as INCOMPLETE (fail-closed for the capture bar)",
+    };
+  }
 }
 
 /** Pipeline leak counters — the REAL-arm feed leak (v8.4.3) and closure

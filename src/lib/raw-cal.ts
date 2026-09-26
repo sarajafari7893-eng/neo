@@ -200,10 +200,35 @@ export async function maybeRawCalDeploy(): Promise<{ issued: boolean; serial?: n
     return { issued: false, note: "not armed" };
   }
 
-  // 1) progress check FIRST — auto-cancel at the target
+  // 1) progress check FIRST — Task 34-2 ARMS-COUPLED AUTO-CANCEL (2026-09-26
+  //    operator mandate: «RAW-CAL باید AI CALIBRATION BAR را تا زمان کامل شدن
+  //    بازوهای Shadow veto فعال باشد و PACE MONITOR بر این اساس تنظیم شود»):
+  //    the book target alone no longer lifts the capture. When the target is
+  //    reached but the shadow-veto REAL evidence arms are still incomplete,
+  //    the mode AUTO-EXTENDS its target by the arm deficit (audited retarget,
+  //    EVID-BUDGET pattern) instead of disarming — the calibration book keeps
+  //    growing while the veto evidence window stays open. Only when BOTH the
+  //    book target is met AND the arms are complete (paper-veto waived in
+  //    shadow mode — it structurally cannot fill) does the auto-lift fire.
   const settledN = await epoch2SettledCount();
   if (settledN >= state.target) {
-    await disarmRawCal(`target reached — ${settledN} EPOCH-2 settled ≥ ${state.target}`, true);
+    const sv = await import("./shadow-veto");
+    const cfg = await sv.getShadowVetoConfig();
+    const completion = sv.shadowArmsCompletion(cfg.mode);
+    if (!completion.allComplete) {
+      const extension = Math.max(completion.pendingDeficit, 10);
+      const next: RawCalState = {
+        ...state,
+        target: settledN + extension,
+        retargetNote: `ARMS-COUPLED EXTENSION (operator mandate 2026-09-26 «تا زمان کامل شدن بازوهای Shadow veto فعال باشد»): book target ${state.target} reached but shadow-veto real arms incomplete (${completion.note}) — target auto-extended +${extension} to ${settledN + extension} so the capture keeps feeding evidence; PACE MONITOR tracks arm completion`,
+      };
+      await writeState(next);
+      touchRawcalHeartbeat(`ARM-EXTEND target ${state.target}→${next.target} (${completion.note.slice(0, 80)})`);
+      const { fireEvent } = await import("./engine");
+      await fireEvent(null, null, "ENGINE", "info", `RAW-CAL: book target reached (${settledN}) but shadow-veto arms incomplete — capture AUTO-EXTENDED +${extension} (target → ${next.target}). Arms: ${completion.arms.map((a) => `${a.id} ${a.n}/${a.target}${a.waived ? " (waived)" : ""}`).join(" · ")}`);
+      return { issued: false, note: `arms-coupled extension → target ${next.target}` };
+    }
+    await disarmRawCal(`target reached + shadow-veto arms complete — ${settledN} EPOCH-2 settled ≥ ${state.target}`, true);
     const { refreshCalibration } = await import("./calibration");
     const { state: cal, auditLine } = await refreshCalibration();
     const { fireEvent } = await import("./engine");
@@ -214,7 +239,7 @@ export async function maybeRawCalDeploy(): Promise<{ issued: boolean; serial?: n
       "ai",
       auditLine ?? `AI CALIBRATION post-RAW-CAL: status ${cal.status} over ${cal.settled} settled — ${cal.rows.length} moving factors ${cal.rows.map((r) => `${r.factor} ×${r.weight.toFixed(2)}`).join(" · ")}`,
     );
-    return { issued: false, note: `auto-lifted at ${settledN}` };
+    return { issued: false, note: `auto-lifted at ${settledN} (arms complete)` };
   }
 
   // 2) spacing rail
@@ -280,6 +305,12 @@ export async function rawCalStatus() {
   ]);
   const settledRaw = await db.signal.count({ where: { tags: { contains: "RAW-CAL" }, status: { in: ["TP1", "TP2", "TP3", "SL", "EXPIRED", "CLOSED"] } } }).catch(() => 0);
   const winsRaw = await db.signal.count({ where: { tags: { contains: "RAW-CAL" }, reachedTp: { gte: 1 } } }).catch(() => 0);
+  // Task 34-2 — ARMS-COUPLED PACE: the AI CALIBRATION bar now reports the
+  // shadow-veto arm completion it is geared to (operator mandate 2026-09-26);
+  // fail-soft: any probe error keeps the block null instead of breaking status.
+  const armsCompletion = await import("./shadow-veto")
+    .then(async (m) => m.shadowArmsCompletion((await m.getShadowVetoConfig()).mode))
+    .catch(() => null);
   return {
     ...state,
     settledN,
@@ -291,5 +322,6 @@ export async function rawCalStatus() {
     rawWinRatePct: settledRaw ? Number((((winsRaw / settledRaw) * 100)).toFixed(1)) : null,
     spacingMin: state.spacingMin,
     maxOpen: state.maxOpen,
+    armsCompletion,
   };
 }
