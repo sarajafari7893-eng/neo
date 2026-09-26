@@ -81,3 +81,5 @@
 - `2026-09-25T20:40:42.522Z` DAILY-SCHEDULER: daily performance report auto-sent for Tehran day 2026-09-26 (self-driving, no platform cron)
 
 - `2026-09-25T21:03:11.354Z` DAILY-SCHEDULER: SRE engineering daily auto-sent for Tehran day 2026-09-26 (self-driving)
+
+- `2026-09-26T08:37:41.085Z` ENV-GUARD: .env auto-restored from local snapshot ring (nexus-snapshot-20260925-233000.zip) — 5/5 keys, bridge re-arm issued. Erasure forensics: .env-erased/erased-1790411860516.txt
