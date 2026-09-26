@@ -15,11 +15,25 @@
 //     sampler/board) is DROPPED (returns null) when tokens are missing —
 //     no unbounded queues, no storm amplification. All callers are
 //     null-tolerant by contract.
-//   · GLOBAL BAN AWARENESS — HTTP 418/429 body "banned until <ms>" arms a
-//     module-level banUntil (capped at now+35min for safety; unparseable
-//     bodies arm a conservative 10min). While a ban is live, gateFetch
-//     returns null INSTANTLY — zero network calls, so a live ban can never
-//     be extended by our own retries.
+//   · GLOBAL BAN AWARENESS (refined for the multi-IP egress pool — measured
+//     2026-09-26: the sandbox egress rotates across several IPs and Binance's
+//     418 body NAMES the banned one: «IP(47.57.x.x) banned until <ms>», with
+//     different pool IPs banned in different windows):
+//       – 418/429 body naming an IP → PER-IP ban record (capped now+35min),
+//         the request's weight is REFUNDED (ban responses carry no weight
+//         cost) and the call RETRIES (≤2, 120ms apart) — the pool usually
+//         rotates onto a clean IP, so one unlucky draw never starves the app.
+//       – ALL retries land on banned IPs → one unlucky draw too many: arm a
+//         SHORT 60s global block, and only when that happens 3 times IN A ROW
+//         (no successful call between) treat the pool as saturated and arm the
+//         full zero-network window min(worst ban end, now+35min). A single
+//         clean 2xx resets the streak — self-healing probes.
+//       – 418/429 body WITHOUT a parseable IP (unknown scope — the classic
+//         single-IP case): arm the global zero-network window immediately —
+//         "banned until X" → min(X, now+35min); unparseable 418 → 10min;
+//         unparseable 429 → 2min.
+//       – While the global window is live, gateFetch returns null INSTANTLY —
+//         zero network calls, so a live ban can never be extended by us.
 //   · SINGLE-FLIGHT — one shared request per (host,path) while in flight and
 //     for a 2s result window, so multiple modules asking the same endpoint
 //     inside one tick share one weight spend.
@@ -38,12 +52,18 @@ const FAPI_HOST = "https://fapi.binance.com";
 const DEFAULT_TIMEOUT_MS = 6500;
 const WINDOW_MS = 60_000;
 const DEFAULT_BUDGET = 1100; // real fapi limit 2400/min per IP — headroom by design
-const BAN_CAP_MS = 35 * 60_000; // never block longer than 35min even if Binance claims hours
-const BAN_DEFAULT_MS = 10 * 60_000; // unparseable 418/429 body → conservative default
+const BAN_CAP_MS = 35 * 60_000; // never record a ban window longer than 35min even if Binance claims hours
+const BAN_418_DEFAULT_MS = 10 * 60_000; // unparseable 418 → conservative default (taxonomy precedent)
+const BAN_429_DEFAULT_MS = 2 * 60_000; // unparseable 429 → short warning backoff
 const CRITICAL_RETRY_MS = 250; // the "small negative retry" for the critical lane
 const SF_RESULT_MS = 2_000; // single-flight result sharing window
 const SF_MAP_CAP = 512;
 const SPEND_CAP = 4096; // defensive cap on window entries (~worst-case small-weight bursts)
+const BAN_RETRIES = 2; // extra attempts after a named-IP ban (pool rotation)
+const BAN_RETRY_DELAY_MS = 120;
+const POOL_BLOCK_SHORT_MS = 60_000; // all-retries-banned → short block, let the pool rotate
+const POOL_STREAK_FOR_LONG_BLOCK = 3; // consecutive all-banned calls ⇒ pool saturated
+const IP_BAN_MAP_CAP = 16;
 
 export type FapiGatePriority = "critical" | "telemetry";
 
@@ -51,27 +71,34 @@ export interface GateFetchOpts {
   weight?: number; // explicit weight; default resolved from the path
   priority?: FapiGatePriority; // default "telemetry"
   timeoutMs?: number; // default 6500
-  host?: string; // default fapi.binance.com (alt: fapi1 — same IP, same budget)
+  host?: string; // default fapi.binance.com (alt: fapi1 — same IP pool, same budget)
 }
 
 export interface FapiGateStats {
   attempted: number; // every gateFetch call
   allowed: number; // actual HTTP requests issued that returned 2xx JSON
   droppedBudget: number; // shed by the weight bucket (telemetry drop / critical post-retry)
-  droppedBan: number; // shed instantly because an IP ban window is live
-  lastBanUntil: number; // epoch ms of the last armed ban end (0 = never)
+  droppedBan: number; // shed instantly because a global ban window is live
+  lastBanUntil: number; // epoch ms of the last armed GLOBAL ban end (0 = never)
   budgetPer60s: number;
   usedLast60s: number;
   singleFlightShared: number; // calls served by an in-flight/2s-window shared request
   banRemainingMs: number;
+  bannedPoolIps: number; // named egress IPs currently inside a ban window (observability)
+  retriesAfterBan: number; // requests re-attempted after a named-IP 418/429
 }
+
+interface SpendEntry { at: number; w: number }
 
 interface GateState {
   budgetPer60s: number;
-  banUntil: number;
-  spend: Array<{ at: number; w: number }>; // weight spends inside the rolling window (time-ordered)
+  banUntil: number; // GLOBAL zero-network window (unknown-scope / pool-wide bans only)
+  spend: SpendEntry[]; // weight spends inside the rolling window (time-ordered)
   windowSum: number;
   inflight: Map<string, { startedAt: number; settled: boolean; promise: Promise<unknown> }>;
+  ipBans: Map<string, number>; // named egress IP → ban end (observability + pool evidence)
+  recentBanEvents: Array<{ at: number; ip: string }>; // named-IP ban events (observability)
+  allBanStreak: number; // consecutive gateFetch calls where EVERY attempt was banned
   stats: {
     attempted: number;
     allowed: number;
@@ -79,6 +106,7 @@ interface GateState {
     droppedBan: number;
     lastBanUntil: number;
     singleFlightShared: number;
+    retriesAfterBan: number;
   };
 }
 
@@ -92,7 +120,10 @@ const state: GateState =
     spend: [],
     windowSum: 0,
     inflight: new Map(),
-    stats: { attempted: 0, allowed: 0, droppedBudget: 0, droppedBan: 0, lastBanUntil: 0, singleFlightShared: 0 },
+    ipBans: new Map(),
+    recentBanEvents: [],
+    allBanStreak: 0,
+    stats: { attempted: 0, allowed: 0, droppedBudget: 0, droppedBan: 0, lastBanUntil: 0, singleFlightShared: 0, retriesAfterBan: 0 },
   });
 
 /** Optional runtime tuning — sane defaults mean nobody needs to call this. */
@@ -110,6 +141,8 @@ export function fapiBanRemainingMs(): number {
 export function fapiGateStats(): FapiGateStats {
   const now = Date.now();
   pruneWindow(now);
+  let bannedIps = 0;
+  for (const [, until] of state.ipBans) if (until > now) bannedIps++;
   return {
     attempted: state.stats.attempted,
     allowed: state.stats.allowed,
@@ -120,6 +153,8 @@ export function fapiGateStats(): FapiGateStats {
     usedLast60s: state.windowSum,
     singleFlightShared: state.stats.singleFlightShared,
     banRemainingMs: fapiBanRemainingMs(),
+    bannedPoolIps: bannedIps,
+    retriesAfterBan: state.stats.retriesAfterBan,
   };
 }
 
@@ -178,28 +213,74 @@ function pruneWindow(now: number): void {
   }
 }
 
-/** Try to reserve `weight` from the rolling window. True = spend recorded. */
-function tryTake(weight: number): boolean {
+/** Reserve `weight` from the rolling window. Returns the spend entry (for refunds) or null. */
+function takeWeight(weight: number): SpendEntry | null {
   const now = Date.now();
   pruneWindow(now);
-  if (state.windowSum + weight > state.budgetPer60s) return false;
-  state.spend.push({ at: now, w: weight });
+  if (state.windowSum + weight > state.budgetPer60s) return null;
+  const entry: SpendEntry = { at: now, w: weight };
+  state.spend.push(entry);
   state.windowSum += weight;
-  return true;
+  return entry;
 }
 
-function noteBan(status: number, body: string): void {
-  const now = Date.now();
-  const m = /banned until (\d+)/i.exec(body);
-  const until = m
-    ? Math.min(Number(m[1]), now + BAN_CAP_MS)
-    : now + BAN_DEFAULT_MS;
+/** 418/429 responses carry no weight cost — give the reservation back. */
+function refundWeight(entry: SpendEntry | null): void {
+  if (!entry) return;
+  const idx = state.spend.indexOf(entry);
+  if (idx === -1) return; // already pruned out of the window (its cost is gone too)
+  state.spend.splice(idx, 1);
+  state.windowSum -= entry.w;
+}
+
+function armGlobalBan(until: number): void {
   if (until > state.banUntil) {
     state.banUntil = until;
     state.stats.lastBanUntil = until;
   }
-  // silence unused-param lint when status someday needs differentiated handling
-  void status;
+}
+
+/** Record a 418/429 body. Returns { ip, until } when the body NAMES the banned egress IP. */
+function noteBanBody(status: number, body: string): { ip: string; until: number } | null {
+  const now = Date.now();
+  const named = /IP\(([\d.]+)\)\s*banned until (\d+)/i.exec(body);
+  if (named) {
+    const ip = named[1]!;
+    const until = Math.min(Number(named[2]), now + BAN_CAP_MS);
+    state.ipBans.set(ip, until);
+    if (state.ipBans.size > IP_BAN_MAP_CAP) {
+      // evict the soonest-expiring record
+      let oldestKey: string | null = null;
+      let oldestVal = Infinity;
+      for (const [k, v] of state.ipBans) if (v < oldestVal) { oldestVal = v; oldestKey = k; }
+      if (oldestKey) state.ipBans.delete(oldestKey);
+    }
+    state.recentBanEvents.push({ at: now, ip });
+    if (state.recentBanEvents.length > 64) state.recentBanEvents.splice(0, state.recentBanEvents.length - 64);
+    return { ip, until };
+  }
+  const untilMatch = /banned until (\d+)/i.exec(body);
+  if (untilMatch) {
+    armGlobalBan(Math.min(Number(untilMatch[1]), now + BAN_CAP_MS)); // unknown scope — assume it's us
+    return null;
+  }
+  // unparseable body — conservative defaults (taxonomy precedent for 418)
+  armGlobalBan(now + (status === 429 ? BAN_429_DEFAULT_MS : BAN_418_DEFAULT_MS));
+  return null;
+}
+
+/** Every retry landed on a (named) banned IP — escalate the global silence window. */
+function escalatePoolBlock(worstNamedUntil: number): void {
+  const now = Date.now();
+  state.allBanStreak++;
+  if (state.allBanStreak >= POOL_STREAK_FOR_LONG_BLOCK) {
+    // repeated independent evidence — the egress pool is saturated: full
+    // zero-network window, capped at 35min, then a fresh probe self-heals.
+    armGlobalBan(Math.min(worstNamedUntil, now + BAN_CAP_MS));
+    state.allBanStreak = 0;
+  } else {
+    armGlobalBan(now + POOL_BLOCK_SHORT_MS);
+  }
 }
 
 function pruneInflight(now: number): void {
@@ -208,47 +289,82 @@ function pruneInflight(now: number): void {
   }
 }
 
+function delay(ms: number): Promise<void> {
+  return new Promise<void>((r) => setTimeout(r, ms));
+}
+
 /**
- * THE gate. Every fapi.binance.com REST call in this process goes through here.
- * Resolves parsed JSON, or null on: live IP ban, weight-budget shed, HTTP
- * failure, timeout, or parse error. Never throws, never queues.
+ * THE gate body. Resolves parsed JSON, or null on: live IP ban, weight-budget
+ * shed, HTTP failure, timeout, or parse error. Never throws, never queues.
  */
 async function executeGated<T>(path: string, opts?: GateFetchOpts): Promise<T | null> {
   const lane: FapiGatePriority = opts?.priority ?? "telemetry";
   const weight = Math.max(1, Math.round(opts?.weight ?? resolveWeight(path)));
   const timeoutMs = opts?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
-  if (!tryTake(weight)) {
+  let entry = takeWeight(weight);
+  if (!entry) {
     if (lane !== "critical") {
       state.stats.droppedBudget++;
       return null; // telemetry: drop instead of queueing a storm
     }
-    await new Promise<void>((r) => setTimeout(r, CRITICAL_RETRY_MS)); // one small negative retry
-    if (!tryTake(weight)) {
+    await delay(CRITICAL_RETRY_MS); // one small negative retry
+    entry = takeWeight(weight);
+    if (!entry) {
       state.stats.droppedBudget++;
       return null;
     }
   }
 
   const host = opts?.host ?? FAPI_HOST;
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
-  try {
-    const res = await fetch(`${host}${path}`, { signal: ctrl.signal, cache: "no-store" });
-    if (!res.ok) {
-      if (res.status === 418 || res.status === 429) {
-        noteBan(res.status, await res.text().catch(() => ""));
-      }
-      return null;
+  let attempt = 0;
+
+  while (true) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    let res: Response;
+    try {
+      res = await fetch(`${host}${path}`, { signal: ctrl.signal, cache: "no-store" });
+    } catch {
+      return null; // timeout/abort/network — weight may have been consumed, keep the reservation
+    } finally {
+      clearTimeout(timer);
     }
-    const text = await res.text();
-    if (!text) return null; // empty 200 — nothing to invent
-    state.stats.allowed++;
-    return JSON.parse(text) as T;
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(timer);
+
+    if (res.ok) {
+      const text = await res.text().catch(() => "");
+      if (!text) return null; // empty 200 — nothing to invent
+      state.stats.allowed++;
+      state.allBanStreak = 0; // a clean 2xx proves the pool still serves us
+      try {
+        return JSON.parse(text) as T;
+      } catch {
+        return null;
+      }
+    }
+
+    if (res.status === 418 || res.status === 429) {
+      const body = await res.text().catch(() => "");
+      refundWeight(entry); // banned responses carry no weight cost
+      entry = null;
+      const named = noteBanBody(res.status, body);
+      if (!named) return null; // unknown-scope ban — global zero-network window already armed
+      if (attempt >= BAN_RETRIES) {
+        escalatePoolBlock(named.until);
+        return null;
+      }
+      attempt++;
+      state.stats.retriesAfterBan++;
+      await delay(BAN_RETRY_DELAY_MS); // let the egress pool rotate off the banned IP
+      entry = takeWeight(weight);
+      if (!entry) {
+        state.stats.droppedBudget++;
+        return null;
+      }
+      continue;
+    }
+
+    return null; // other non-ok status — honest null, no retry
   }
 }
 
@@ -256,7 +372,7 @@ export async function gateFetch<T>(path: string, opts?: GateFetchOpts): Promise<
   state.stats.attempted++;
   const now = Date.now();
 
-  // GLOBAL BAN AWARENESS — while a ban window is live, zero network calls.
+  // GLOBAL BAN AWARENESS — while a global ban window is live, zero network calls.
   if (now < state.banUntil) {
     state.stats.droppedBan++;
     return null;

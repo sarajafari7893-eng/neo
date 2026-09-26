@@ -2,6 +2,7 @@
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useState } from "react";
+import { SessionProvider } from "next-auth/react";
 import { SystemBridge } from "@/components/fx/SystemBridge";
 import { SignalDetailHost } from "@/components/shared/SignalDetailHost";
 
@@ -28,9 +29,13 @@ export function Providers({ children }: { children: React.ReactNode }) {
   );
   return (
     <QueryClientProvider client={client}>
-      <SystemBridge />
-      {children}
-      <SignalDetailHost />
+      {/* next-auth session context — the operator badge + control-plane
+          mutating cards read the session state from here (Task 34-1) */}
+      <SessionProvider refetchOnWindowFocus={false}>
+        <SystemBridge />
+        {children}
+        <SignalDetailHost />
+      </SessionProvider>
     </QueryClientProvider>
   );
 }

@@ -2,6 +2,7 @@
 
 import { LogoMark } from "@/components/brand/Logo";
 import { LiveDot } from "@/components/shared/primitives";
+import { OperatorBadge } from "@/components/auth/OperatorBadge";
 import { NotificationCenter } from "@/components/layout/NotificationCenter";
 import { useUi, type ViewId } from "@/store/ui";
 import { useAlerts } from "@/store/alerts";
@@ -117,6 +118,10 @@ export function Header() {
 
           {/* status cluster */}
           <div className="flex items-center gap-2 sm:gap-3">
+            {/* operator session badge — Task 34-1: the desk always declares its
+                auth state (LOCKED → /login, OPERATOR → session live) */}
+            <OperatorBadge />
+
             {/* event sound toggle */}
             <button
               type="button"

@@ -13,6 +13,7 @@ import { BentoCard, LiveDot, NeonBadge } from "@/components/shared/primitives";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { timeAgo } from "@/lib/format";
+import { nexusMutate, OperatorAuthRequiredError } from "@/lib/nexus-client";
 
 interface Proposal {
   id: string;
@@ -84,17 +85,16 @@ export default function AdvisorCard() {
     async (id: string, action: "approve" | "reject") => {
       setBusyId(id);
       try {
-        const res = await fetch("/api/advisor", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action, id }),
-        });
-        const j = (await res.json()) as { ok?: boolean; error?: string };
-        if (!res.ok || !j.ok) throw new Error(j.error ?? `${res.status}`);
+        // Task 34-1: auth-aware mutation — missing operator session surfaces a
+        // guided login toast instead of a raw "unauthorized" error
+        await nexusMutate<{ ok?: boolean; error?: string; proposal?: unknown }>("/api/advisor", { action, id });
         toast.success(action === "approve" ? "Proposal APPROVED — gate applied & audited" : "Proposal REJECTED — knob untouched, cooldown armed");
         await load();
       } catch (e) {
-        toast.error(`Decision failed: ${e instanceof Error ? e.message : "advisor unreachable"}`);
+        if (!(e instanceof OperatorAuthRequiredError)) {
+          toast.error(`Decision failed: ${e instanceof Error ? e.message : "advisor unreachable"}`);
+        }
+        // OperatorAuthRequiredError already showed its own guided toast
       } finally {
         setBusyId(null);
       }
@@ -105,16 +105,16 @@ export default function AdvisorCard() {
   const runCycle = useCallback(async () => {
     setRunning(true);
     try {
-      const res = await fetch("/api/advisor", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "run" }),
-      });
-      const j = (await res.json()) as { ok?: boolean; queued?: number };
-      toast.success(`Advisor cycle complete — ${j.queued ?? 0} proposal(s) queued`);
+      // Task 34-1 bugfix: this path never checked res.ok — a 401/500 surfaced
+      // as a SUCCESS toast with "0 proposals queued". Now honest end-to-end.
+      const j = await nexusMutate<{ ok?: boolean; queued?: number; error?: string; skipped?: number }>("/api/advisor", { action: "run" });
+      if (!j.ok) throw new Error(j.error ?? "cycle rejected");
+      toast.success(`Advisor cycle complete — ${j.queued ?? 0} proposal(s) queued${j.skipped ? ` · ${j.skipped} skipped` : ""}`);
       await load();
-    } catch {
-      toast.error("Advisor cycle failed");
+    } catch (e) {
+      if (!(e instanceof OperatorAuthRequiredError)) {
+        toast.error(`Advisor cycle failed: ${e instanceof Error ? e.message : "advisor unreachable"}`);
+      }
     } finally {
       setRunning(false);
     }
