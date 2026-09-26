@@ -29337,3 +29337,22 @@ Stage Summary:
 - زره‌ی push v2.0 زنده، guard شده توسط watchdog v1.3.0 (7 سرویس)، و خودش داخل گیت است — مثلث بقای کامل
 - push همچنان 403 (انتظار مجوز Contents: write از اپراتور) — پس از اجازه، چرخه‌ی ۱۰ دقیقه‌ای خودکار همه‌چیز را بالا می‌برد
 - درس ماندگار: هیچ سرویسی نباید فقط با nohup از شل استارت شود؛ یا watchdog heal یا armor-boot route
+
+---
+Task ID: 31
+Agent: Z.ai Code
+Task: NEXUS-LIVE-HARDENING-MASTER-v1.0 — بررسی وضعیت اجرا + شروع Phase 1
+
+Work Log:
+- با شواهد ریپو تأیید شد تسک قبل از rollback #4 هیچ فازی اجرا نکرده بود (هر ۱۰ سند MISSING، بدون state machine، بدون migrations، بدون test runner)
+- Phase 1 (Repository reconnaissance) اجرا شد → ARCHITECTURE-MAP.md تولید شد (بازرسی زنده، نه از حافظه)
+- یافته‌ی بحرانی مثبت: هیچ مسیر سفارش واقعی signed در کل درخت کد وجود ندارد — سیستم واقعاً paper/research-only است؛ SUPPRESSED در engine.ts~1501 تأیید شد
+- یافته‌های شکاف: بدون master switch armed/disarmed کانونی؛ بدون uniqueness سطح دیتابیس برای serial ها؛ بدون prisma/migrations؛ بدون test runner — اهداف Phase 3/4/12
+- هاردنینگ موجود سالم: Caddy XTransformPort allowlist (:3003 فقط)، middleware x-nexus-key
+- CHANGELOG-LIVE-HARDENING.md افتتاح شد (append-only)
+- ★ push به گیت‌هاب موفق شد (pushed:true) — اپراتور مجوز Contents: write را داده بود؛ ls-remote تأیید کرد: remote main = local main = 5e9061a؛ کل تاریخچه ۲۲ کامیت روی neo.git
+
+Stage Summary:
+- زره‌ی خارجی کاملاً متصل شد — از این لحظه هر rollback پلتفرم قابل بازیابی کامل از گیت‌هاب است (restore → clone → بوت)
+- Phase 1: DONE (evidence-based)؛ فازهای 2-14 pending؛ گام بعدی: Phase 2 security boundary audit → SECURITY-HARDENING.md
+- live همچنان DISABLED/NOT_ELIGIBLE — هیچ سفارش واقعی وجود ندارد
