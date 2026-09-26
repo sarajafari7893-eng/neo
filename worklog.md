@@ -29356,3 +29356,18 @@ Stage Summary:
 - زره‌ی خارجی کاملاً متصل شد — از این لحظه هر rollback پلتفرم قابل بازیابی کامل از گیت‌هاب است (restore → clone → بوت)
 - Phase 1: DONE (evidence-based)؛ فازهای 2-14 pending؛ گام بعدی: Phase 2 security boundary audit → SECURITY-HARDENING.md
 - live همچنان DISABLED/NOT_ELIGIBLE — هیچ سفارش واقعی وجود ندارد
+---
+Task ID: P7
+Agent: general-purpose subagent
+Task: Phase 7 deliverable — STRATEGY-VALIDATION-PROTOCOL.md
+
+Work Log:
+- Read worklog.md tail + Task ID 30 / 30-b / 31 (rollback #4 recovery, push-armor v2.0, survivor-spawn, Phase 1 recon) and ARCHITECTURE-MAP.md for style/authority model.
+- Verified honest data in-repo before writing: n=25 run (EngineSetting `backtest` ranAt 2026-09-19T07:17:36.841Z: WR 24%, Wilson LB 11.5%, avg_net −13.05%, expectancyR −0.13, equity_end 84.92, verdict NO LEARNED EDGE), calibration {"status":"ACTIVE","settled":300,"target":30}, fast-kill forensics (28 real cases, 42.9% never-green, worst bucket 0-5m win 8.6%), SUPPRESSED at engine.ts:1501/1505, friction baseline accounting.ts:6-7 (taker 0.05%×2 + funding 0.01%/8h, no slippage term). Also noted later snapshots (backups/calibration-latest.json, n=348 replay) confirm the same negative verdict — cited as snapshot-invariance note, no numbers improved.
+- Wrote /home/z/my-project/STRATEGY-VALIDATION-PROTOCOL.md (14 sections): train/TUNE/OOS separation + dataset registry; walk-forward (28d/7d, 24h embargo, refit-per-fold, ≥8 folds spanning ≥1 regime); 6 evaluation slices (strategy/symbol/side/timeframe/regime/duration-buckets); validation friction model (baseline + 5 bps/side slippage add-on + 2× sensitivity); metrics in R with Wilson-LB secondary; parameter instability (neighborhood stability, refit CV, train→test retention); production parameter FREEZE with sha256 artifacts; minimums ≥300 (pref. 500) OOS / ≥60 per strategy / net_expectancy+PF+rolling-window+drawdown containment; statistics rule (block bootstrap 10k by UTC day, CI-LB>0 required, mean alone ≠ evidence; HEURISTIC vs VALIDATED marked); anti-overfitting (no promotion on selection data, one-cycle-per-window, pre-registration, ≤20 configs/cycle); PROMOTE/EXTEND_VALIDATION/REJECT numeric matrix; machine-readable schema nexus.strategy-validation.v1 for the Phase 13 gate; current_status section: oos_validation gate = FAIL (n=25 << 300, expectancy −0.13R) ⇒ auto-deployment stays SUPPRESSED.
+- No application code written; no existing file modified. Appended this worklog record only.
+
+Stage Summary:
+- Artifact: /home/z/my-project/STRATEGY-VALIDATION-PROTOCOL.md — the single promotion authority for strategies; prose claims of validation are void without a conforming §12 artifact.
+- Key decisions: PROMOTE requires ≥300 OOS trades + bootstrap 95% CI-LB>0 on R expectancy + PF≥1.15 + rolling-window/DD/slice/concentration/stability gates; OPEN checks can never pass the Phase 13 gate; current verdict = REJECT (INSUFFICIENT_EVIDENCE + NEGATIVE_EVIDENCE), live auto-deployment SUPPRESSED unchanged.
+- Next actions: Phase 8 must pin the freeze-hash artifacts (strategy-weights/gate settings); learner must emit profit_factor + maxDD + concentration; Phase 13 gate consumes nexus.strategy-validation.v1.
