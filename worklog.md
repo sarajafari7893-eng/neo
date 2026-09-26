@@ -29371,3 +29371,24 @@ Stage Summary:
 - Artifact: /home/z/my-project/STRATEGY-VALIDATION-PROTOCOL.md — the single promotion authority for strategies; prose claims of validation are void without a conforming §12 artifact.
 - Key decisions: PROMOTE requires ≥300 OOS trades + bootstrap 95% CI-LB>0 on R expectancy + PF≥1.15 + rolling-window/DD/slice/concentration/stability gates; OPEN checks can never pass the Phase 13 gate; current verdict = REJECT (INSUFFICIENT_EVIDENCE + NEGATIVE_EVIDENCE), live auto-deployment SUPPRESSED unchanged.
 - Next actions: Phase 8 must pin the freeze-hash artifacts (strategy-weights/gate settings); learner must emit profit_factor + maxDD + concentration; Phase 13 gate consumes nexus.strategy-validation.v1.
+
+---
+Task ID: 32
+Agent: Z.ai Code
+Task: NEXUS-LIVE-HARDENING-MASTER-v1.0 — اجرای کامل فازهای 2-14
+
+Work Log:
+- Phase 2: کشف + PoC بایپس forged-Origin (POST بدون کلید = 200!) → middleware v2 با NextAuth v4 (Credentials=کلید کنترل، JWT 7d، /login) → بایپس بسته (401) — تست‌های T1-T7/runtime همه سبز
+- Phase 3: baseline migration (20260926000000_init، 298 خط، غیرمخرب با ثبت مستقیم به‌دلیل db-lock) + scripts/db-integrity-check.ts (۸ چک، read-only) — bug خودِ چکر (NULL=orphan) ریشه‌یابی و فیکس؛ 8/8 PASS؛ drift=صفر
+- Phase 4+10: src/lib/execution/ واقعی — state-machine.ts (۱۳ ایالت + جدول ترنزیشن + idempotency + entryGate fail-closed)، kill-switch.ts (fail-closed روی corrupt)، risk-engine.ts (clamp-locked 0.10-0.25%/1%/2.5% + caps)، accounting.ts (MIXED_PNL_CLASSES throw + ۸ متریک)، entry-quality.ts (GRAY_ZONE dead-end)، param-governance.ts (LLM_ADOPTION_FORBIDDEN)
+- Phase 12: bun test tests/ = 42/42 PASS (۱۲۸ expect) — شامل تست concurrency سریال روی کپی scratch (دقیقاً ۱ برنده از ۸ writer)
+- Phase 11: disaster drill واقعی ۹ مرحله‌ای — کلون از neo.git + fsck + integrity 8/8 روی کپی + verify_config + DISARMED-START=PROVEN + canary 42/42 + re-arm=نیازمند mandate اپراتور
+- Phase 7: STRATEGY-VALIDATION-PROTOCOL.md (ساب‌ایجنت) — وضعیت صادقانه: FAIL (n=25≪300, −0.13R)
+- Phase 13+14: LIVE-READINESS.md machine-readable (13 گیت: 7 PASS / 1 FAIL / 1 DEGRADED / 2 UNKNOWN / 2 OFF) + canary protocol ۴ مرحله‌ای
+- حادثه‌ی واقعی دوم: app/trade/warm-loop دوباره مردند (علت kill نامشخص — پلتفرمی)؛ بازیابی دستی + ری‌استارت watchdog → حلقه‌ی probe عملاً تأیید شد (۷ «recovered» لاگ شد)؛ wedge نسخه‌ی قبلی احتمالاً artifact زنجیره‌ی --hot دوبله
+- tsc: 77 (زیر baseline 80 — @types/bun اضافه شد)؛ lint: 17 pre-existing در scripts/
+
+Stage Summary:
+- ۸ از ۱۰ سند الزامی تحویل شد (ARCHITECTURE-MAP, SECURITY-HARDENING, DATABASE-HARDENING, EXECUTION-STATE-MACHINE, ACCOUNTING-SPEC, STRATEGY-VALIDATION-PROTOCOL, DISASTER-DRILL-REPORT, LIVE-READINESS, CHANGELOG, TEST-REPORT = همه ۱۰!)
+- live_status = NOT_ELIGIBLE_FOR_LIVE (oos_validation FAIL + execution_reconciliation DEGRADED تا D1)
+- گام بعدی تک: D1 — اتصال entryGate+kill-switch به مسیر deploy در engine.ts (tests-first)
