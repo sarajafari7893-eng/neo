@@ -910,12 +910,24 @@ export async function retroLinkRealDeploys(): Promise<number> {
 export async function closeRealOutcomes(): Promise<number> {
   try {
     await shadowVetoReady();
+    console.log("[PROBE-CLOSE] verdicts in memory:", verdicts.length);
+    {
+      const now = Date.now();
+      const byAge = { d1: 0, d3: 0, older: 0 } as Record<string, number>;
+      for (const v of verdicts) { const a = now - v.at; if (a < 86400e3) byAge.d1++; else if (a < 3*86400e3) byAge.d3++; else byAge.older++; }
+      console.log("[PROBE-CLOSE] memory age buckets:", JSON.stringify(byAge));
+      const unlinked24 = verdicts.filter(v => v.side === "PASS" && v.serial === null && now - v.at < 86400e3);
+      console.log("[PROBE-CLOSE] unlinked PASS last24h in memory:", unlinked24.length);
+      const minAt = Math.min(...verdicts.map(v => v.at)), maxAt = Math.max(...verdicts.map(v => v.at));
+      console.log("[PROBE-CLOSE] memory window:", new Date(minAt).toISOString(), "→", new Date(maxAt).toISOString());
+    }
     const pending = verdicts.filter((v) => v.serial !== null && v.outcome === null);
     if (pending.length === 0) return 0;
     let closed = 0;
+    console.log("[PROBE-CLOSE] pending:", pending.length);
     for (const v of pending.slice(-40)) {
       const sig = await db.signal.findFirst({ where: { serial: v.serial! }, select: { status: true, pnlPercent: true, marginUsd: true, reachedTp: true, closedAt: true } });
-      if (!sig) continue;
+      if (!sig) { console.log("[PROBE-CLOSE] no signal for serial", v.serial, v.id); continue; }
       if (!SETTLED.includes(sig.status)) continue;
       const pnlUsd = (sig.marginUsd * sig.pnlPercent) / 100;
       v.outcome = {
@@ -929,7 +941,8 @@ export async function closeRealOutcomes(): Promise<number> {
       closed++;
     }
     return closed;
-  } catch {
+  } catch (e) {
+    console.error("[PROBE-CLOSE] FATAL:", e);
     return 0;
   }
 }
