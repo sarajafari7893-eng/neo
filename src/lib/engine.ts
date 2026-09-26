@@ -58,6 +58,11 @@ import { computePumpPerformance, persistPumpPerformance } from "@/lib/pump-perfo
 // paid when the scheduler actually fires one of them; boot heap shrinks.
 import { getRegimeCached, regimeRuling, btcSpilloverThrAdj, regimeTagOf, bumpRegimeTelemetry, peekRegime } from "@/lib/regime";
 import { runTriggerCycle, canTriggerSpawn, markTriggerSpawn, isCounterCascadeSuppressed, isCrowdCut, getTriggerBusSummary } from "@/lib/triggers";
+// Task 34-6 (LIVE-HARDENING D1): the canonical fail-closed ENTRY GATE + KILL-SWITCH
+// now stand in front of the deploy path — every new entry (auto, trigger-spawn,
+// radar, RAW-CAL capture, forced) must clear them.
+import { entryGate } from "@/lib/execution/state-machine";
+import { readKillSwitch } from "@/lib/execution/kill-switch";
 import { feeBreakdown, confidenceMargin, ACCOUNT_START_USD, LADDER_TRANCHES, ladderWeightedMove } from "@/lib/accounting";
 import { evaluateTtlExtension, bumpTtlTelemetry, type TtlDecision } from "@/lib/ttl-gate";
 import { lessonThrAdj } from "@/lib/lesson-gate";
@@ -117,6 +122,7 @@ let calibLastAt = 0;
 let lastLearnedGateEventAt = 0;
 let lastStratGateEventAt = 0;
 let lastFeedGuardEventAt = 0;
+let lastEntryGateEventAt = 0; // Task 34-6 D1 — entry-gate block event throttle
 let lastShortGuardEventAt = 0; // v8.4 R1
 let lastDislocationEventAt = 0; // v10.15 DISLOCATION-GATE event throttle
 
@@ -1136,6 +1142,38 @@ export async function deploySignal(symbol?: string, directionHint?: "LONG" | "SH
 
   const assets = await db.marketAsset.findMany({ orderBy: { volume24h: "desc" } });
   if (assets.length === 0) return { error: "universe warming up — retry shortly", status: 503 };
+
+  // ── Task 34-6 (LIVE-HARDENING D1): CANONICAL ENTRY GATE + KILL-SWITCH ────
+  // Fail-closed on every condition; an unknown/unverifiable condition counts
+  // as failure. The kill-switch is ABSOLUTE — even operator-forced deploys are
+  // blocked while it is engaged (the operator releases the switch instead;
+  // engage: POST /api/nexus/kill-switch {action:"engage"}, audited).
+  // PAPER-domain reconciliation note: the DB signal ledger IS the position
+  // source of truth (no external order store exists to drift), so
+  // startupReconciled holds trivially; when a REAL ExecutionAdapter lands,
+  // this must come from the startup reconcile (exchange open orders vs
+  // OrderBook) — see EXECUTION-STATE-MACHINE.md §startup-reconcile.
+  const ksState = readKillSwitch();
+  const feedPre = getFeedStatus();
+  const feedStalePre = feedPre.consecutiveFailures >= 3 || (feedPre.lastOkAt !== null && Date.now() - feedPre.lastOkAt > 180_000);
+  const entryCheck = entryGate({
+    killSwitchEngaged: ksState.engaged,
+    unresolvedOpenStates: [],
+    startupReconciled: true,
+    // dataFresh mirrors the v6.7 feed-fresh doctrine below: operator-forced
+    // deploys remain an audited human override; everything else fails closed.
+    dataFresh: !feedStalePre || !!opts?.forced,
+    // exchangeConnected: LIVE/STALE are real-tick sources; SIMULATED means the
+    // feed drifted to invented prices — that is NOT a connected exchange (fail closed).
+    exchangeConnected: feedPre.source === "LIVE" || feedPre.source === "STALE",
+  });
+  if (!entryCheck.ok) {
+    if (entryCheck.code === "KILL_SWITCH" || Date.now() - lastEntryGateEventAt > 600_000) {
+      lastEntryGateEventAt = Date.now();
+      await fireEvent(null, null, "SYSTEM", "warn", `ENTRY GATE BLOCK: ${entryCheck.code} — ${entryCheck.detail}${entryCheck.code === "KILL_SWITCH" ? ` (engaged by ${ksState.by || "unknown"} — ${ksState.reason || "no reason recorded"})` : ""}`);
+    }
+    return { error: `entry gate: ${entryCheck.code} — ${entryCheck.detail}`, status: 503 };
+  }
 
   // ── v6.7 FEED-FRESH DEPLOY GUARD (operator-approved package 2026-09-08) ──
   // The supervisor caught deployments landing while the market feed ran 19–21
@@ -2489,3 +2527,4 @@ export async function getFlowHealthForPulse() {
 }
 
 export { getTriggerBusSummary, fetchFlowMetrics, describeGate };
+

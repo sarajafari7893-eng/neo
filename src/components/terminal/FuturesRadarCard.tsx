@@ -380,7 +380,14 @@ export default function FuturesRadarCard() {
         <div className="flex items-center gap-2">
           {err && data && <span className="font-terminal text-[9px] text-amber-neon">last poll failed — retrying</span>}
           {edge?.maturity && (
-            <NeonBadge tone={edge.maturity.progressPct >= 100 ? "neon" : "amber"}>
+            <NeonBadge
+              tone={edge.maturity.progressPct >= 100 ? "neon" : "amber"}
+              // Task 34-4 — honest breakdown: 672 of these rows came from the
+              // one-shot 14-day hourly BACKFILL; the LIVE sampler adds ~2 rows
+              // per 5min tick. The 720 bar is the settled-row maturity gate
+              // for bestFilter claims (n≥20 + sign agreement still required).
+              title={`settled forward-return rows ${edge.maturity.settled}/${edge.maturity.target} — backfill ${data?.counts?.backfill ?? "—"} + live ${data?.counts?.live ?? "—"} · spot-mirror keeps rows flowing during fapi bans`}
+            >
               STORE {edge.maturity.settled}/{edge.maturity.target}
             </NeonBadge>
           )}

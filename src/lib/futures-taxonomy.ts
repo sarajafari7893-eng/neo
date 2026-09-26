@@ -89,6 +89,23 @@ async function jsonUrl<T>(url: string, timeoutMs = 6500): Promise<T | null> {
   }
 }
 
+// ── Task 34-4 SPOT-MIRROR FALLBACKS (2026-09-26) ───────────────────────────
+// The fapi (USDT-M) REST pool carries stacked multi-hour 418 bans while the
+// SPOT api (api.binance.com) is a SEPARATE host with its own rate budget and
+// kept answering 200 throughout the ban storm (measured). During fapi ban
+// windows the sampler now mirrors PRICE and KLINE closes from the spot API so
+// quadrant rows keep flowing; futures-only families (OI, funding, LS ratios)
+// stay honestly NULL — no invented data. Spot klines share the candle shape.
+const SPOT_HOST = "https://api.binance.com";
+async function spotPrice(symbol: string): Promise<number | null> {
+  const j = await jsonUrl<{ price?: string }>(`${SPOT_HOST}/api/v3/ticker/price?symbol=${symbol}`);
+  const p = j?.price ? Number(j.price) : NaN;
+  return Number.isFinite(p) && p > 0 ? p : null;
+}
+async function spotKlines(symbol: string, interval: string, limit: number): Promise<Array<[number, string, string, string, string]> | null> {
+  return jsonUrl<Array<[number, string, string, string, string]>>(`${SPOT_HOST}/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`);
+}
+
 interface PremIndex { markPrice: string; lastFundingRate: string; nextFundingTime: number }
 interface OiHistRow { sumOpenInterest: string; sumOpenInterestValue: string; timestamp: number }
 interface LsRow { longShortRatio: string; timestamp: number }
@@ -157,8 +174,12 @@ export async function maybeFuturesSample(force = false): Promise<FuturesSampleOu
           crossExchange(symbol),
         ]);
 
-        const price = prem ? Number(prem.markPrice) || null : null;
-        if (price === null) continue; // honest — no price, no row
+        // Task 34-4 — SPOT-MIRROR price fallback: a fapi ban window no longer
+        // zeroes the whole sample; the row keeps flowing with futures-only
+        // families honestly null.
+        let price = prem ? Number(prem.markPrice) || null : null;
+        if (price === null) price = await spotPrice(symbol);
+        if (price === null) continue; // honest — no price from EITHER host, no row
 
         const oi = oiHistArr && oiHistArr.length >= 2 ? oiHistArr.map((h) => Number(h.sumOpenInterest)) : null;
         const oiBase = oi ? oi[oi.length - 1]! : null;
@@ -168,11 +189,16 @@ export async function maybeFuturesSample(force = false): Promise<FuturesSampleOu
 
         // price deltas: 15m from the 5m kline mini-series, 1h from our OWN row
         // (self-consistent with the stored series) — klines fallback below.
-        const closes = k5 ? k5.map((k) => Number(k[4])) : [];
+        let closes = k5 ? k5.map((k) => Number(k[4])) : [];
+        if (closes.length < 4) {
+          const k5s = await spotKlines(symbol, "5m", 4);
+          closes = k5s ? k5s.map((k) => Number(k[4])) : [];
+        }
         const priceDelta15m = closes.length >= 4 ? pct(closes[closes.length - 1]!, closes[0]!) : null;
         let priceDelta1h: number | null = prevRow ? pct(price, prevRow.price) : null;
         if (priceDelta1h === null) {
-          const k1 = await fapi<Array<[number, string, string, string, string]>>(`/fapi/v1/klines?symbol=${symbol}&interval=1h&limit=3`);
+          let k1 = await fapi<Array<[number, string, string, string, string]>>(`/fapi/v1/klines?symbol=${symbol}&interval=1h&limit=3`);
+          if (!k1) k1 = await spotKlines(symbol, "1h", 3);
           const c1 = k1 ? k1.map((k) => Number(k[4])) : [];
           if (c1.length >= 3) priceDelta1h = pct(c1[c1.length - 1]!, c1[0]!);
         }
