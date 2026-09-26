@@ -432,6 +432,24 @@ async function runDeepScript(): Promise<string> {
 }
 
 async function callLlmReview(telemetryJson: string): Promise<{ status: "ok" | "llm_unavailable" | "llm_bad_output"; review: unknown; raw: string; err?: string }> {
+  // v1.0 resilience: the platform LLM 429s under load (verified 34-c — even a
+  // minimal pong failed). One retry after 90s: worst case ≈180+90+180s, well
+  // inside the 12h cadence; the honest llm_unavailable path stays the last resort.
+  let attempt = 0;
+  let last: Awaited<ReturnType<typeof llmOnce>> | null = null;
+  while (attempt < 2) {
+    attempt += 1;
+    last = await llmOnce(telemetryJson);
+    if (last.status !== "llm_unavailable") return last;
+    if (last.err?.includes("429") && attempt < 2) {
+      log("warn", "llm-429-retry", { inS: 90 });
+      await new Promise((r) => setTimeout(r, 90_000));
+    } else break;
+  }
+  return last ?? { status: "llm_unavailable", review: null, raw: "", err: "unreachable" };
+}
+
+async function llmOnce(telemetryJson: string): Promise<{ status: "ok" | "llm_unavailable" | "llm_bad_output"; review: unknown; raw: string; err?: string }> {
   try {
     const zai = await ZAI.create();
     const completion = (await Promise.race([
