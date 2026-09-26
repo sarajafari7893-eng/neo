@@ -78,7 +78,7 @@ export interface ClassMetrics {
 export function computeClassMetrics(entries: LedgerEntry[], riskPerTradeUsdBySignal?: Map<string, number>): ClassMetrics {
   const classes = new Set(entries.map((e) => e.class));
   if (classes.size > 1) {
-    throw Object.assign(new Error(`mixed PnL classes: ${[...classes].join(",")} — per-class accounting only`), {
+    throw Object.assign(new Error(`mixed PnL classes: ${Array.from(classes).join(",")} — per-class accounting only`), {
       code: "MIXED_PNL_CLASSES",
     });
   }

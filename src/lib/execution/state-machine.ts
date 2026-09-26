@@ -36,10 +36,10 @@ export const ALLOWED_TRANSITIONS: Record<ExecutionState, ExecutionState[]> = {
   FAILED: [],
 };
 
-export const TERMINAL_STATES: ReadonlySet<ExecutionState> = new Set(["CLOSED", "FAILED"]);
+export const TERMINAL_STATES: ReadonlySet<ExecutionState> = new Set<ExecutionState>(["CLOSED", "FAILED"]);
 
 /** States in which an order is considered open at an exchange. */
-export const OPEN_ORDER_STATES: ReadonlySet<ExecutionState> = new Set([
+export const OPEN_ORDER_STATES: ReadonlySet<ExecutionState> = new Set<ExecutionState>([
   "ORDER_SUBMITTED",
   "ACKNOWLEDGED",
   "PARTIALLY_FILLED",
