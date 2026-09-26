@@ -1,29 +1,29 @@
-// ── NEXUS//SIGNALS — CONTROL-PLANE GATE (task 4-b · audit P0-1) ─────────────
-// Audit 3-b/3-d finding: "control plane unauthenticated (57 routes)".
-// This middleware closes the mutating surface of /api/*:
-//   · GET / HEAD / OPTIONS → pass through immediately (probes, dashboard polls).
-//   · POST / PUT / PATCH / DELETE → allowed only if
-//       (a) header `x-nexus-key` === NEXUS_CONTROL_KEY (env must be non-empty),
-//           OR
-//       (b) an `Origin` header is present AND its parsed host equals the
-//           request `Host` header (browser same-origin CSRF guard — the
-//           dashboard's same-origin fetches qualify automatically).
-//     otherwise → 401 JSON, no-store. The key value is NEVER echoed/logged.
-//   · Mutating requests are rate-limited per-IP (x-forwarded-for first hop,
-//     fallback "local"): token-bucket-lite, max 60 per rolling 60s → 429.
+// ── NEXUS//SIGNALS — CONTROL-PLANE GATE (v2 · LIVE-HARDENING Phase 2) ────────
+// v1 audit P0-1 closed the mutating /api/* surface with: key OR same-origin
+// Origin header. v2 SECURITY FIX (Task P2, 2026-09-26): the Origin fallback
+// was forgeable by any non-browser client (PoC: POST /api/bridge/send with
+// `Origin: <host>` → 200 without key). Replaced with REAL authentication:
 //
-// Runtime notes: edge-safe plain TS — no node APIs beyond URL/Headers parsing;
-// constant-time key compare (length leak accepted, standard practice); the
-// rate-limit Map is tiny and self-sweeping so it cannot grow unbounded.
-// Internal callers (watchdog probes, price-ws, sre-daily, backup canaries) are
-// all GET and are unaffected by design.
+//   · GET / HEAD / OPTIONS → pass through (probes, dashboard polls).
+//   · /api/auth/* → pass through (NextAuth's own CSRF-protected flows).
+//   · POST / PUT / PATCH / DELETE → allowed only if
+//       (a) header `x-nexus-key` === NEXUS_CONTROL_KEY (server-to-server), OR
+//       (b) a valid NextAuth JWT session cookie exists (operator logged in
+//           at /login by proving knowledge of the control key).
+//     otherwise → 401 JSON, no-store. Key/session values NEVER echoed.
+//   · Mutating requests remain rate-limited per-IP (60 per rolling 60s → 429),
+//     counted only after successful auth (unauthenticated 401s are cheap).
+//
+// Edge-safe: constant-time compare; no node APIs; next-auth/jwt (jose) for
+// session verification. Fail-closed: missing env or missing session → deny.
 
 import { NextRequest, NextResponse } from "next/server";
+import { getToken } from "next-auth/jwt";
 
 const MUTATING = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 const WINDOW_MS = 60_000;
 const MAX_MUTATIONS_PER_WINDOW = 60;
-const UNAUTHORIZED = "unauthorized: mutating API requires x-nexus-key header";
+const UNAUTHORIZED = "unauthorized: mutating API requires x-nexus-key header or operator session";
 const RATE_LIMITED = "rate limited: too many mutating requests (60/min per IP)";
 
 type Bucket = { count: number; resetAt: number };
@@ -45,27 +45,29 @@ function jsonError(status: number, error: string): NextResponse {
   });
 }
 
-export function middleware(req: NextRequest): NextResponse {
+export async function middleware(req: NextRequest): Promise<NextResponse> {
+  const { pathname } = req.nextUrl;
+
   if (!MUTATING.has(req.method.toUpperCase())) return NextResponse.next();
 
-  // ── auth: (a) control key, or (b) same-origin browser guard ──────────────
+  // NextAuth flows (/api/auth/*) carry their own CSRF protection — never gate.
+  if (pathname.startsWith("/api/auth/")) return NextResponse.next();
+
+  // ── auth: control key (server-to-server) OR operator session (browser) ──
   const expected = process.env.NEXUS_CONTROL_KEY ?? "";
   const provided = req.headers.get("x-nexus-key") ?? "";
   const keyOk = expected.length > 0 && provided.length > 0 && constantTimeEqual(provided, expected);
+
   if (!keyOk) {
-    let sameOrigin = false;
-    const origin = req.headers.get("origin");
-    if (origin) {
-      try {
-        sameOrigin = new URL(origin).host === (req.headers.get("host") ?? "");
-      } catch {
-        sameOrigin = false; // malformed Origin → never trust it
-      }
+    try {
+      const token = await getToken({ req, secret: process.env.NEXTAUTH_SECRET ?? "" });
+      if (!token) return jsonError(401, UNAUTHORIZED);
+    } catch {
+      return jsonError(401, UNAUTHORIZED); // malformed/undecodable session → fail closed
     }
-    if (!sameOrigin) return jsonError(401, UNAUTHORIZED);
   }
 
-  // ── rate limit mutating requests per-IP (rolling 60s window, lite) ───────
+  // ── rate limit authorized mutations per-IP (rolling 60s window, lite) ───
   const xff = req.headers.get("x-forwarded-for") ?? "";
   const ip = (xff.split(",")[0] ?? "").trim() || "local";
   const now = Date.now();
