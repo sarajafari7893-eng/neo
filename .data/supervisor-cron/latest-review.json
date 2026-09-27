@@ -1,75 +1,70 @@
 {
- "at": "2026-09-26T11:24:09.628Z",
- "tehran": "26/09/2026, 14:54:09",
+ "at": "2026-09-27T15:59:29.589Z",
+ "tehran": "27/09/2026, 19:29:29",
  "status": "llm_unavailable",
- "err": "Error: API request failed with status 429: {\"error\":\"Too many requests, please try again later\"}",
+ "err": "Error: API request failed with status 401: {\"error\":\"missing X-Token header\"}",
  "review": null,
  "telemetrySnapshot": {
-  "generatedAt": "2026-09-26T11:22:39.581Z",
+  "generatedAt": "2026-09-27T15:59:29.569Z",
   "liveExecution": "DISABLED (paper/research-only; SUPPRESSED engine path — honesty contract)",
   "strategyValidationStatus": "PROMOTE gate = FAIL (insufficient OOS n; re-validation protocol in STRATEGY-VALIDATION-PROTOCOL.md) — recommend only evidence-respecting actions",
   "sentinel": {
-   "verdict": "RED",
+   "verdict": "AMBER",
    "anomalies": [
-    {
-     "sev": "crit",
-     "area": "dev.log",
-     "msg": "10 OOM markers in recent log window"
-    },
     {
      "sev": "warn",
      "area": "dev.log",
-     "msg": "101 error lines in recent log window"
+     "msg": "24 error lines in recent log window"
     }
    ],
    "mem": {
-    "availableMb": 1180
+    "availableMb": 890
    },
    "disk": {
-    "rootFreeGb": 6.17,
-    "tmpFreeGb": 6.17
+    "rootFreeGb": 6.75,
+    "tmpFreeGb": 6.75
    },
    "backup": {
     "ok": true,
     "dir": "/tmp/my-project/backups",
     "encCount": 12,
     "zipCount": 12,
-    "newestEncMs": 1790411958619.4707,
-    "newestAnyMs": 1790411958619.4707,
-    "encAgeMs": 9799826.529296875
+    "newestEncMs": 1790516186272.699,
+    "newestAnyMs": 1790516186272.699,
+    "encAgeMs": 8580617.30102539
    },
    "rawcal": {
-    "armed": false,
-    "issued": 35,
-    "issuedTotal": 201,
-    "target": 672,
+    "armed": true,
+    "issued": 8,
+    "issuedTotal": 209,
+    "target": 770,
     "heartbeatAgeH": 0,
-    "heartbeatAt": "2026-09-26T1121Z IDLE disarmed by policy (target 672)"
+    "heartbeatAt": "2026-09-27T1559Z ARMED issued=8/209 target=770"
    }
   },
-  "deepSweepQuick": "# NEXUS-SENTINEL DEEP SWEEP — 2026-09-26T11:22:39Z\n\n\n## 1 · LIVE VERDICT — RED\n- verdict: RED · scan: 2026-09-26T11:22:38.478Z\n  · app       UP  http=200 10ms\n  · ws        UP  http=400 5ms\n  · bridge    UP  http=200 5ms\n  · liq       UP  http=200 5ms\n  · trade     UP  http=200 5ms\n  · watchdog  UP  http=200 5ms\n- mem: 1180 MB avail · disk root: 6.17 GB · /tmp: 6.17 GB\n  - [crit] dev.log: 10 OOM markers in recent log window\n  - [warn] dev.log: 101 error lines in recent log window\n",
+  "deepSweepQuick": "# NEXUS-SENTINEL DEEP SWEEP — 2026-09-27T15:59:29Z\n\n\n## 1 · LIVE VERDICT — AMBER\n- verdict: AMBER · scan: 2026-09-27T15:59:26.948Z\n  · app       UP  http=200 11ms\n  · ws        UP  http=400 2ms\n  · bridge    UP  http=200 2ms\n  · liq       UP  http=200 2ms\n  · trade     UP  http=200 2ms\n  · watchdog  UP  http=200 1ms\n- mem: 890 MB avail · disk root: 6.75 GB · /tmp: 6.75 GB\n  - [warn] dev.log: 24 error lines in recent log window\n",
   "pulseStats": {
-   "winRate": 22,
-   "totalSignals": 121,
-   "wins": 27,
-   "losses": 60,
-   "pnl24hUsd": -1.08,
-   "totalPnlUsd": 0.13,
-   "avgPnlPercent": 0.81,
+   "winRate": 24,
+   "totalSignals": 130,
+   "wins": 29,
+   "losses": 54,
+   "pnl24hUsd": 0.39,
+   "totalPnlUsd": 0.5,
+   "avgPnlPercent": 2.19,
    "streak": {
-    "type": "loss",
-    "count": 0
+    "type": "win",
+    "count": 2
    },
    "account": {
     "startBalance": 100,
-    "balance": 90.91,
-    "equity": 90.96,
-    "unrealizedPnl": 0.05,
-    "exposureUsd": 0.59,
-    "freeMargin": 90.37,
-    "marginUsedPct": 0.6,
-    "openPositions": 1,
-    "feesPaid": 9.955
+    "balance": 91.2,
+    "equity": 91.21,
+    "unrealizedPnl": 0.01,
+    "exposureUsd": 2.39,
+    "freeMargin": 88.82,
+    "marginUsedPct": 2.6,
+    "openPositions": 8,
+    "feesPaid": 10.115
    },
    "window24h": {
     "n": 0,
@@ -86,124 +81,119 @@
    "byStrategy": [
     {
      "strategy": "AI-SWING",
-     "count": 76,
-     "wins": 16,
-     "pnl": -0.89,
-     "avgConfidence": 76
-    },
-    {
-     "strategy": "AI-SCALP",
-     "count": 12,
-     "wins": 4,
-     "pnl": 0.16,
-     "avgConfidence": 79
+     "count": 73,
+     "wins": 18,
+     "pnl": -0.36,
+     "avgConfidence": 77
     },
     {
      "strategy": "MEAN-REVERT",
-     "count": 21,
+     "count": 23,
      "wins": 6,
-     "pnl": 0.96,
+     "pnl": 1.02,
      "avgConfidence": 79
     },
     {
      "strategy": "BREAKOUT",
-     "count": 12,
-     "wins": 1,
-     "pnl": -0.04,
+     "count": 13,
+     "wins": 2,
+     "pnl": 0.02,
      "avgConfidence": 80
+    },
+    {
+     "strategy": "AI-SCALP",
+     "count": 13,
+     "wins": 3,
+     "pnl": -0.19,
+     "avgConfidence": 78
     }
    ],
    "equityCurveTail": [
     {
-     "date": "09-19",
-     "cum": -0.12,
-     "daily": -0.12
-    },
-    {
-     "date": "09-20",
-     "cum": -0.07,
-     "daily": 0.05
-    },
-    {
      "date": "09-21",
-     "cum": -0.57,
+     "cum": -0.5,
      "daily": -0.5
     },
     {
      "date": "09-22",
-     "cum": -0.09,
+     "cum": -0.02,
      "daily": 0.49
     },
     {
      "date": "09-23",
-     "cum": 0.78,
+     "cum": 0.84,
      "daily": 0.86
     },
     {
      "date": "09-24",
-     "cum": 1.21,
+     "cum": 1.28,
      "daily": 0.44
     },
     {
      "date": "09-25",
-     "cum": 0.15,
+     "cum": 0.22,
      "daily": -1.06
     },
     {
      "date": "09-26",
-     "cum": 0.13,
-     "daily": -0.02
+     "cum": 0.11,
+     "daily": -0.11
+    },
+    {
+     "date": "09-27",
+     "cum": 0.5,
+     "daily": 0.39
     }
    ]
   },
   "rawcal": {
-   "armed": false,
-   "target": 672,
-   "settledN": 713,
+   "armed": true,
+   "target": 770,
+   "settledN": 726,
    "openRaw": 0,
-   "rawWinRatePct": 19.4,
-   "disarmReason": "target reached — 672 EPOCH-2 settled ≥ 672",
-   "paceSettledE2": 713,
-   "paceSettleRate3h": 0.67,
-   "paceNeeded": 0,
-   "qualityInformativePct": 49,
-   "qualityHealthyPct": 79,
+   "rawWinRatePct": 20.1,
+   "disarmReason": "",
+   "paceSettledE2": 726,
+   "paceSettleRate3h": 3.33,
+   "paceNeeded": 44,
+   "qualityInformativePct": 51,
+   "qualityHealthyPct": 78.5,
    "qualityGate": {
     "verdict": "AMBER",
     "healthFloor": 85,
     "blockers": [],
     "window": {
      "since": "2026-09-15T11:30:00.000Z",
-     "settled": 88,
-     "healthyPct": 76.1,
-     "informativePct": 68.2
+     "settled": 96,
+     "healthyPct": 72.9,
+     "informativePct": 66.7
     }
    }
   },
   "shadowVetoArms": [
    {
     "id": "real-keep",
-    "n": 20,
+    "n": 2,
     "target": 30,
-    "fillPct": 66.7,
-    "winRatePct": 40,
-    "starved": false
+    "fillPct": 6.7,
+    "winRatePct": 50,
+    "starved": true
    },
    {
     "id": "real-veto",
-    "n": 5,
+    "n": 1,
     "target": 30,
-    "fillPct": 16.7,
+    "fillPct": 3.3,
     "winRatePct": 0,
-    "starved": false
+    "starved": true
    },
    {
     "id": "paper-keep",
     "n": 30,
     "target": 30,
     "fillPct": 100,
-    "winRatePct": 46.7,
-    "starved": false
+    "winRatePct": 50,
+    "starved": true
    },
    {
     "id": "paper-veto",
@@ -216,28 +206,28 @@
   ],
   "shadowVetoStats": {
    "total": 600,
-   "passSide": 265,
-   "rejectSide": 335,
-   "vetoCount": 245,
-   "tradeCount": 355,
-   "modelSharePct": 63.3,
+   "passSide": 171,
+   "rejectSide": 429,
+   "vetoCount": 271,
+   "tradeCount": 329,
+   "modelSharePct": 52.2,
    "modelGroundedPct": 100,
-   "avgConfidence": 75.9,
-   "gateAgreement": 134,
-   "paperOpen": 8,
-   "paperSettled": 52,
+   "avgConfidence": 71.4,
+   "gateAgreement": 173,
+   "paperOpen": 13,
+   "paperSettled": 47,
    "recent24h": {
-    "n": 70,
-    "modelSharePct": 14.3,
-    "lastModelAgeH": 14,
-    "lastVerdictAgeH": 0.1
+    "n": 0,
+    "modelSharePct": null,
+    "lastModelAgeH": 42.5,
+    "lastVerdictAgeH": 26.4
    }
   },
   "futures": {
    "maturity": {
-    "settled": 675,
+    "settled": 690,
     "target": 720,
-    "progressPct": 93.8
+    "progressPct": 95.8
    },
    "bestFilter": {
     "filter": "BLOCK SHORT in Q2_SQUEEZE",
@@ -249,18 +239,18 @@
     "source": "BOOK-EDGE"
    },
    "counts": {
-    "total": 708,
-    "live": 36,
+    "total": 732,
+    "live": 60,
     "backfill": 672,
-    "settled1h": 675,
-    "last24h": 11
+    "settled1h": 692,
+    "last24h": 2
    },
    "tape": {
     "reachable": true,
     "connected": true,
     "source": "SPOT-MIRROR",
     "symbols": 2,
-    "trades": 4131,
+    "trades": 5525,
     "dataStalled": false
    },
    "taxonomyBackfill": {
@@ -281,17 +271,17 @@
    "watch": 2,
    "lastFrameAt": null,
    "spotConnected": true,
-   "spotFrames": 1915,
-   "spotLastFrameAt": 1790421758787,
+   "spotFrames": 5524,
+   "spotLastFrameAt": 1790524769349,
    "spotStreams": 2,
    "spotReconnects": 0,
-   "restBannedUntil": 1790423599249,
+   "restBannedUntil": 1790525278532,
    "symbols": 2,
-   "trades": 4131,
-   "restPolls": 8,
+   "trades": 5524,
+   "restPolls": 1,
    "restErrors": 1,
    "reconnects": 0,
-   "uptimeMs": 315228
+   "uptimeMs": 542634
   },
   "lastSweepAnomalies": [
    {
@@ -300,7 +290,7 @@
     "msg": "sentinel :3030 verdict RED"
    }
   ],
-  "lastReviewAt": "2026-09-26T11:19:23.579Z"
+  "lastReviewAt": "2026-09-27T15:57:59.203Z"
  },
- "deepSweepChars": 485
+ "deepSweepChars": 431
 }
