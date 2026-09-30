@@ -1,11 +1,11 @@
 {
- "at": "2026-09-30T21:03:04.635Z",
- "tehran": "01/10/2026, 00:33:04",
+ "at": "2026-09-30T21:12:07.709Z",
+ "tehran": "01/10/2026, 00:42:07",
  "status": "llm_unavailable",
  "err": "Error: API request failed with status 401: {\"error\":\"missing X-Token header\"}",
  "review": null,
  "telemetrySnapshot": {
-  "generatedAt": "2026-09-30T21:03:04.616Z",
+  "generatedAt": "2026-09-30T21:12:07.688Z",
   "liveExecution": "DISABLED (paper/research-only; SUPPRESSED engine path — honesty contract)",
   "strategyValidationStatus": "PROMOTE gate = FAIL (insufficient OOS n; re-validation protocol in STRATEGY-VALIDATION-PROTOCOL.md) — recommend only evidence-respecting actions",
   "sentinel": {
@@ -13,16 +13,21 @@
    "anomalies": [
     {
      "sev": "warn",
+     "area": "backup",
+     "msg": "backup cycle missed — newest .enc 3h+10m old"
+    },
+    {
+     "sev": "warn",
      "area": "dev.log",
-     "msg": "21 error lines in recent log window"
+     "msg": "36 error lines in recent log window"
     }
    ],
    "mem": {
-    "availableMb": 809
+    "availableMb": 757
    },
    "disk": {
-    "rootFreeGb": 6.77,
-    "tmpFreeGb": 6.77
+    "rootFreeGb": 6.72,
+    "tmpFreeGb": 6.72
    },
    "backup": {
     "ok": true,
@@ -31,40 +36,40 @@
     "zipCount": 12,
     "newestEncMs": 1790791282329.5117,
     "newestAnyMs": 1790791282329.5117,
-    "encAgeMs": 10867718.48828125
+    "encAgeMs": 11407713.48828125
    },
    "rawcal": {
     "armed": true,
-    "issued": 11,
-    "issuedTotal": 212,
+    "issued": 12,
+    "issuedTotal": 213,
     "target": 770,
     "heartbeatAgeH": 0,
-    "heartbeatAt": "2026-09-30T2102Z ARMED issued=11/212 target=770"
+    "heartbeatAt": "2026-09-30T2110Z ARMED issued=12/213 target=770"
    }
   },
-  "deepSweepQuick": "# NEXUS-SENTINEL DEEP SWEEP — 2026-09-30T21:03:04Z\n\n\n## 1 · LIVE VERDICT — AMBER\n- verdict: AMBER · scan: 2026-09-30T21:02:30.116Z\n  · app       UP  http=200 17ms\n  · ws        UP  http=400 3ms\n  · bridge    UP  http=200 3ms\n  · liq       UP  http=200 3ms\n  · trade     UP  http=200 3ms\n  · watchdog  UP  http=200 3ms\n- mem: 809 MB avail · disk root: 6.77 GB · /tmp: 6.77 GB\n  - [warn] dev.log: 21 error lines in recent log window\n",
+  "deepSweepQuick": "# NEXUS-SENTINEL DEEP SWEEP — 2026-09-30T21:12:07Z\n\n\n## 1 · LIVE VERDICT — AMBER\n- verdict: AMBER · scan: 2026-09-30T21:11:30.080Z\n  · app       UP  http=200 11ms\n  · ws        UP  http=400 2ms\n  · bridge    UP  http=200 2ms\n  · liq       UP  http=200 4ms\n  · trade     UP  http=200 4ms\n  · watchdog  UP  http=200 2ms\n- mem: 757 MB avail · disk root: 6.72 GB · /tmp: 6.72 GB\n  - [warn] backup: backup cycle missed — newest .enc 3h+10m old\n  - [warn] dev.log: 36 error lines in recent log window\n",
   "pulseStats": {
    "winRate": 33,
-   "totalSignals": 53,
+   "totalSignals": 54,
    "wins": 15,
-   "losses": 15,
+   "losses": 16,
    "pnl24hUsd": 0.68,
    "totalPnlUsd": -0.27,
-   "avgPnlPercent": -1.73,
+   "avgPnlPercent": -1.72,
    "streak": {
     "type": "loss",
-    "count": 1
+    "count": 2
    },
    "account": {
     "startBalance": 100,
-    "balance": 91.89,
+    "balance": 91.88,
     "equity": 91.89,
-    "unrealizedPnl": 0,
-    "exposureUsd": 2.56,
-    "freeMargin": 89.33,
-    "marginUsedPct": 2.8,
+    "unrealizedPnl": 0.01,
+    "exposureUsd": 2.76,
+    "freeMargin": 89.13,
+    "marginUsedPct": 3,
     "openPositions": 8,
-    "feesPaid": 10.178
+    "feesPaid": 10.181
    },
    "window24h": {
     "n": 0,
@@ -102,7 +107,7 @@
     },
     {
      "strategy": "AI-SWING",
-     "count": 15,
+     "count": 16,
      "wins": 6,
      "pnl": -0.17,
      "avgConfidence": 80
@@ -139,15 +144,15 @@
   "rawcal": {
    "armed": true,
    "target": 770,
-   "settledN": 737,
-   "openRaw": 1,
+   "settledN": 738,
+   "openRaw": 2,
    "rawWinRatePct": 20.4,
    "disarmReason": "",
-   "paceSettledE2": 737,
-   "paceSettleRate3h": 3.67,
-   "paceNeeded": 33,
-   "qualityInformativePct": 52.3,
-   "qualityHealthyPct": 78.4,
+   "paceSettledE2": 738,
+   "paceSettleRate3h": 4,
+   "paceNeeded": 32,
+   "qualityInformativePct": 52,
+   "qualityHealthyPct": 78.3,
    "qualityGate": {
     "verdict": "AMBER",
     "healthFloor": 85,
@@ -167,7 +172,7 @@
     "target": 30,
     "fillPct": 6.7,
     "winRatePct": 50,
-    "starved": true
+    "starved": false
    },
    {
     "id": "real-veto",
@@ -175,7 +180,7 @@
     "target": 30,
     "fillPct": 3.3,
     "winRatePct": 0,
-    "starved": true
+    "starved": false
    },
    {
     "id": "paper-keep",
@@ -196,21 +201,21 @@
   ],
   "shadowVetoStats": {
    "total": 600,
-   "passSide": 176,
-   "rejectSide": 424,
-   "vetoCount": 275,
-   "tradeCount": 325,
+   "passSide": 178,
+   "rejectSide": 422,
+   "vetoCount": 276,
+   "tradeCount": 324,
    "modelSharePct": 51,
    "modelGroundedPct": 100,
    "avgConfidence": 70.9,
    "gateAgreement": 173,
-   "paperOpen": 3,
-   "paperSettled": 57,
+   "paperOpen": 2,
+   "paperSettled": 58,
    "recent24h": {
-    "n": 1,
+    "n": 3,
     "modelSharePct": 0,
-    "lastModelAgeH": 119.6,
-    "lastVerdictAgeH": 0
+    "lastModelAgeH": 119.7,
+    "lastVerdictAgeH": 0.1
    }
   },
   "futures": {
@@ -229,18 +234,18 @@
     "source": "BOOK-EDGE"
    },
    "counts": {
-    "total": 740,
-    "live": 68,
+    "total": 742,
+    "live": 70,
     "backfill": 672,
     "settled1h": 692,
-    "last24h": 2
+    "last24h": 4
    },
    "tape": {
     "reachable": true,
     "connected": true,
     "source": "SPOT-MIRROR",
     "symbols": 2,
-    "trades": 11251,
+    "trades": 20464,
     "dataStalled": false
    },
    "taxonomyBackfill": {
@@ -261,26 +266,26 @@
    "watch": 2,
    "lastFrameAt": null,
    "spotConnected": true,
-   "spotFrames": 3630,
-   "spotLastFrameAt": 1790802183769,
+   "spotFrames": 7090,
+   "spotLastFrameAt": 1790802726710,
    "spotStreams": 2,
    "spotReconnects": 0,
    "restBannedUntil": null,
    "symbols": 2,
-   "trades": 11253,
-   "restPolls": 106,
+   "trades": 20466,
+   "restPolls": 215,
    "restErrors": 0,
    "reconnects": 0,
-   "uptimeMs": 574547
+   "uptimeMs": 1117460
   },
   "lastSweepAnomalies": [
    {
-    "class": "sentinel-red",
-    "sev": "crit",
-    "msg": "sentinel :3030 verdict RED"
+    "class": "sentinel-amber",
+    "sev": "warn",
+    "msg": "sentinel :3030 verdict AMBER"
    }
   ],
-  "lastReviewAt": "2026-09-30T21:01:34.207Z"
+  "lastReviewAt": "2026-09-30T21:10:37.163Z"
  },
- "deepSweepChars": 431
+ "deepSweepChars": 495
 }
