@@ -2,15 +2,15 @@
  "ver": "supervisor-cron 1.6.0",
  "pid": 6187,
  "startedAt": "2026-10-22T23:18:00.186Z",
- "updatedAt": "2026-10-22T23:28:30.252Z",
+ "updatedAt": "2026-10-22T23:38:30.223Z",
  "jobs": {
   "sweep": {
-   "lastRunAt": 1792711710186,
-   "nextRunAt": 1792711710186,
+   "lastRunAt": 1792712310186,
+   "nextRunAt": 1792712310186,
    "lastStatus": "ok",
-   "lastDurationMs": 66,
+   "lastDurationMs": 37,
    "lastError": null,
-   "runs": 66,
+   "runs": 67,
    "failures": 0
   },
   "progress": {
@@ -59,29 +59,29 @@
    "failures": 0
   },
   "keepwarm": {
-   "lastRunAt": 1792711710187,
-   "nextRunAt": 1792712010186,
+   "lastRunAt": 1792712310186,
+   "nextRunAt": 1792712610186,
    "lastStatus": "ok",
-   "lastDurationMs": 50,
+   "lastDurationMs": 26,
    "lastError": null,
-   "runs": 53,
+   "runs": 55,
    "failures": 8
   }
  },
  "lastSweep": {
-  "at": "2026-10-22T23:28:30.252Z",
+  "at": "2026-10-22T23:38:30.223Z",
   "verdict": "AMBER",
-  "reason": "toobit-bridge doctrine: 1 violation(s) — last=NOTIONAL-DELTA: exp=25.00 act=8.20 (6719bps)",
+  "reason": "sentinel :3030 verdict AMBER · toobit-bridge doctrine: 1 violation(s) — last=NOTIONAL-DELTA: exp=25.00 act=8.20 (6719bps)",
   "services": {
    "app": {
     "up": true,
     "status": 200,
-    "ms": 42
+    "ms": 22
    },
    "liq": {
     "up": true,
     "status": 200,
-    "ms": 1
+    "ms": 0
    },
    "trade": {
     "up": true,
@@ -91,7 +91,7 @@
    "armor": {
     "up": true,
     "status": 200,
-    "ms": 0
+    "ms": 1
    },
    "watchdog": {
     "up": true,
@@ -101,17 +101,17 @@
    "sentinel": {
     "up": true,
     "status": 200,
-    "ms": 1
+    "ms": 0
    },
    "ws": {
     "up": true,
     "status": 400,
-    "ms": 8
+    "ms": 1
    },
    "bridge": {
     "up": true,
     "status": 200,
-    "ms": 1
+    "ms": 3
    },
    "tbt": {
     "up": true,
@@ -120,6 +120,11 @@
    }
   },
   "anomalies": [
+   {
+    "class": "sentinel-amber",
+    "sev": "warn",
+    "msg": "sentinel :3030 verdict AMBER"
+   },
    {
     "class": "tbt-doctrine-violation",
     "sev": "warn",
@@ -149,11 +154,11 @@
   "newN": 0
  },
  "lastKeepwarm": {
-  "at": "2026-10-22T23:28:30.237Z",
+  "at": "2026-10-22T23:38:30.212Z",
   "ok": true,
-  "ms": 50,
+  "ms": 26,
   "bootAt": "2026-10-22T23:24:02.030Z",
-  "gitSha": "02c260a",
+  "gitSha": "6d5234e",
   "coldStreak": 0
  },
  "coldStreak": 0,
@@ -165,27 +170,6 @@
  "wsDownStreak": 0,
  "staleStreak": 0,
  "history": [
-  {
-   "id": "digest",
-   "at": 1792597204023,
-   "status": "ok",
-   "durationMs": 686,
-   "detail": "digest new=3 settled=1 bridge=ok"
-  },
-  {
-   "id": "keepwarm",
-   "at": 1792597432022,
-   "status": "ok",
-   "durationMs": 154,
-   "detail": "HEARTBEAT OK 154ms boot=15:43:36Z sha=7ff39fb"
-  },
-  {
-   "id": "sweep",
-   "at": 1792597450198,
-   "status": "ok",
-   "durationMs": 6761,
-   "detail": "GREEN: all services up · sentinel not RED"
-  },
   {
    "id": "keepwarm",
    "at": 1792597732022,
@@ -514,6 +498,27 @@
    "status": "ok",
    "durationMs": 66,
    "detail": "AMBER: toobit-bridge doctrine: 1 violation(s) — last=NOTIONAL-DELTA: exp=25.00 act=8.20 (6719bps)"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1792712010186,
+   "status": "ok",
+   "durationMs": 18,
+   "detail": "HEARTBEAT OK 18ms boot=23:24:02Z sha=6d5234e"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1792712310186,
+   "status": "ok",
+   "durationMs": 26,
+   "detail": "HEARTBEAT OK 26ms boot=23:24:02Z sha=6d5234e"
+  },
+  {
+   "id": "sweep",
+   "at": 1792712310186,
+   "status": "ok",
+   "durationMs": 37,
+   "detail": "AMBER: sentinel :3030 verdict AMBER · toobit-bridge doctrine: 1 violation(s) — last=NOTIONAL-DELTA: exp=25.00 act=8.20 (6719bps"
   }
  ],
  "watchRuns": [
