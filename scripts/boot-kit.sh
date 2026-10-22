@@ -1,16 +1,32 @@
 #!/usr/bin/env bash
-# ── NEXUS-LIVE BOOT-KIT v1.0 — idempotent boot-integrity kit ────────────────
+# ── NEXUS-LIVE BOOT-KIT v2.0 — idempotent boot-integrity kit ────────────────
 # Operator-approved 2026-09-17 (blanket supervisor approval: «تمام تصمیمات و
 # پیشنهادات سوپروایزر را تایید می کنم، کامل و مهندسی انجام بده»).
+# v2.0 (RECOVERY-20261022b, operator order «تمام توصیه‌ها را کامل و مهندسی
+# اجرا کن» + «بک‌اپ‌گیری در تلگرام رو لقو کن»): adds the planes the 22:26Z
+# re-provision proved missing:
+#   (0) LINEAGE plane      — the killer gap: boot extracts the STALE
+#                            /home/sync/repo.tar (Oct-15, Sep-era db=754) and
+#                            the engine happily writes NEW signals into the OLD
+#                            ledger. v2 detects ledgerTotal<2000 and restores
+#                            the golden db (newest backup-ring snapshot, else
+#                            the PolarFS /tmp/my-project mirror) — ONLY while
+#                            the app is down (never swaps under a live writer).
+#   (0b) ENV plane         — start.sh truncates .env to DATABASE_URL-only at
+#                            every repo.tar restore; v2 restores the full
+#                            10-key .env from the PolarFS mirror (chmod 600,
+#                            values never echoed).
+#   (0c) NEXTCACHE plane   — delegates to scripts/next-cache.sh restore
+#                            (warm .next from PolarFS → no cold-compile OOM).
+#   (0d) GIT plane         — repo.tar ships without .git (3.5GB bloat);
+#                            v2 re-anchors lineage from GitHub (--depth 20,
+#                            token from .env, never echoed) so armor can resume.
 #
-# Closes the three failure planes exposed by the 06:26Z sandbox rollback:
+# v1 planes retained unchanged:
 #   (1) FILE plane        — infra kit files vanish → verify manifest, restore
-#                           missing files from the newest snapshot zip (then
-#                           upload/restore-sep14 mirror for mini-services).
-#   (2) DEPENDENCY plane  — node_modules reinstalled without `prisma generate`
-#                           (stale client: "Unknown field reachedTp") and
-#                           mini-service deps missing (socket.io) → detect
-#                           drift, regenerate/install in --fix mode.
+#                           missing files from the newest snapshot zip.
+#   (2) DEPENDENCY plane  — node_modules without prisma generate / missing
+#                           mini-service deps → detect drift, regenerate/install.
 #   (3) PROCESS plane     — bridge/liq/ws/watchdog stay dead after a tree
 #                           restart → port-liveness with idempotent starts
 #                           (delegates app restart to dev-up.sh).
@@ -29,7 +45,87 @@ BACKUPS="$ROOT/backups"
 cd "$ROOT" || exit 1
 ACTIONS=""
 
-# ── (1) FILE plane — infra kit manifest ─────────────────────────────────────
+# ── (0b) ENV plane — .env truncated by start.sh repo.tar restore ───────────
+ENV_STATUS="OK"
+ENV_REQUIRED="DATABASE_URL TELEGRAM_BOT_TOKEN TELEGRAM_CHAT_ID NEXUS_CONTROL_KEY BRIDGE_TOKEN BACKUP_PASSPHRASE GITHUB_TOKEN NEXTAUTH_URL NEXTAUTH_SECRET"
+ENV_MISSING=""
+for k in $ENV_REQUIRED; do grep -q "^${k}=" "$ROOT/.env" 2>/dev/null || ENV_MISSING="$ENV_MISSING $k"; done
+if [ -n "$ENV_MISSING" ]; then
+  ENV_STATUS="TRUNCATED"
+  if [ "$MODE" = "fix" ] && [ -s /tmp/my-project/.env ]; then
+    cp -a /tmp/my-project/.env "$ROOT/.env" && chmod 600 "$ROOT/.env"
+    STILL=""; for k in $ENV_REQUIRED; do grep -q "^${k}=" "$ROOT/.env" || STILL="$STILL $k"; done
+    if [ -z "$STILL" ]; then ENV_STATUS="RESTORED"; ACTIONS="$ACTIONS env:restored-from-mirror"; else ENV_STATUS="UNFIXED"; ACTIONS="$ACTIONS env:mirror-incomplete($STILL)"; fi
+  else
+    ACTIONS="$ACTIONS env:truncated($ENV_MISSING)"
+  fi
+fi
+
+# ── (0c) NEXTCACHE plane — warm .next restore (P1 spike-cut) ───────────────
+NC_STATUS="cold"
+NC_OUT=$(bash "$ROOT/scripts/next-cache.sh" restore 2>/dev/null || true)
+case "$NC_OUT" in restore:OK*) NC_STATUS="restored"; ACTIONS="$ACTIONS next-cache:restored" ;; restore:current*) NC_STATUS="current" ;; *) NC_STATUS="cold" ;; esac
+
+# ── (0) LINEAGE plane — golden db restore (v2.0 killer gap) ────────────────
+LINEAGE_STATUS="OK"
+LEDGER=$(bun -e 'import{Database} from "bun:sqlite";try{const db=new Database("/home/z/my-project/db/custom.db",{readonly:true});db.exec("PRAGMA busy_timeout=2500");console.log(Number(db.query("SELECT COUNT(*) n FROM Signal").get()?.n??-1));db.close()}catch(e){console.log(-1)}' 2>/dev/null || echo -1)
+if [ "$LEDGER" -lt 2000 ] 2>/dev/null || [ "$LEDGER" = "-1" ]; then
+  LINEAGE_STATUS="STALE($LEDGER)"
+  APP_UP=$(curl -s -m 4 -o /dev/null -w '%{http_code}' http://localhost:3000/api/pulse 2>/dev/null || echo 000)
+  if [ "$APP_UP" = "200" ]; then
+    # never swap the db under a live writer — defer to a dev-up restart window
+    ACTIONS="$ACTIONS lineage:STALE($LEDGER)-deferred(app-up)"
+  elif [ "$MODE" = "fix" ]; then
+    STAGE=$(mktemp -d); DONE=""
+    # source 1: newest backup-ring snapshot that carries db/custom.db
+    for Z in $(ls -1t /tmp/my-project/backups/nexus-snapshot-*.zip 2>/dev/null | head -4); do
+      (cd "$STAGE" && unzip -o -q "$Z" "db/custom.db" 2>/dev/null) && [ -s "$STAGE/db/custom.db" ] && { DONE="$Z"; break; }
+    done
+    # source 2: PolarFS mirror db (frozen Oct-21, 2963 signals)
+    [ -z "$DONE" ] && [ -s /tmp/my-project/db/custom.db ] && { cp -a /tmp/my-project/db/custom.db "$STAGE/db/custom.db"; DONE="mirror"; }
+    if [ -n "$DONE" ]; then
+      GOLD=$(bun -e "import{Database} from \"bun:sqlite\";try{const db=new Database(process.argv[1],{readonly:true});db.exec(\"PRAGMA busy_timeout=2500\");const c=Number(db.query(\"SELECT COUNT(*) n FROM Signal\").get()?.n??-1);const i=db.query(\"PRAGMA integrity_check\").get();db.close();console.log(c+(i&&i.integrity_check==='ok'?'':'-BAD'))}catch(e){console.log('-ERR')}" "$STAGE/db/custom.db" 2>/dev/null || echo -ERR)
+      case "$GOLD" in
+        *BAD*|*ERR*|*-1*) ACTIONS="$ACTIONS lineage:source-rejected($GOLD)" ;;
+        *[0-9]*)
+        if [ "${GOLD%%-*}" -ge 2000 ] 2>/dev/null; then
+          rm -f "$ROOT/db/custom.db-wal" "$ROOT/db/custom.db-shm"
+          cp -a "$STAGE/db/custom.db" "$ROOT/db/custom.db" && chmod 644 "$ROOT/db/custom.db"
+          LINEAGE_STATUS="RESTORED($GOLD)"; ACTIONS="$ACTIONS lineage:restored($GOLD from $(basename "${DONE:-?}"))"
+        else ACTIONS="$ACTIONS lineage:source-too-small($GOLD)"; fi
+        ;;
+      esac
+    else ACTIONS="$ACTIONS lineage:no-source-found"; fi
+    rm -rf "$STAGE"
+  else
+    ACTIONS="$ACTIONS lineage:STALE($LEDGER)(check-only)"
+  fi
+fi
+
+# ── (0d) GIT plane — re-anchor lineage from GitHub when .git is gone ───────
+GIT_STATUS="OK"
+if [ ! -d "$ROOT/.git/objects" ]; then
+  GIT_STATUS="MISSING"
+  if [ "$MODE" = "fix" ]; then
+    GT=$(grep '^GITHUB_TOKEN=' "$ROOT/.env" 2>/dev/null | cut -d= -f2- | tr -d '"' | tr -d ' ')
+    if [ -n "$GT" ]; then
+      git init -q "$ROOT" 2>/dev/null
+      git -C "$ROOT" remote remove origin 2>/dev/null
+      if git -C "$ROOT" remote add origin "https://x-access-token:${GT}@github.com/sarajafari7893-eng/neo.git" 2>/dev/null \
+         && timeout 240 git -C "$ROOT" fetch --depth 20 origin main 2>>"$ROOT/logs/boot-kit-git.log" \
+         && git -C "$ROOT" reset --soft FETCH_HEAD 2>>"$ROOT/logs/boot-kit-git.log" \
+         && git -C "$ROOT" remote set-url origin "https://github.com/sarajafari7893-eng/neo.git"; then
+        GIT_STATUS="REANCHORED"; ACTIONS="$ACTIONS git:reanchored(depth20)"
+      else
+        git -C "$ROOT" remote set-url origin "https://github.com/sarajafari7893-eng/neo.git" 2>/dev/null
+        GIT_STATUS="UNFIXED"; ACTIONS="$ACTIONS git:reanchor-FAILED"
+      fi
+      unset GT
+    else ACTIONS="$ACTIONS git:no-token"; fi
+  else ACTIONS="$ACTIONS git:missing(check-only)"; fi
+fi
+
+# ── (1) FILE plane — infra kit manifest ─────────────────────────────────
 KIT=(
   "scripts/dev-up.sh"
   "scripts/telegram-send.sh"
@@ -163,8 +259,9 @@ if [ "$MODE" = "fix" ]; then
   PORTS="app:$APP ws:$(probe http://localhost:3003/) bridge:$(curl -s -m 6 http://localhost:3005/health 2>/dev/null | grep -o '"ok":true' | head -1) liq:$(probe http://localhost:3010/health) sf:$(probe http://localhost:3017/health) wd:$( { curl -s -m 4 -o /dev/null http://localhost:3020/ 2>/dev/null && echo up; } || echo down)"
 fi
 
-echo "BOOT-KIT $MODE — files:$FILE_STATUS · prisma:$PRISMA_STATUS · deps:$DEPS_STATUS · $PORTS ·$ACTIONS"
-[ "$FILE_STATUS" = "OK" ] && [ "$PRISMA_STATUS" != "DRIFT" ] && [ "$PRISMA_STATUS" != "REGEN-FAILED" ] \
-  && [ "$DEPS_STATUS" != "UNFIXED" ] && echo "$PORTS" | grep -q "app:200" && exit 0
+echo "BOOT-KIT $MODE — lineage:$LINEAGE_STATUS · env:$ENV_STATUS · cache:$NC_STATUS · git:$GIT_STATUS · files:$FILE_STATUS · prisma:$PRISMA_STATUS · deps:$DEPS_STATUS · $PORTS ·$ACTIONS"
+[ "$LINEAGE_STATUS" = "OK" ] && [ "$ENV_STATUS" != "TRUNCATED" ] && [ "$ENV_STATUS" != "UNFIXED" ] \
+  && [ "$FILE_STATUS" = "OK" ] && [ "$PRISMA_STATUS" != "DRIFT" ] && [ "$PRISMA_STATUS" != "REGEN-FAILED" ] \
+  && [ "$DEPS_STATUS" != "UNFIXED" ] && [ "$GIT_STATUS" != "UNFIXED" ] && echo "$PORTS" | grep -q "app:200" && exit 0
 [ "$MODE" = "fix" ] && exit 0
 exit 1

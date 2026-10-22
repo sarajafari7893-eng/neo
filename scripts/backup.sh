@@ -276,7 +276,18 @@ if [ -n "$PASS" ] && [ -s "$OUT" ]; then
 fi
 
 # ── off-site tier: upload ONLY the encrypted archive (plain zip never leaves the sandbox)
+# ── v3.4 TELEGRAM OFF-SITE RETIREMENT (operator order 2026-10-22
+# «بک‌اپ‌گیری در تلگرام رو لقو کن», trace 1a165f73a1dfc38d) ────────────────────
+# ALL telegram upload tiers below (main .enc + calibration, @mytradeneo
+# channel parts/kit/index, .env version push) are RETIRED by default.
+# Recovery truth now = ① backup ring /tmp/my-project/backups (PolarFS)
+# ② golden repo.tar on /home/sync (OSS — auto-restored by /start.sh at every
+# boot) ③ git bundles ④ GitHub origin/main (credential store, RECOVERY-20261022b).
+# Export NEXUS_BACKUP_OFFSITE=1 to explicitly re-enable the telegram tiers.
+OFFSITE_ENABLED=0
+[ "${NEXUS_BACKUP_OFFSITE:-0}" = "1" ] && OFFSITE_ENABLED=1
 OFFSITE_STATUS="SKIPPED"
+[ "$OFFSITE_ENABLED" = "0" ] && OFFSITE_STATUS="DISABLED(operator-order-20261022)"
 BYTES=$(stat -c%s "$OUT_ENC" 2>/dev/null || echo 0)
 # v3.2: CHAT is fetched ONCE here and reused by BOTH off-site tiers (main snapshot AND the
 # .env versioning tier below) — env history keeps its off-site coverage even when the main
@@ -289,7 +300,7 @@ console.log(r?.value ?? '');
 await db.\$disconnect();
 " 2>/dev/null)
 # Telegram bot upload hard limit = 50MB; gate at 45MB for headroom
-if [ -n "$TOKEN" ] && [ "$ENC_STATUS" = "ENCRYPTED" ] && [ "$BYTES" -gt 0 ] && [ "$BYTES" -lt 47185920 ]; then
+if [ "$OFFSITE_ENABLED" = "1" ] && [ -n "$TOKEN" ] && [ "$ENC_STATUS" = "ENCRYPTED" ] && [ "$BYTES" -gt 0 ] && [ "$BYTES" -lt 47185920 ]; then
   if [ -n "$CHAT" ]; then
     RES=$(curl -s -m 120 -X POST "https://api.telegram.org/bot$TOKEN/sendDocument" \
       -F "chat_id=$CHAT" \
@@ -317,9 +328,10 @@ fi
 # sandbox (or any machine) can rebuild the archive from parts alone using only the
 # bot token + passphrase. Index = append-only, LAST block is the latest truth.
 CHANNEL_STATUS="SKIPPED"
+[ "$OFFSITE_ENABLED" = "0" ] && CHANNEL_STATUS="DISABLED(operator-order-20261022)"
 CHANNEL="@mytradeneo"
 INDEX_FILE="$BACKUPS/RECOVERY-INDEX-latest.txt"
-if [ "$ENC_STATUS" = "ENCRYPTED" ] && [ -s "$OUT_ENC" ]; then
+if [ "$OFFSITE_ENABLED" = "1" ] && [ "$ENC_STATUS" = "ENCRYPTED" ] && [ -s "$OUT_ENC" ]; then
   # kit files must exist before uploads (self-heal: recreate runbook if missing)
   [ -f "$ROOT/RECOVERY-RUNBOOK.md" ] || echo "# RECOVERY-RUNBOOK missing at $(date -u +%FT%TZ)" > "$ROOT/RECOVERY-RUNBOOK.md"
   IDX_BLOCK=""
@@ -423,7 +435,7 @@ if [ -n "$PASS" ]; then
       ENV_LAST_FILE=$(basename "$ENV_ENC")
       ls -1t "$ENVDIR"/env-*.enc 2>/dev/null | tail -n +13 | while read -r old; do rm -f "$old"; done
       ENV_VER_COUNT=$(ls -1 "$ENVDIR"/env-*.enc 2>/dev/null | wc -l)
-      if [ -n "$TOKEN" ] && [ -n "$CHAT" ]; then
+      if [ "$OFFSITE_ENABLED" = "1" ] && [ -n "$TOKEN" ] && [ -n "$CHAT" ]; then
         ENVRES=$(curl -s -m 60 -X POST "https://api.telegram.org/bot$TOKEN/sendDocument" \
           -F "chat_id=$CHAT" \
           -F "document=@$ENV_ENC" \

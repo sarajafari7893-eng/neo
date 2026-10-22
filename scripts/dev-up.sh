@@ -107,6 +107,16 @@ else
       fi
     fi
   fi
+  # v9.2.1 (RECOVERY-20261022b, P1 spike-cut): warm-cache restore — after a
+  # NON-escalated restart where .next is missing (post-reset boot, manual
+  # wipe), restore the PolarFS warm cache instead of compiling cold (the
+  # 2.3-3GB cold-compile spike = the VM-reset root cause). AUTO-FRESH/
+  # explicit --fresh intentionally skip this: those mean the LOCAL cache was
+  # corrupt, and a stamp-guarded restore of the healthy PolarFS copy is
+  # deliberately deferred to the next plain restart after a green streak.
+  if [ "$FRESH" != "1" ] && [ ! -d /home/z/my-project/.next/dev ]; then
+    bash /home/z/my-project/scripts/next-cache.sh restore >> /home/z/my-project/logs/next-cache.log 2>&1 || true
+  fi
   # v9.0 EQ-97 MEMORY FLOOR before spawn — the two Oct-11 OOMs were cold
   # compiles landing on a memory-starved box (MemAvailable <350MB). After the
   # old server dies its RSS returns to the OS quickly; WAIT for the floor
@@ -153,6 +163,9 @@ echo "app:$code"
     c=$(curl -s -m 90 -o /dev/null -w '%{http_code}' http://localhost:3000/ 2>/dev/null || true)
     if [ "$c" = "200" ]; then
       echo "[dev-up] dashboard self-warm OK (try $i)"
+      # v9.2.1 P1 spike-cut: refresh the warm cache for the NEXT boot —
+      # background + stamp-guarded (no-op when src unchanged)
+      bash /home/z/my-project/scripts/next-cache.sh save >> /home/z/my-project/logs/next-cache.log 2>&1 &
       break
     fi
   done

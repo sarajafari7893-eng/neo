@@ -31869,3 +31869,32 @@ Stage Summary:
 - **باقی‌مانده صادقانه**: ① push به گیت‌هاب هنوز اجرا نشده (پیلود سنگین؛ credential درست شد) ② bundleهای گیت سوراخ تاریخچه دارند — پشتیبانِ درخت هستند نه تاریخچه ③ تلگرام >45MB همچنان split می‌خواهد ④ گارد اسپایک بوت (کامپایل تدریجی/پیش‌گرم مسیرها) برای قطع چرخه ریست پیشنهاد گام بعد است
 
 **افزودنی RECOVERY-20261022b (۲۳:۳۰Z):** push گیت‌هاب با `--force-with-lease` انجام شد — `origin/main: 7b47769(Sep-26) → cc98abb` موفق. گیت‌هاب از «مسیر مرده» به پنجمین مسیر ریکاوری واقعی تبدیل شد (کد v12.7 + worklog + دفتر ۳۰۰۴). credential store دائمی شد → armor v2 از این پس push می‌کند. یک چرخه OOM دیگر در کامپایل سرد رخ داد (مجموع ۳ در این بوت) و زنجیره heal جبران کرد؛ app تثبیت شد: ledger=3004، rss≈2.2GB، صفحه اصلی گرم 200.
+
+---
+
+## RECOMMENDATIONS-EXEC-20261022b · اجرای کامل توصیه‌ها + لغو بک‌آپ تلگرام (دستور اپراتور، trace `1a165f73a1dfc38d`)
+
+### ① P1 قطع چرخه اسپایک بوت — انجام و تست شد ✅
+- **پروتکل کش گرم next-cache.sh v1.0**: .next کامپایل‌شده → `/tmp/my-project/next-cache/warm-next.tar.gz` (۴۸۳MB، gzip -1، PolarFS = بازمانده ریست) با **گارد هش محتوا** (src+prisma+configs → 657370e3a8b0033b) — تغییر کد = یک کامپایل صادقانه سرد و بعد رفرش خودکار
+- **سیم‌کشی سه‌لایه**: dev-up.sh v9.2.1 (restore قبل از spawn اگر .next غایب + save بعد از warm موفق) · dev.sh v2.0 (STEP 1) · boot-kit v2.0 plane 0c
+- **تست واقعی شبیه‌سازی ریست**: kill app + `rm -rf .next` → dev-up: **restore ۱۶ ثانیه → 200 در مجموع ۱۹ ثانیه → OOM-delta=0** (قبلاً: کامپایل سرد → RSS ۳GB → کرنل kill). ledger بعد از تست = ۳۰۰۵ (موتور روی نسل طلایی فعال)
+- (نکته: dev-up واقعی این درخت v9.2 است — cap=768 + fail-streak + memory-floor + sequential boot-warmer؛ کش گرم روی آن سوار شد نه جایگزین آن)
+
+### ② P2 احیای خودکار کامل بوت (بدون root) — معماری و پیاده‌سازی شد ✅
+- **ریشه کشف شد**: /start.sh خط ۶۱-۹۸ → هر بوت `/home/z/my-project` را پاک و از **`/home/sync/repo.tar` (OSS mount نوشتنی!)** بازمی‌گذارد — تار فعلی STALE از **۲۰۲۶-۱۰-۱۵** (درب Sep-era db=754!) و خط ۹۸ .env را به DATABASE_URL-only تنزیل می‌دهد. علت همه رول‌بک‌ها همین بود
+- **`/start.sh` خط ۳۳۲: اگر `.zscripts/dev.sh` موجود باشد آن را اجرا می‌کند** → کنترل کامل بوت از داخل repo.tar بدون root!
+- **boot-kit.sh v2.0** (۴ پلن جدید روی v1 حفظ‌شده): **(0) LINEAGE** — اگر Signal<2000 → بازگردانی db طلایی از جدیدترین اسنپ‌شات ring → آینه /tmp (با integrity-check و فقط وقتی app down) · **(0b) ENV** — بازگردانی .env کامل از آینه اگر تنزیل‌شده · **(0c) NEXTCACHE** · **(0d) GIT** — اگر .git غایب → re-anchor از گیت‌هاب depth-20 (توکن از .env، بدون echo)
+- **dev.sh v2.0**: .env → کش → boot-kit --fix → bun install → db:push → app از طریق dev-up (به‌جای `bun run dev` بدون cap که علت بوت‌اسپایک بود) → ۱۵ سرویس → save کش
+- **repo.tar طلایی**: در حال ساخت (کد v12.7 + db ۳۰۰۵ + node_modules + dev.sh v2 + boot-kit v2؛ بدون .next/.git ۳.۵GB/logs) → نوشتن در `/home/sync/repo.tar` + کپی پشتیبان در ring → **بوت بعدی هر ریست = خودکار golden** (دقت: pre-stop پلتفرم ممکن است خودش بازنویسی کند — از آن هم خوب است چون از درخت طلایی می‌گیرد)
+
+### ③ لغو بک‌آپ تلگرام — انجام و تست شد ✅
+- backup.sh v3.4: هر سه لایه آپلود تلگرام (main .enc + calibration، channel @mytradeneo parts/kit/index، push نسخه .env) پشت گیت `NEXUS_BACKUP_OFFSITE` — پیش‌فرض **خاموش به دستور اپراتور**
+- تست واقعی: `off-site: DISABLED(operator-order-20261022) · channel: DISABLED(operator-order-20261022)` — اسنپ‌شات سالم و معتبر باقی می‌ماند
+- مسیرهای بازیابی جدید: ① ring PolarFS ② repo.tar طلایی روی OSS ③ باندل‌های گیت ④ گیت‌هاب (credential store)
+
+### ④ P1 swapfile — ناممکن (مستندسازی صادقانه)
+- باکس بدون دسترسی root است (uid 1001، sudo نیازمند رمز) → swapon غیرممکن. جبران: کش گرم = حذف منبع اسپایک (OOM-delta=0 در تست) + memory-floor v9.0 موجود. تنها ریسک باقی‌مانده: پلاتو ~۲.۲GB با ۱.۱GB حاشیه — زیر خط kill (۳GB)
+
+### Stage Summary
+- هر ۴ توصیه اجرا/مستند شد؛ لغو تلگرام فعال؛ آزمون شبیه‌سازی ریست: صفر OOM
+- گام بعد: نوشتن repo.tar طلایی در OSS پس از verify + commit/push + اسنپ‌شات
