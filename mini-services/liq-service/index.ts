@@ -468,6 +468,33 @@ connectOkx();
 connectBitget();
 connectHeartbeat();
 
+// ── venue-liveness supervisor (v2.1, Task 41, operator bug report) ──────────
+// A venue socket can sit "connected" while delivering NOTHING for hours —
+// observed 2026-09-27: binance !forceOrder@arr silent 2h+ (events=0) while
+// bybit fired 138 and okx 463 — the fstream half-open pathology (same reason
+// trade-service's futures aggTrade WS is suppressed and SPOT-MIRROR exists).
+// Rule: only force a reconnect when the HOST is provably alive (heartbeat
+// btcusdt@aggTrade fresh <10min) but the venue itself has been silent >60min.
+// That isolates venue-specific dead streams from host-level outages and caps
+// churn at ≤1 reconnect/hour/venue. Counters stay honest (reconnects++).
+const LIVENESS_TICK_MS = 5 * 60_000;
+const LIVENESS_SILENT_MS = 60 * 60_000;
+const LIVENESS_HB_FRESH_MS = 10 * 60_000;
+setInterval(() => {
+  const now = Date.now();
+  const hbFresh = lastHeartbeatFrame && now - lastHeartbeatFrame < LIVENESS_HB_FRESH_MS;
+  if (!hbFresh) return; // host-level problem — venue churn would be noise
+  for (const v of ["binance", "bybit", "okx", "bitget"] as VenueName[]) {
+    const st = venues[v];
+    if (!st.connected || !st.ws) continue;
+    const silentFor = st.lastEventAt ? now - st.lastEventAt : now - startedAt;
+    if (silentFor > LIVENESS_SILENT_MS) {
+      console.log(`[liq-service] liveness: ${v} silent ${Math.round(silentFor / 60000)}min while host delivers frames — forcing reconnect`);
+      try { st.ws.close(); } catch { /* onclose → reconnect */ }
+    }
+  }
+}, LIVENESS_TICK_MS);
+
 const server = Bun.serve({
   port: PORT,
   fetch(req) {

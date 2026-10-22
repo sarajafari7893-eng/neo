@@ -233,6 +233,11 @@ export function NetPnlLedgerCard({ ledger, afterlife }: { ledger: PnlLedger; aft
         <p className="font-terminal text-[9px] leading-relaxed tracking-[0.06em] text-ink-3">
           BARS = REAL NET $ (MARGIN × ENGINE NET %, FEES + FUNDING DEDUCTED — PRINTED ON EVERY BAR) · EXPIRED SIGNALS DO HIT THE ACCOUNT BALANCE AT THE TTL MARK PRICE. VIOLET LINE = EST PNL % — v6.2: THE ACTUAL RESULT OF EVERY SIGNAL (ENGINE FEE-NET LEVERED %) SUMMED PER BUCKET — NO IDEALIZED NORMS. BUCKETS = ASIA/TEHRAN LOCAL DAYS/WEEKS/MONTHS (+03:30).
         </p>
+        {totals.excludedN > 0 && (
+          <p className="rounded-md border border-rose-400/20 bg-rose-400/[0.04] px-2 py-1.5 font-terminal text-[9px] leading-relaxed tracking-[0.06em] text-rose-300" data-testid="ledger-excluded">
+            CLEAN LEDGER: {totals.excludedN} INTEGRITY-FLAGGED ROW{totals.excludedN === 1 ? "" : "S"} (VOID · PHANTOM-FEED) EXCLUDED FROM EVERY BUCKET — THE PAPER ACCOUNT KEEPS FULL HISTORY; THIS LEDGER STAYS CLEAN (v10.18 DOCTRINE).
+          </p>
+        )}
         <p className="rounded-md border border-cyan-400/20 bg-cyan-400/[0.04] px-2 py-1.5 font-terminal text-[9px] leading-relaxed tracking-[0.06em] text-[#45f0df]">
           EXPIRY POST-MORTEM: {afterlife.wouldHaveWonPct}% OF EXPIRED SIGNALS WOULD HAVE HIT TP WITHIN 48H AFTER TTL · AVG POST-EXPIRY MFE {afterlife.avgPostMfe >= 0 ? "+" : ""}
           {afterlife.avgPostMfe.toFixed(1)}% — DYNAMIC EXPIRY GATE: {totals.ttlExtended} EXTENSION{totals.ttlExtended === 1 ? "" : "S"} GRANTED →{" "}

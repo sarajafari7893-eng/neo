@@ -109,7 +109,9 @@ console.log(miss.join(','));
   if [ -n "$MISSING_DEP" ]; then
     DEPS_STATUS="GAP"
     if [ "$MODE" = "fix" ]; then
-      (cd "$ROOT/mini-services/$svc" && bun install >/dev/null 2>&1) && ACTIONS="$ACTIONS deps:$svc(installed:$MISSING_DEP)" && DEPS_STATUS="FIXED" \
+      # TASK-50: install output must be visible — the silent swallow hid the
+      # price-ws socket.io failure that killed the whole 09-29 18:06Z boot.
+      (cd "$ROOT/mini-services/$svc" && bun install >>"$ROOT/logs/boot-kit-deps.log" 2>&1) && ACTIONS="$ACTIONS deps:$svc(installed:$MISSING_DEP)" && DEPS_STATUS="FIXED" \
         || { ACTIONS="$ACTIONS deps:$svc(FAILED)"; DEPS_STATUS="UNFIXED"; }
     else
       ACTIONS="$ACTIONS deps:$svc(missing:$MISSING_DEP)"
@@ -123,11 +125,15 @@ APP=$(probe http://localhost:3000/api/pulse)
 WS=$(probe http://localhost:3003/)
 BR=$(curl -s -m 6 http://localhost:3005/health 2>/dev/null | grep -o '"ok":true' | head -1)
 LIQ=$(probe http://localhost:3010/health)
+SF=$(probe http://localhost:3017/health)
 WD=""
 curl -s -m 4 -o /dev/null http://localhost:3020/ 2>/dev/null && WD="up" || WD="down"
-PORTS="app:$APP ws:$WS bridge:${BR:-down} liq:$LIQ wd:$WD"
+PORTS="app:$APP ws:$WS bridge:${BR:-down} liq:$LIQ sf:$SF wd:$WD"
 PROC_STATUS="OK"
 if [ "$MODE" = "fix" ]; then
+  # TASK-50: stale snapshot-era locks (dead PIDs from a previous generation)
+  # must never survive a boot — the 09-29 price-ws corpse locked its own restart.
+  rm -f "$ROOT"/mini-services/*/.dev.lock
   [ "$BR" != '"ok":true' ] && {
     (cd "$ROOT/mini-services/telegram-bridge" && nohup bun index.ts >> "$ROOT/logs/bridge-relay.log" 2>&1 &)
     sleep 3; ACTIONS="$ACTIONS started:bridge"; PROC_STATUS="FIXED"
@@ -140,6 +146,11 @@ if [ "$MODE" = "fix" ]; then
     (cd "$ROOT/mini-services/price-ws" && nohup bun run dev >> "$ROOT/logs/price-ws.log" 2>&1 &)
     sleep 2; ACTIONS="$ACTIONS started:ws"; PROC_STATUS="FIXED"
   }
+  # v1.4.5 STABLEFLOW build (2026-09-30): family-E substrate collector
+  [ "$SF" != "200" ] && {
+    (cd "$ROOT/mini-services/stable-feed" && nohup bun index.ts >> "$ROOT/logs/stable-feed.log" 2>&1 &)
+    sleep 2; ACTIONS="$ACTIONS started:sf"; PROC_STATUS="FIXED"
+  }
   [ "$WD" = "down" ] && {
     bash "$ROOT/scripts/watchdog-up.sh" >/dev/null 2>&1
     sleep 2; ACTIONS="$ACTIONS started:watchdog"; PROC_STATUS="FIXED"
@@ -149,7 +160,7 @@ if [ "$MODE" = "fix" ]; then
     APP=$(probe http://localhost:3000/api/pulse)
     ACTIONS="$ACTIONS restarted:app"; PROC_STATUS="FIXED"
   }
-  PORTS="app:$APP ws:$(probe http://localhost:3003/) bridge:$(curl -s -m 6 http://localhost:3005/health 2>/dev/null | grep -o '"ok":true' | head -1) liq:$(probe http://localhost:3010/health) wd:$( { curl -s -m 4 -o /dev/null http://localhost:3020/ 2>/dev/null && echo up; } || echo down)"
+  PORTS="app:$APP ws:$(probe http://localhost:3003/) bridge:$(curl -s -m 6 http://localhost:3005/health 2>/dev/null | grep -o '"ok":true' | head -1) liq:$(probe http://localhost:3010/health) sf:$(probe http://localhost:3017/health) wd:$( { curl -s -m 4 -o /dev/null http://localhost:3020/ 2>/dev/null && echo up; } || echo down)"
 fi
 
 echo "BOOT-KIT $MODE — files:$FILE_STATUS · prisma:$PRISMA_STATUS · deps:$DEPS_STATUS · $PORTS ·$ACTIONS"

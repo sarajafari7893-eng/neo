@@ -13,7 +13,7 @@
 //   «تایید پیشنهادهای سوپروایزر کامل و مهندسی انجام بده»): DISLOCATION-GATE —
 //   cross-exchange venue-dislocation admission gate on the existing 4-venue
 //   consensus telemetry; rolling-5-scan median ≥ skipBps (150) skips, ≥ warnBps
-//   (50) admits at HALF margin tagged DISLOCATION-HALF; operator knobs
+//   (50) admits tagged DISLOCATION-HALF (FLAT-10: cohort tag only); operator knobs
 //   dislocationGate/dislocationWarnBps/dislocationSkipBps (clamped, audited).
 // v10.16 (deep-audit 3-a fixes, task 4-c — operator APPROVE «اجرا بندهای 1 تا 8 +
 //   یافته‌های P0 و P1 کامل و مهندسی»):
@@ -38,6 +38,8 @@
 
 import { db } from "@/lib/db";
 import type { Signal, MarketAsset } from "@prisma/client";
+import { recordTick, flushTickArchive } from "@/lib/tick-archive"; // Task 79 — tick archive (missing-data doctrine ①)
+import { recordFillLedger } from "@/lib/fill-ledger"; // Task 79 — fill/slippage ledger (missing-data doctrine ②)
 import { appendFileSync, mkdirSync, renameSync, statSync } from "node:fs"; // v10.16 — event archive sidecar
 import { fetchTickers, fetchKlines, fetchFuturesUniverse, fetchFuturesSymbols, fetchFuturesPoolStats, getFeedStatus } from "@/lib/market-feed";
 import { sweepConsensus } from "@/lib/multi-exchange";
@@ -52,6 +54,7 @@ import { maybeRawCalDeploy } from "@/lib/raw-cal"; // v9.1 RAW-CAL capture mode 
 import { recordRawcalSnapshot, checkRawcalMilestones, checkRawcalStallAlarm } from "@/lib/rawcal-telemetry"; // v9.2 RAW-CAL pace monitor (operator mandate: rhythm + book-growth watching)
 import { recordRawcalQuality } from "@/lib/rawcal-quality"; // v9.3 RAW-CAL sample quality lab — R6 data-health gate (operator mandate: healthy calibration data)
 import { computePumpPerformance, persistPumpPerformance } from "@/lib/pump-performance"; // v9.1 radar performance → AI journal
+import { getDeployTapeContext, bottomFadeVerdict, vRevVerdict, BOTTOM_FADE_DEFAULTS, VREV_DEFAULTS, type BottomFadeCfg, type VRevCfg } from "@/lib/entry-context"; // v12.1 TASK-48 ③④
 // v6.2.1 (architecture review P1): the three heavy LLM agents (governor /
 // supervisor / deep-learn) are DYNAMIC imports — their modules (and the AI
 // bridge they pull in) no longer sit on the engine boot path. Cost only gets
@@ -64,12 +67,27 @@ import { runTriggerCycle, canTriggerSpawn, markTriggerSpawn, isCounterCascadeSup
 import { entryGate } from "@/lib/execution/state-machine";
 import { readKillSwitch } from "@/lib/execution/kill-switch";
 import { feeBreakdown, confidenceMargin, ACCOUNT_START_USD, LADDER_TRANCHES, ladderWeightedMove } from "@/lib/accounting";
+// v12.0 Task-45 Q2 — open-pnl SINGLE SOURCE OF TRUTH: the close-all breaker and
+// the dashboard ACCOUNT bar must read the SAME number (the documented v11.5
+// contract; the bar had drifted to full-margin-at-current-price and overstated
+// the bankable book by re-pricing banked tranches at today's mark).
+import { liveOpenMarkPct, openBookNet } from "@/lib/open-pnl";
+// v12.0 Task 44-① — PRICE-ARMOR: zombie-ticker rejection + cross-plane
+// divergence guard + anchor-locked sim drift at the WRITE side (the tape must
+// never carry phantom prints; deploy-side PHANTOM-FEED v11.9 stays as layer 2).
+import { resolveTerminalPrice, isTradeableTicker } from "@/lib/price-armor";
+import { getCloseAllState, recordCloseAllTrigger } from "@/lib/close-all"; // v11.5 global open-pnl close-all breaker
+// Task 66 TRADEABILITY FLOOR — FLAT-10 keeps only the floor from sizing.ts
+// (sizing modes retired from the engine; /api/sizing remains analytics-only)
+import { tradeableFloorMargin } from "@/lib/sizing";
 import { evaluateTtlExtension, bumpTtlTelemetry, type TtlDecision } from "@/lib/ttl-gate";
 import { lessonThrAdj } from "@/lib/lesson-gate";
+import { entryLeversDeployGate } from "@/lib/entry-levers"; // v11.3 late-entry shield
 import { relaySignalEvent, relayArmed, ensureAutoDiscover, sendDirect } from "@/lib/notify";
-import { onsetTagFor } from "@/lib/volOnset";
+import { onsetTagFor, onsetGateViewFor } from "@/lib/volOnset";
 import { volCauseBoost } from "@/lib/volCause";
-import { peekSymbolFlow, maybeFlowScan, flowShiftTracking, type MtfRollup } from "@/lib/flow-scanner";
+import { peekSymbolFlow, ensureSymbolFlow, maybeFlowScan, flowShiftTracking, type MtfRollup } from "@/lib/flow-scanner";
+import { featureScaleOn, loadFeatureStats, rescaleCandidate, featureScaleHealth, noteRescale } from "./feature-scale";
 import { engineFlags } from "@/lib/engine-flags"; // v10.18 phased-consolidation flags (operator option A)
 // v8.1 P1/P2 (operator mandate «P1 و P2 رو کامل اجرا کن»): OI/funding board,
 // liquidation heatmap, volatility forecast and the risk overlay — all bounded
@@ -90,6 +108,16 @@ import { maybeAutoVerdictLearn } from "@/lib/verdict";
 // and deployment is journaled with its FULL reason payload — the live gauge
 // and the central AI core both study this ledger. Fire-and-forget, no SQLite.
 import { recordGateSamples, recordGateBlock, recordGateDeploy, type GateSample, type ThrBreakdown } from "@/lib/gate-journal";
+// v11.6 STRATEGY-PAUSE (EQ-97: «سه اقدام واقعی باقیمانده... را کامل و مهندسی
+// اجرا کن») — data-driven per-strategy risk switch (review #1 action + ledger
+// evidence AI-SCALP 14d n=284 WR 6.0% net −$39.35). Same gate family as
+// SYMBOL-CAP: auto deploys refused, forced/capture bypass tagged.
+import { isStrategyPaused, getStrategyPauseState } from "@/lib/strategy-pause";
+// v11.0 STABLECOIN FLOW (operator mandate 2026-09-30: «تمام فازها را کامل و
+// مهندسی اجرا کن») — family-E substrate gates. Board comes from the
+// stable-feed service via .data/stable-feed/board.json (file-only read,
+// 10s cache, fail-open with honest nulls — never blocks on the service).
+import { getStableBoard, depegMuted, stableRegimeVerdict } from "@/lib/stableflow";
 // v8.2 SHADOW-VETO (AI-core Phase 0, operator: «قدم بعدی پیشنهادی رو کامل و مهندسی
 // انجام بده»): tiered-authority second opinion at the gate fence — shadow
 // adjudication + would-have-won paper ledger + Wilson-LB A/B evidence.
@@ -104,7 +132,11 @@ import { buildResearchLadder, journalResearchShadowDeploy, settleResearchShadow 
 
 // v10.16 — engine identity bumped with the deep-audit fix package (P0-2 gate,
 // futures unification, event retention/archive, serial race, pump leak).
-const ENGINE_VERSION = "NEXUS-LIVE v10.18"; // v10.18 — phased consolidation (option A): radar-primary gated emission, ledger-integrity guards, sensor-bus dormancy
+// v11.1 — FLAT-10 (operator mandate 2026-10-07): every signal deploys at
+// exactly $10 margin; the sizing stack (governor/regime/crowd/short/stratW/
+// probation/probes/dislocation/R6-EDGE) is tag-only. FSB-1.0 scoreboard
+// removed per operator («مارک‌بورد رسمی FLAT-10 رو حذف کن»).
+export const ENGINE_VERSION = "NEXUS-LIVE v12.7"; // v11.8 — TASK-42 (operator mandate «دو توصیه باقی مانده را کامل و مهندسی اجرا کن»): ① anti-chase guards RE-ARMED (onsetRetestGuard 0→1, chaseThrAdj 0→6 = v6.7.2 evidence defaults) + RETEST GATE storm-class fix (latest-eruption anchoring incl. the FORMING bar, pre-eruption-close leg math, CHASE+FADE both gated — the Task-41 AGT fade-stops slipped past the armed gate three ways) ② LIQUIDITY-FLOOR deployability gate (volume24h ≥ $25M + ≥1 real venue quote; scan-pool exclusion + authoritative deploy gate — AGTUSDT sat at sim with 4 null venues and the focusSymbol path short-circuited the sim ban). v11.7 REENTRY-LOCKOUT ladder retained. v11.9 — TASK-43 (operator audit «استاپ‌های امروز»): LIQUIDITY-FLOOR hardening (sim-source veto + engine-price/real-kline divergence — NX-2741 AGTUSDT slipped through at ~+11% drift over the real Binance close on a flickering synthetic tape) + PHANTOM-FEED gate (XMRUSDT tape oscillated 118.7↔607.75 ×5, 314 jumps>10%/24h — NX-2736 −60.84% in 35s and NX-2744 −14.93% in 18s printed on phantom data). v12.0 — TASK-44/45 (operator orders «ترمیم writer فید» + «مدیریت egress/IP برای رفع بن fapi» + «چرا close-all@$20 شلیک نمی‌کند»): ① PRICE-ARMOR write-side (zombie-ticker rejection — measured XMRUSDT spot 118.70 bid=0/ask=0 zombie listing vs perp ~592; cross-plane 10% divergence guard; anchor-locked sim drift on lastLivePrice; TAPE PURITY — sim ticks never written to PricePoint/tick-archive) ② fapi-gate v2 egress manager (ipify sampler, rotation-aware early probe lifts the ban window the moment the NAT pool rotates clean, named-IP ban ledger persisted to .data/fapi-gate/bans.json) ③ open-pnl single source of truth (ACCOUNT bar ≡ close-all breaker — the $20 mandate now reads the same bankable number the bar shows). v12.1 — TASK-48 (operator mandate «پیشنهادها را کامل و مهندسی اجرا کن» — the four Task-47 APR/BRU forensics proposals): ① R6 RADAR LANE — SUCCESS-renom revival (0/119 conversion since 10-09 was a 100% VETO RATE, not dead code: R1 SHORT-GUARD + CHOP + MEMORY + MIN_SCORE dynamic killed every nomination; the lane bypasses ONLY the four cohort-blind mood gates with dailyCap 4 + all physical gates live + auto-demote at n≥30 probation fail) ② FLOW-NO-DATA honest verdict (70% of deploys were blind yet read NEUTRAL; blind-cache 20s TTL; optional flow-gate ships tag-only — blind cohort +$204 WR 57.1% outperformed sighted +$7) ③ BOTTOM-FADE gate (SHORT selling the bottom 30% of ±30m range with RSI≤25 or %B≤0 — replay: blocks NX-2770/2779/2769 = −$18.42, passes 14/14 winners) ④ V-REVERSAL gate (SHORT on a ≥1.5% young bounce off the local low inside a ≥2.5% range — blocks NX-2770's inverse-V; LONG mirror shadow-only). v12.7 — SENTINEL-20261020 (operator mandate «تمام توصیه‌های P1/P2 و مأموریت بعدی پیشنهادی را قابل راستی‌آزمایی کامل و مهندسی شده اجرا کن»): ① RE-ARM BRAKE (same-direction post-stop cooldown 360m, escalating 720m at ≥2 stops/24h — binds auto + RAW-CAL capture + radar/authority lanes, ONLY operator-forced passes tagged; replay .data/audit-rearm-brake.ts: 92 relay deploys/14d, 73 via RAW-CAL bypass incl. NX-2910 APR→NX-2911 6-SECOND relay and NX-2913→NX-2916 68s relay — the capture lane had become a repeat-stop relay) ② AI 429 shield cap 10m→30m + probe tail-gating (failed probes ~2/window → ≤1) ③ P2-b evaluation ledger: REGIME-VOLATILE cell WR 43.9% −$2.8 (n=66) — ×0.6/+6thr KEPT, data-led no-change decision.
 const MIN_TICK_MS = 3500;
 // v6.3: MAX_ACTIVE is now the governor-owned gate.maxActive knob (2–8, default 5)
 // — the static constant only remains as the fallback if the gate read fails.
@@ -150,6 +182,16 @@ let lastSimBanEventAt = 0;
 let lastRetestGateEventAt = 0;
 let lastRiskBlockEventAt = 0;
 let lastDecisiveEventAt = 0; // v10.6 decisive-excursion filter event throttle
+let lastSymbolCapEventAt = 0; // v11.4 same-symbol concentration cap event throttle
+let lastStratPauseEventAt = 0; // v11.6 strategy-pause gate event throttle
+let lastReentryLockoutEventAt = 0; // v11.7 re-entry lockout gate event throttle
+let lastRearmBrakeEventAt = 0; // v12.7 re-arm brake gate event throttle
+let lastLiquidityFloorEventAt = 0; // v11.8 liquidity/feed-integrity floor event throttle
+let lastPhantomFeedEventAt = 0; // v11.9 phantom-feed (corrupted-tape) gate event throttle
+let lastQuadShortEventAt = 0; // v11.6 Q2_SQUEEZE short-guard gate event throttle
+let lastFlowGateEventAt = 0; // v12.1 flow-gate (block mode) event throttle
+let lastBottomFadeEventAt = 0; // v12.1 bottom-fade guard event throttle
+let lastVRevEventAt = 0; // v12.1 V-reversal guard event throttle
 let lastPruneAt = 0;
 
 // ── v5.2 SELF-DRIVING HEARTBEAT — the engine must not depend on page polling ──
@@ -419,12 +461,14 @@ async function refreshUniverse(): Promise<void> {
   }
 }
 
-/** Scan-domain coverage for the pulse feed (tracked vs the whole futures market). */
-export async function getScanDomain(): Promise<{ tracked: number; poolTotal: number; liquidPool: number; target: number }> {
+/** Scan-domain coverage for the pulse feed (tracked vs the whole futures market).
+ *  v12.5 TASK-53: poolSource rides along — cards must say WHICH market counted
+ *  the pool (BINANCE-FAPI / BYBIT-MIRROR / PERSISTED), per the honesty laws. */
+export async function getScanDomain(): Promise<{ tracked: number; poolTotal: number; liquidPool: number; target: number; poolSource: string }> {
   const [tracked, pool] = await Promise.all([db.marketAsset.count(), fetchFuturesPoolStats()]);
   const gate = await getGateSettings();
   lastPoolSize = pool.totalUsdtPerps || lastPoolSize;
-  return { tracked, poolTotal: lastPoolSize, liquidPool: pool.liquidPool, target: gate.universeSize };
+  return { tracked, poolTotal: lastPoolSize, liquidPool: pool.liquidPool, target: gate.universeSize, poolSource: pool.source };
 }
 
 // purge open signal rows on dead markets? keep monitoring (documented) — only symbols
@@ -460,9 +504,15 @@ async function resolveOrphans(): Promise<void> {
 // not "live", or its last live tick is older than 120s — in all three cases
 // every settlement decision for that symbol simply WAITS for a live price.
 const SETTLEMENT_STALE_MS = 120_000;
-const gLive = globalThis as { __nexusLastLiveAt?: Map<string, number> };
+const gLive = globalThis as { __nexusLastLiveAt?: Map<string, number>; __nexusLastLivePrice?: Map<string, number> };
 const lastLiveAt: Map<string, number> = gLive.__nexusLastLiveAt ?? new Map<string, number>();
 gLive.__nexusLastLiveAt = lastLiveAt;
+// v12.0 price-armor — the last LIVE-verified price per symbol (companion of
+// lastLiveAt). The sim fallback and the divergence guard anchor on THIS, never
+// on MarketAsset.price (which a platform restore can rewind to an era value —
+// the measured XMR 118.7 phantom-anchor class).
+const lastLivePrice: Map<string, number> = gLive.__nexusLastLivePrice ?? new Map<string, number>();
+gLive.__nexusLastLivePrice = lastLivePrice;
 // the CURRENT tick's asset rows (refreshed at the end of updatePrices)
 let latestAssets = new Map<string, MarketAsset>();
 
@@ -476,6 +526,10 @@ function settlementUnsafe(symbol: string): boolean {
 // per-symbol 10min event throttle for the settlement-stall notice (same
 // last*EventAt pattern as the other engine event throttles)
 const settlementStallEventAt = new Map<string, number>();
+// v12.0 price-armor event throttles (30min zombie/rewind · 10min live-gap)
+const feedArmorZombieEventAt = new Map<string, number>();
+const feedArmorRewindEventAt = new Map<string, number>();
+const feedArmorGapEventAt = new Map<string, number>();
 async function noteSettlementStall(symbol: string): Promise<void> {
   const last = settlementStallEventAt.get(symbol) ?? 0;
   if (Date.now() - last < 600_000) return;
@@ -495,15 +549,44 @@ async function updatePrices(): Promise<MarketAsset[]> {
   for (const a of assets) {
     const t = tickers.get(a.symbol);
     const c = consensus.get(a.symbol);
-    // terminal price IS the median when ≥2 venues agree, else Binance mid
-    const next = c && c.venuesOk >= 2 && c.median ? c.median : t ? Number(t.lastPrice) : a.price * (1 + (Math.random() - 0.5) * 0.001); // sim drift last resort
-    if (!next || next <= 0) continue;
-    // v10.16 P0-2 — the terminal price is live-sourced iff a real ticker or a
-    // ≥2-venue consensus produced it (same predicate as `source` below); stamp
-    // the last-live clock ONLY on those ticks so the settlement gate can tell
-    // live data from the random-walk sim fallback.
-    const liveNow = !!(t || (c && c.venuesOk >= 2));
-    const change24h = t ? Number(t.priceChangePercent) : a.change24h;
+    // ── v12.0 PRICE-ARMOR (Task 44-①) — ONE writer-side decision per tick ──
+    // ① consensus (≥2 venues, robust median) wins; ② ticker only if tradeable
+    // (zombie/halted book refused) AND within 10% of the consensus / last live
+    // anchor; ③ sim drift LOCKED to the last live-verified price (never to the
+    // stored row a platform restore can rewind); ④ freeze when nothing is sane.
+    const tPrice = t ? Number(t.lastPrice) : 0;
+    const res = resolveTerminalPrice({
+      tPrice: tPrice > 0 ? tPrice : null,
+      tZombie: t ? !isTradeableTicker(t) : true,
+      tSpotOverlay: t?.plane === "spot",
+      consMedian: c?.median ?? null,
+      consVenues: c?.venuesOk ?? 0,
+      anchor: lastLivePrice.get(a.symbol) ?? null,
+      storedPrice: a.price,
+    });
+    const next = res.next;
+    if (!next || next <= 0) continue; // frozen — nothing sane to write
+    // v10.16 P0-2 — liveNow = a REAL perp source produced this tick (same
+    // predicate as `source` below); price-armor refines it further: zombie/
+    // divergent spot quotes are refused BEFORE they can earn the live label.
+    const liveNow = res.liveNow;
+
+    // price-armor visibility events (throttled — the operator sees every class)
+    const tickNow = Date.now();
+    if (res.zombieRejected && tickNow - (feedArmorZombieEventAt.get(a.symbol) ?? 0) > 30 * 60_000) {
+      feedArmorZombieEventAt.set(a.symbol, tickNow);
+      await fireEvent(null, a.symbol, "ENGINE", "warn", `FEED-ARMOR v12.0: zombie/frozen quote REFUSED for ${a.symbol} (empty two-sided book or >10% cross-plane divergence) — terminal price stays ${res.priceClass === "sim-drift" ? "anchor-locked sim" : "unchanged"}; the tape carries no phantom print (Task 44)`);
+    }
+    if (res.rewound && tickNow - (feedArmorRewindEventAt.get(a.symbol) ?? 0) > 30 * 60_000) {
+      feedArmorRewindEventAt.set(a.symbol, tickNow);
+      await fireEvent(null, a.symbol, "ENGINE", "warn", `FEED-ARMOR v12.0: stored anchor for ${a.symbol} deviates >5% from the last live-verified price — restore-rewind class; writer re-anchored on live truth (Task 44)`);
+    }
+    if (!liveNow && lastLiveAt.has(a.symbol) && tickNow - (feedArmorGapEventAt.get(a.symbol) ?? 0) > 10 * 60_000) {
+      feedArmorGapEventAt.set(a.symbol, tickNow);
+      await fireEvent(null, a.symbol, "ENGINE", "warn", `FEED-ARMOR v12.0: live gap for ${a.symbol} — PricePoint/tick tape PAUSED (sim ticks are no longer written as prints); settlement + freshness gates cover the gap honestly`);
+    }
+
+    const change24h = t && res.priceClass === "live-ticker" ? Number(t.priceChangePercent) : a.change24h;
     const spark = JSON.parse(a.sparkline) as number[];
     spark.push(Number(next.toFixed(next > 100 ? 1 : 5)));
     if (spark.length > 48) spark.shift();
@@ -515,9 +598,9 @@ async function updatePrices(): Promise<MarketAsset[]> {
         prevPrice: a.price,
         price: Number(next.toFixed(next > 100 ? 2 : 6)),
         change24h: Number(change24h.toFixed(2)),
-        high24h: t ? Number(t.highPrice) : Math.max(a.high24h, next),
-        low24h: t ? Number(t.lowPrice) : Math.min(a.low24h, next),
-        volume24h: t ? Number(t.quoteVolume) : a.volume24h,
+        high24h: t && res.priceClass === "live-ticker" ? Number(t.highPrice) : Math.max(a.high24h, next),
+        low24h: t && res.priceClass === "live-ticker" ? Number(t.lowPrice) : Math.min(a.low24h, next),
+        volume24h: t && res.priceClass === "live-ticker" ? Number(t.quoteVolume) : a.volume24h,
         sparkline: JSON.stringify(spark),
         exchanges: exchanges ? JSON.stringify(exchanges) : a.exchanges,
         maxDevBps: c?.maxDevBps ?? a.maxDevBps,
@@ -525,9 +608,30 @@ async function updatePrices(): Promise<MarketAsset[]> {
         updatedAt: now,
       },
     });
-    if (liveNow) lastLiveAt.set(a.symbol, Date.now());
+    if (liveNow) {
+      lastLiveAt.set(a.symbol, Date.now());
+      lastLivePrice.set(a.symbol, next);
+    }
 
-    if (addPoints) await db.pricePoint.create({ data: { symbol: a.symbol, price: Number(next.toFixed(next > 100 ? 2 : 6)), createdAt: now } });
+    // v10.30 PHANTOM-FEED-0930 — visibility: an outlier venue quote was rejected
+    // (or trust refused) by the robust median; the operator must see every such
+    // event since this exact failure mode silently minted phantom full-TPs.
+    if (c?.degraded && tickCount % 10 === 0) {
+      const rej = c.quotes.filter((q) => q.rejected).map((q) => q.venue).join(",");
+      await fireEvent(null, a.symbol, "ENGINE", "warn", `PHANTOM-FEED guard: consensus outlier${rej ? ` (${rej})` : ""} rejected for ${a.symbol} — robust median ${next}`);
+    }
+
+    // v12.0 price-armor — TAPE PURITY: only LIVE-verified ticks may become
+    // PricePoint prints / tick-archive records. A gap in the tape is honest
+    // (freshness + settlement gates handle it); a sim print next to real ones
+    // is the exact poison that minted the XMR 118.7↔592 oscillation (Task 43).
+    if (addPoints && liveNow) await db.pricePoint.create({ data: { symbol: a.symbol, price: Number(next.toFixed(next > 100 ? 2 : 6)), createdAt: now } });
+
+    // Task 79 TICK ARCHIVE — persist the ~3.5s tick stream already flowing
+    // (tier-1 full-rate for live-exposure symbols, tier-2 16s universe;
+    // PricePoint stays the 48s engine-of-record). Fail-open by design.
+    // v12.0: live-verified ticks only (same tape-purity doctrine).
+    if (liveNow) recordTick(a.symbol, Number(next.toFixed(next > 100 ? 2 : 6)), now.getTime());
 
     // dislocation event (rate-limited by 12bps threshold)
     if (c && c.maxDevBps >= 12 && tickCount % 10 === 0) {
@@ -540,6 +644,7 @@ async function updatePrices(): Promise<MarketAsset[]> {
     const cutoff = new Date(Date.now() - 48 * 3600_000);
     await db.pricePoint.deleteMany({ where: { createdAt: { lt: cutoff } } });
   }
+  flushTickArchive(now.getTime()); // Task 79 — drain the tick buffer every pass
   const fresh = await db.marketAsset.findMany();
   latestAssets = new Map(fresh.map((a) => [a.symbol, a])); // settlement gate reads the CURRENT price map
   return fresh;
@@ -572,6 +677,9 @@ function heldMinutes(s: Signal, at: Date): number {
   return Math.max(0, (at.getTime() - s.createdAt.getTime()) / 60_000);
 }
 
+// v12.0: liveOpenMarkPct moved to src/lib/open-pnl.ts (shared with stats.ts —
+// one formula for the breaker AND the ACCOUNT bar; import at the top).
+
 async function resolveSignals(assets: MarketAsset[]) {
   const priceMap = new Map(assets.map((a) => [a.symbol, a.price]));
   const active = await db.signal.findMany({ where: { status: { in: ["ACTIVE", "TP1", "TP2"] } } });
@@ -582,7 +690,76 @@ async function resolveSignals(assets: MarketAsset[]) {
   let resolved = 0;
   let leveled = 0;
 
+  // ── v11.5 GLOBAL OPEN-PNL CLOSE-ALL BREAKER (operator mandate 2026-10-12:
+  // «اگر مجموع open pnl به 20$ رسید تمام معاملات بسته شود») ───────────────
+  // Book-level profit-lock: when the SUM of unrealized fee-NET pnl across
+  // ALL open signals (tranche-aware live mark — the same number the ACCOUNT
+  // bar shows) reaches closeall.targetUsd (default $20), EVERY open signal
+  // with a live price is closed at the mark in ONE audited sweep. Rows
+  // without a live price are NOT invented-settled — they stay open for the
+  // normal settlement loop (v10.16 staleness doctrine) and the breaker
+  // re-fires next tick. Fail-open: any breaker error never blocks settling.
+  const closeAllIds = new Set<string>();
+  try {
+    const ca = await getCloseAllState();
+    if (ca.enabled && active.length > 0) {
+      // v12.0 — single-source open book (src/lib/open-pnl.ts): bankableUsd is
+      // the tranche-aware fee-NET mark over settlement-safe rows only —
+      // bit-identical to the old inline loop, now shared with the ACCOUNT bar
+      // so the $20 mandate and the dashboard can never diverge again.
+      const book = openBookNet(
+        active.flatMap((s) => {
+          const price = priceMap.get(s.symbol);
+          if (price === undefined) return [];
+          return [{ signal: s, price, safe: !settlementUnsafe(s.symbol) }];
+        }),
+        now.getTime(),
+      );
+      const openUsd = book.bankableUsd;
+      const sweep: Array<{ s: Signal; price: number }> = book.included
+        .map((inc) => ({ s: active.find((a) => a.id === inc.id), price: inc.price }))
+        .filter((x): x is { s: Signal; price: number } => !!x.s);
+      if (sweep.length > 0 && openUsd >= ca.targetUsd) {
+        let closedUsd = 0;
+        for (const { s, price } of sweep) {
+          const isLong = s.direction === "LONG";
+          const movePct = ((price - s.entryPrice) / s.entryPrice) * (isLong ? 1 : -1) * 100;
+          const finalMovePct = liveOpenMarkPct(s, movePct, isLong);
+          const finalFb = feeBreakdown(s.marginUsd, s.leverage, finalMovePct, heldMinutes(s, now));
+          await db.signal.update({
+            where: { id: s.id },
+            data: {
+              status: "CLOSED",
+              closedAt: now,
+              pnlPercent: Number(finalFb.netPct.toFixed(2)),
+              maxPnlPercent: Number(Math.max(s.maxPnlPercent, finalFb.netPct).toFixed(2)),
+              feeUsd: finalFb.commissionUsd,
+              swapUsd: finalFb.swapUsd,
+              tags: s.tags ? `${s.tags},CLOSE-ALL` : "CLOSE-ALL",
+            },
+          });
+          closedUsd += (s.marginUsd * finalFb.netPct) / 100;
+          closeAllIds.add(s.id);
+          resolved++;
+          // v6.3 per-regime ledger stays complete for breaker closes
+          const rTag = regimeTagOf(s.tags);
+          if (rTag) void bumpRegimeTelemetry(rTag, finalFb.netPct > 0 || s.reachedTp >= 1, Number(((s.marginUsd * finalFb.netPct) / 100).toFixed(2))).catch(() => undefined);
+          await fireEvent(s.id, s.symbol, "CLOSE_ALL", "info", `${s.symbol} closed at mark ${finalMovePct >= 0 ? "+" : ""}${finalMovePct.toFixed(2)}% price (${finalFb.netPct >= 0 ? "+" : ""}${finalFb.netPct.toFixed(1)}% NET, ${finalFb.netPct >= 0 ? "+" : ""}$${((s.marginUsd * finalFb.netPct) / 100).toFixed(2)}) — book-level close-all sweep`);
+        }
+        await recordCloseAllTrigger(sweep.length, closedUsd);
+        const remainN = active.length - sweep.length;
+        await fireEvent(null, null, "ENGINE", "success", `GLOBAL OPEN-PNL CLOSE-ALL — open NET +$${openUsd.toFixed(2)} ≥ target $${ca.targetUsd.toFixed(2)} → ${sweep.length} position(s) closed at the mark, realized ≈ ${closedUsd >= 0 ? "+" : ""}$${closedUsd.toFixed(2)} NET banked${remainN > 0 ? ` · ${remainN} row(s) without live price settle normally` : ""} (trigger #${(await getCloseAllState()).triggerCount})`);
+        void sendDirect(
+          `🔒 <b>GLOBAL CLOSE-ALL — OPEN PNL TARGET HIT</b>\nOpen NET <b>+$${openUsd.toFixed(2)}</b> ≥ $${ca.targetUsd.toFixed(2)} → <b>${sweep.length}</b> position(s) closed at the mark.\n💰 Realized ≈ <b>${closedUsd >= 0 ? "+" : ""}$${closedUsd.toFixed(2)}</b> NET banked${remainN > 0 ? `\n⏳ ${remainN} row(s) without live price settle normally` : ""}`,
+        ).catch(() => undefined);
+      }
+    }
+  } catch (caErr) {
+    console.error("[close-all] breaker failed open", caErr); // fail-open: the normal settle loop still runs
+  }
+
   for (const s of active) {
+    if (closeAllIds.has(s.id)) continue; // v11.5: already closed by the close-all sweep this tick
     const price = priceMap.get(s.symbol);
     if (!price) continue;
 
@@ -601,11 +778,14 @@ async function resolveSignals(assets: MarketAsset[]) {
     const movePct = ((price - s.entryPrice) / s.entryPrice) * (isLong ? 1 : -1) * 100; // UNLEVERED price move %
     const gross = movePct * s.leverage; // levered % on margin (display)
     const fb = feeBreakdown(s.marginUsd, s.leverage, movePct, heldMinutes(s, now));
-    const maxGross = Math.max(s.maxPnlPercent, fb.netPct);
+    // v10.19: the peak watermark is fed from finalFb.netPct at the update below —
+    // for banked signals the old full-margin fb.netPct inflated maxPnlPercent to
+    // the same phantom watermark the card displayed (same root cause, fixed together).
 
     let status = s.status;
     let closedAt: Date | null = null;
     let stopLossNext: number | null = null; // v5.4: trail the stop when ladder rungs are banked
+    let beBankNext: { movePct: number; frac: number } | null = null; // v11.2 BE-BANK capture
     let qualityFlagNext: string | null = null; // v10.18 ledger-integrity flag — threaded into the update below
 
     const hitTp = (level: 1 | 2 | 3) => {
@@ -613,6 +793,15 @@ async function resolveSignals(assets: MarketAsset[]) {
       return isLong ? price >= target : price <= target;
     };
     const hitSl = isLong ? price <= s.stopLoss : price >= s.stopLoss;
+    // ── v11.2 STRUCTURAL BE-ARM INPUTS — the arm fires on the trade's OWN risk
+    // geometry (unlevered price distance in R of the DEPLOY stop), not a fixed
+    // +10% NET anchor whose premature, leverage-skewed arms round-tripped 46%
+    // of the day's peak MFE back to breakeven (SENTINEL forensics 2026-10-07:
+    // 36 rows touched +10%, only 12 kept it; ≥15× rows kept 17% vs 58% <15×).
+    // initialStopLoss (v6.6 immutable anchor) keeps the R distance honest even
+    // after TP2 trails the stop; post-arm the untrailed check below gates re-entry.
+    const beRiskAnchor = s.initialStopLoss ?? s.stopLoss;
+    const beSlDistPct = Math.abs(s.entryPrice - beRiskAnchor) / s.entryPrice * 100;
 
     // v5.4 TP-PROVEN LEDGER — reaching TP1/TP2 is a permanent, auditable win:
     // reachedTp persists even if the trade later stops out or expires, so the
@@ -669,13 +858,32 @@ async function resolveSignals(assets: MarketAsset[]) {
       // UNLEVERED price move (beArmMovePct, default +1.5% — leverage-invariant,
       // catches spikes between pulses whatever the multiplier) and stays
       // DEFINITIVE: once armed, the stop lives at entry and never re-widens.
+      // ── v11.2 STRUCTURAL R-ARM + BE-BANK (operator mandate 2026-10-07
+      // «هر سه مورد را کامل و مهندسی پیاده کن») ──
+      // The PRIMARY trigger is now the structural distance: movePct ≥
+      // beArmRMult × slDistPct (price moved half the deploy risk distance —
+      // identical market-structure meaning for every leverage tier). The
+      // absolute-price arm stays as the wide-stop ceiling, the legacy NET arm
+      // stays governor-available (retired to 0 at deploy — replaced, not deleted).
+      // AND the arm now HARVESTS: on an unbanked signal a beBankFrac partial
+      // tranche is banked at the arm mark (beBankedMovePct/Frac) so the
+      // 46%-of-peak give-back the forensics measured becomes realized pnl
+      // instead of evaporating on the ride back to entry.
       s.status === "ACTIVE" &&
       (isLong ? s.stopLoss < s.entryPrice : s.stopLoss > s.entryPrice) &&
-      ((gate.beTrailPct > 0 && fb.netPct >= gate.beTrailPct) || (gate.beArmMovePct > 0 && movePct >= gate.beArmMovePct))
+      ((gate.beArmRMult > 0 && beSlDistPct > 0 && movePct >= gate.beArmRMult * beSlDistPct) ||
+        (gate.beArmMovePct > 0 && movePct >= gate.beArmMovePct) ||
+        (gate.beTrailPct > 0 && fb.netPct >= gate.beTrailPct))
     ) {
       stopLossNext = s.entryPrice;
-      const viaPrice = !(gate.beTrailPct > 0 && fb.netPct >= gate.beTrailPct) && gate.beArmMovePct > 0 && movePct >= gate.beArmMovePct;
-      await fireEvent(s.id, s.symbol, "BE_TRAIL", "info", `${s.symbol} breakeven armed @ +${(viaPrice ? movePct : fb.netPct).toFixed(1)}% ${viaPrice ? "price (R2 arm)" : "NET"} (gate ≥ ${viaPrice ? `+${gate.beArmMovePct}% price` : `+${gate.beTrailPct}% NET`}) — stop moved to entry, −1R risk retired; runner rides to TP ladder risk-free`);
+      const viaR = gate.beArmRMult > 0 && beSlDistPct > 0 && movePct >= gate.beArmRMult * beSlDistPct;
+      const viaPrice = !viaR && gate.beArmMovePct > 0 && movePct >= gate.beArmMovePct;
+      // v11.2 BE-BANK — harvest at the arm: bank beBankFrac of the position at
+      // the CURRENT mark on unbanked signals only (a TP1-banked row has just 20%
+      // runner left — banking 25% of full there is geometrically impossible).
+      const bankFrac = reachedTp === 0 && gate.beBankFrac > 0 ? gate.beBankFrac : 0;
+      if (bankFrac > 0) beBankNext = { movePct, frac: bankFrac };
+      await fireEvent(s.id, s.symbol, "BE_TRAIL", "info", `${s.symbol} breakeven armed @ +${movePct.toFixed(2)}% price (${viaR ? `R-ARM ≥ ${gate.beArmRMult}×SLdist ${beSlDistPct.toFixed(2)}%` : viaPrice ? `PX-ARM ≥ +${gate.beArmMovePct}% price` : `NET-ARM ≥ +${gate.beTrailPct}% (NET +${fb.netPct.toFixed(1)}%)`}) — stop moved to entry, −1R risk retired${bankFrac > 0 ? ` · BE-BANK v11.2: ${Math.round(bankFrac * 100)}% of the position banked at the mark — the arm now harvests the give-back instead of donating it back` : " · runner rides to TP ladder risk-free"}`);
     } else if (
       // ── v8.4 R2/R7 EARLY TIME-EXIT (module-performance audit 2026-09-11) ──
       // EXPIRED closes averaged +$2.66 while SL closes averaged −$12.61: a
@@ -748,7 +956,39 @@ async function resolveSignals(assets: MarketAsset[]) {
     const moveAtPct = (px: number) => ((px - s.entryPrice) / s.entryPrice) * (isLong ? 1 : -1) * 100; // UNLEVERED
     let finalMovePct: number;
     if (!closedAt) {
-      finalMovePct = movePct;
+      // ── v10.19 TRANCHE-AWARE LIVE MARK (operator report: "PNL% drops after full TP") ──
+      // While OPEN with banked rungs, the live pnlPercent used to price 100% of
+      // the margin at the current mark — as if nothing had been banked — so the
+      // card climbed to the TP2 full-margin watermark (measured: NX-1096 CAPUSDT
+      // showed +108.1% at TP2, NX-1105 TRUMPUSDT +24.1%) and then "dropped" at
+      // settlement to the honest v6.6 tranche result (95.0% / 21.1%). The live
+      // mark now follows the announced ladder — banked rungs priced at their
+      // rung prices, only the 20% runner at the current mark — so the displayed
+      // % walks monotonically toward the final booking (same NX-1096: TP2 +83.9%
+      // → TP3 +95.0%) and the open-ledger pnlUsd stops overstating banked
+      // positions. Unbanked signals (reachedTp=0) keep the exact old math:
+      // finalFb ≡ fb on every open tick, so all gates (BE-trail, early-exit)
+      // and event texts are bit-identical for them.
+      if (reachedTp >= 1) {
+        const beB = s.beBankedMovePct !== null && s.beBankedFrac != null ? { frac: s.beBankedFrac, movePct: s.beBankedMovePct } : null;
+        const remain = beB ? 1 - beB.frac : 1;
+        const liveTranches: Array<{ weight: number; movePct: number }> = [];
+        if (beB) liveTranches.push({ weight: beB.frac, movePct: beB.movePct });
+        liveTranches.push({ weight: LADDER_TRANCHES.tp1 * remain, movePct: moveAtPct(s.tp1) });
+        if (reachedTp >= 2) liveTranches.push({ weight: LADDER_TRANCHES.tp2 * remain, movePct: moveAtPct(s.tp2) });
+        liveTranches.push({ weight: (1 - LADDER_TRANCHES.tp1 - LADDER_TRANCHES.tp2) * remain, movePct: movePct });
+        finalMovePct = ladderWeightedMove(liveTranches);
+      } else if (s.beBankedMovePct !== null && s.beBankedFrac != null) {
+        // v11.2 BE-BANKED, no rung yet — the banked leg prices at its arm mark,
+        // the remainder at the live mark, so the card walks monotonically toward
+        // the final booking instead of re-round-tripping visually.
+        finalMovePct = ladderWeightedMove([
+          { weight: s.beBankedFrac, movePct: s.beBankedMovePct },
+          { weight: 1 - s.beBankedFrac, movePct: movePct },
+        ]);
+      } else {
+        finalMovePct = movePct;
+      }
     } else if (reachedTp >= 1) {
       // TRANCHES GO FIRST — any close after a banked rung is tranche-weighted no
       // matter how it ends, because 50%/30% already left the book at their rung
@@ -759,10 +999,23 @@ async function resolveSignals(assets: MarketAsset[]) {
       //   SL         → exits at the EFFECTIVE (trailed) stop (v5.4 semantics)
       //   EXPIRED/…  → exits at the closing mark
       const runnerMove = status === "TP3" ? moveAtPct(s.tp3) : status === "SL" ? moveAtPct(s.stopLoss) : movePct;
-      const tranches: Array<{ weight: number; movePct: number }> = [{ weight: LADDER_TRANCHES.tp1, movePct: moveAtPct(s.tp1) }];
-      if (reachedTp >= 2) tranches.push({ weight: LADDER_TRANCHES.tp2, movePct: moveAtPct(s.tp2) });
-      tranches.push({ weight: 1 - LADDER_TRANCHES.tp1 - LADDER_TRANCHES.tp2, movePct: runnerMove });
+      const beB = s.beBankedMovePct !== null && s.beBankedFrac != null ? { frac: s.beBankedFrac, movePct: s.beBankedMovePct } : null;
+      const remain = beB ? 1 - beB.frac : 1;
+      const tranches: Array<{ weight: number; movePct: number }> = [];
+      if (beB) tranches.push({ weight: beB.frac, movePct: beB.movePct });
+      tranches.push({ weight: LADDER_TRANCHES.tp1 * remain, movePct: moveAtPct(s.tp1) });
+      if (reachedTp >= 2) tranches.push({ weight: LADDER_TRANCHES.tp2 * remain, movePct: moveAtPct(s.tp2) });
+      tranches.push({ weight: (1 - LADDER_TRANCHES.tp1 - LADDER_TRANCHES.tp2) * remain, movePct: runnerMove });
       finalMovePct = ladderWeightedMove(tranches);
+    } else if (s.beBankedMovePct !== null && s.beBankedFrac != null) {
+      // v11.2 BE-BANKED, no TP rung — the banked leg exits at its arm mark while
+      // the remainder takes the real exit: SL → the EFFECTIVE stop (at entry post-
+      // arm, so the outcome is the banked leg minus fees — the old −1.2..−1.8%
+      // BE-class donate-back becomes ≈+1-2% realized) · EXPIRED → the closing mark.
+      finalMovePct = ladderWeightedMove([
+        { weight: s.beBankedFrac, movePct: s.beBankedMovePct },
+        { weight: 1 - s.beBankedFrac, movePct: status === "SL" ? moveAtPct(s.stopLoss) : movePct },
+      ]);
     } else if (status === "SL") {
       finalMovePct = moveAtPct(s.stopLoss); // v5.4: EFFECTIVE (trailed) stop is the real exit — nothing was banked
     } else {
@@ -801,8 +1054,9 @@ async function resolveSignals(assets: MarketAsset[]) {
         status,
         reachedTp,
         ...(stopLossNext !== null ? { stopLoss: Number(stopLossNext.toFixed(s.entryPrice > 100 ? 2 : 6)) } : {}),
+        ...(beBankNext ? { beBankedMovePct: Number(beBankNext.movePct.toFixed(3)), beBankedFrac: beBankNext.frac } : {}),
         pnlPercent: Number(finalFb.netPct.toFixed(2)),
-        maxPnlPercent: Number(Math.max(maxGross, finalFb.netPct).toFixed(2)),
+        maxPnlPercent: Number(Math.max(s.maxPnlPercent, finalFb.netPct).toFixed(2)), // v10.19: honest watermark (was maxGross incl. full-margin fb)
         closedAt,
         feeUsd: closedAt ? finalFb.commissionUsd : s.feeUsd,
         swapUsd: closedAt ? finalFb.swapUsd : s.swapUsd,
@@ -979,7 +1233,7 @@ async function realizedEdgeFilter(symbol: string, strategy: string): Promise<{ o
       if (newestSettleAgeMs < 24 * 3600_000) return { ok: false, reason: `${strategy} realized expectancy ${exp.toFixed(1)}%/trade (n=${strat.length} EPOCH-2 rolling) < −2% — strategy suppressed (profit-first gate) · SQN ${sSq.sqn}` };
       // window frozen ≥24h — starvation escape: bounded probes resume so the strategy can prove regime truth
     }
-    return { ok: true, probe: true }; // bounded half-size probe (MG-PROBE ×0.5)
+    return { ok: true, probe: true }; // bounded probe (MG-PROBE cohort — FLAT-10: tag-only)
   }
   return { ok: true };
 }
@@ -1125,8 +1379,8 @@ async function shadowGateSweep(assets: MarketAsset[]): Promise<void> {
 //    across velocity/volume/OI/CVD/whale/liq layers) IS the quality judgment;
 //    the generic engine gates no longer re-judge its nominations.
 // Both still respect the risk rails that protect the LEDGER itself (max-open
-// spacing lives in the callers; risk-overlay cluster joins go HALF-SIZED,
-// exactly like operator-forced deploys).
+// spacing lives in the callers; risk-overlay cluster joins are tag-only
+// cohorts under FLAT-10, exactly like operator-forced deploys).
 
 // v10.12 HONEST-SWEEP TELEMETRY (operator APPROVE 2026-09-18 msg 861802411:
 // «باید به امتیاز واقعی وصل شود») — the flavor event used to print
@@ -1135,7 +1389,127 @@ async function shadowGateSweep(assets: MarketAsset[]): Promise<void> {
 // MIN_SCORE) and the flavor event reads it. null until the first sweep boots.
 let lastSweepBest: { at: number; best: number; minScore: number; candidates: number } | null = null;
 
-export async function deploySignal(symbol?: string, directionHint?: "LONG" | "SHORT", opts?: { forced?: boolean; focusSymbol?: string; triggerTag?: string; extraTags?: string[]; authorityBypass?: boolean; calCapture?: boolean; ttlMinutes?: number; ttlNoExtend?: boolean; refPrice?: number; chaseCapPct?: number }): Promise<{ signal?: Signal; error?: string; status?: number }> {
+// ── v11.8 LIQUIDITY-FLOOR (Task-42 operator mandate: «دو توصیه باقی مانده را
+// کامل و مهندسی اجرا کن») ──
+// Per-symbol deployability floor. Two evidence legs from the Task-41 storm:
+// (a) feed integrity — AGTUSDT deployed while its tape was real, but the same
+// symbol later sat at source=sim with ALL FOUR venue quotes null (price
+// unvalidated by any venue); the v6.2 sim ban only guards the scan pool — the
+// focusSymbol/event-trigger path short-circuits BEFORE it in the pool filter.
+// (b) thin tape — the flow-ranked dynamic universe can admit a thin or
+// wash-volume listing; a volume24h floor guards the tail (evidence: universe
+// min = $46M today — the floor guards the future, it does not reshape the
+// present). A symbol failing either leg gets NO auto-deploy space: scan-pool
+// exclusion (mirrors simBanned, throttled summary event) + an authoritative
+// deploy-time gate (covers focus/trigger paths; journaled per block, near-miss
+// paper-tracked). forced + capture-authority bypass tagged LIQUIDITY-FLOOR
+// (cohort doctrine). Tunable via EngineSetting key "liquidity-floor"
+// {enabled, minQuoteVol24hUsd, minVenues}. Defaults: on · $25M/24h · ≥1 real
+// venue quote. Fail-open on unparsable venue telemetry (sim ban + feed-fresh
+// cover the hard failure classes).
+// v11.9 TASK-43 HARDENING — the audit caught the gate's blind spot: NX-2741
+// (AGTUSDT, −61.20%) deployed because at that instant the FLICKERING synthetic
+// tape showed one venue quote and source could read "live" between feed
+// failures, while the engine price sat ~11% ABOVE the real Binance close
+// (0.100626 vs kline ≈0.0896). Two new legs:
+//   (c) sim-source veto — a symbol whose feed classifies as sim has NO auto
+//       deploy space even if a venue quote flickers in (source is DYNAMIC —
+//       BTW/Q/BR/ICNT flipped live→sim mid-audit as the feed degraded — so the
+//       veto is evaluated at deploy time, not once per boot);
+//   (d) kline-divergence — engine price vs the cached REAL kline close must
+//       agree within maxKlineDivergencePct (synthetic drift like AGT's +11%
+//       is untradeable even when the recent tape looks smooth).
+interface LiquidityFloorCfg { enabled: boolean; minQuoteVol24hUsd: number; minVenues: number; banSimSource: boolean; maxKlineDivergencePct: number }
+async function getLiquidityFloorCfg(): Promise<LiquidityFloorCfg> {
+  const cfg: LiquidityFloorCfg = { enabled: true, minQuoteVol24hUsd: 25_000_000, minVenues: 1, banSimSource: true, maxKlineDivergencePct: 2.5 };
+  try {
+    const row = await db.engineSetting.findUnique({ where: { key: "liquidity-floor" } });
+    if (row) {
+      const p = JSON.parse(row.value) as Partial<LiquidityFloorCfg>;
+      if (p.enabled === false) cfg.enabled = false;
+      if (typeof p.minQuoteVol24hUsd === "number") cfg.minQuoteVol24hUsd = Math.max(0, Math.min(1e9, p.minQuoteVol24hUsd));
+      if (typeof p.minVenues === "number") cfg.minVenues = Math.max(0, Math.min(4, Math.floor(p.minVenues)));
+      if (p.banSimSource === false) cfg.banSimSource = false;
+      if (typeof p.maxKlineDivergencePct === "number") cfg.maxKlineDivergencePct = Math.max(0, Math.min(50, p.maxKlineDivergencePct));
+    }
+  } catch {
+    /* fail-open: defaults */
+  }
+  return cfg;
+}
+function venueQuoteCount(a: MarketAsset): number {
+  try {
+    const venues = JSON.parse(a.exchanges || "[]") as Array<{ price: number | null }>;
+    return venues.filter((q) => typeof q.price === "number" && q.price > 0).length;
+  } catch {
+    return -1; // unparsable telemetry — fail-open
+  }
+}
+// v11.9: returns the failing leg label, or null when deployable
+function liquidityFloorLeg(a: MarketAsset, cfg: LiquidityFloorCfg, klineLastClose?: number): string | null {
+  if (!cfg.enabled) return null;
+  if (a.volume24h > 0 && a.volume24h < cfg.minQuoteVol24hUsd) return `volume24h $${(a.volume24h / 1e6).toFixed(1)}M < $${(cfg.minQuoteVol24hUsd / 1e6).toFixed(0)}M`;
+  if (cfg.minVenues > 0) {
+    const q = venueQuoteCount(a);
+    if (q >= 0 && q < cfg.minVenues) return `real venue quotes ${q} < ${cfg.minVenues}`;
+  }
+  if (cfg.banSimSource && a.source !== "live") return `feed source=${a.source} (sim-veto — unvalidated tape)`;
+  if (cfg.maxKlineDivergencePct > 0 && typeof klineLastClose === "number" && klineLastClose > 0 && a.price > 0) {
+    const dev = Math.abs(a.price - klineLastClose) / klineLastClose * 100;
+    if (dev > cfg.maxKlineDivergencePct) return `price/kline divergence ${dev.toFixed(1)}% > ${cfg.maxKlineDivergencePct}% (engine ${a.price} vs real close ${klineLastClose})`;
+  }
+  return null;
+}
+function liquidityFloorOk(a: MarketAsset, cfg: LiquidityFloorCfg, klineLastClose?: number): boolean {
+  return liquidityFloorLeg(a, cfg, klineLastClose) === null;
+}
+
+// ── v11.9 PHANTOM-FEED GATE (Task-43 audit: XMRUSDT) ──
+// The XMR tape oscillated 118.7↔607.75 (×5) with 314 steps >10% in 24h while
+// the real market never moved >1% — a stale sim anchor surfaced through the
+// venue-consensus writer during feed failures. NX-2736 died −60.84% in 35s
+// and NX-2744 −14.93% in 18s on phantom prints. A recent-tape regime jump
+// means the feed is untradeable: auto deploys refused; forced/capture bypass
+// tagged PHANTOM-FEED (cohort doctrine). Tunable via EngineSetting key
+// "phantom-feed" {enabled, stepBlockPct, stepWarnPct, stepWarnMax,
+// windowPoints}. Fail-open on telemetry errors (feed-fresh + settlement
+// gates cover the hard classes).
+interface PhantomFeedCfg { enabled: boolean; stepBlockPct: number; stepWarnPct: number; stepWarnMax: number; windowPoints: number }
+async function getPhantomFeedCfg(): Promise<PhantomFeedCfg> {
+  const cfg: PhantomFeedCfg = { enabled: true, stepBlockPct: 25, stepWarnPct: 8, stepWarnMax: 3, windowPoints: 720 };
+  try {
+    const row = await db.engineSetting.findUnique({ where: { key: "phantom-feed" } });
+    if (row) {
+      const p = JSON.parse(row.value) as Partial<PhantomFeedCfg>;
+      if (p.enabled === false) cfg.enabled = false;
+      if (typeof p.stepBlockPct === "number") cfg.stepBlockPct = Math.max(2, Math.min(100, p.stepBlockPct));
+      if (typeof p.stepWarnPct === "number") cfg.stepWarnPct = Math.max(1, Math.min(50, p.stepWarnPct));
+      if (typeof p.stepWarnMax === "number") cfg.stepWarnMax = Math.max(1, Math.min(100, Math.floor(p.stepWarnMax)));
+      if (typeof p.windowPoints === "number") cfg.windowPoints = Math.max(30, Math.min(2000, Math.floor(p.windowPoints)));
+    }
+  } catch { /* fail-open: defaults */ }
+  return cfg;
+}
+async function assessFeedSanity(symbol: string, cfg: PhantomFeedCfg): Promise<{ ok: boolean; maxStepPct: number; warnSteps: number; windowPoints: number }> {
+  if (!cfg.enabled) return { ok: true, maxStepPct: 0, warnSteps: 0, windowPoints: 0 };
+  try {
+    const pts = await db.pricePoint.findMany({ where: { symbol }, orderBy: { createdAt: "desc" }, take: cfg.windowPoints + 1, select: { price: true } });
+    if (pts.length < 10) return { ok: true, maxStepPct: 0, warnSteps: 0, windowPoints: Math.max(0, pts.length - 1) }; // young tape — other gates cover
+    let maxStepPct = 0, warnSteps = 0;
+    for (let i = 0; i < pts.length - 1; i++) {
+      const prev = pts[i + 1].price, cur = pts[i].price;
+      if (!(prev > 0) || !(cur > 0)) continue;
+      const step = Math.abs(cur - prev) / prev * 100;
+      if (step > maxStepPct) maxStepPct = step;
+      if (step >= cfg.stepWarnPct) warnSteps++;
+    }
+    return { ok: !(maxStepPct >= cfg.stepBlockPct || warnSteps >= cfg.stepWarnMax), maxStepPct, warnSteps, windowPoints: pts.length - 1 };
+  } catch {
+    return { ok: true, maxStepPct: 0, warnSteps: 0, windowPoints: 0 }; // fail-open — telemetry error never blocks trading
+  }
+}
+
+export async function deploySignal(symbol?: string, directionHint?: "LONG" | "SHORT", opts?: { forced?: boolean; focusSymbol?: string; triggerTag?: string; extraTags?: string[]; authorityBypass?: boolean; calCapture?: boolean; radarLane?: boolean; ttlMinutes?: number; ttlNoExtend?: boolean; refPrice?: number; chaseCapPct?: number; detectedAt?: number }): Promise<{ signal?: Signal; error?: string; status?: number }> {
   const gate = await getGateSettings();
   const eff = await getEffectiveWeights();
   const weights = Object.keys(eff.weights).length ? (eff.weights as FactorWeights) : undefined;
@@ -1183,7 +1557,12 @@ export async function deploySignal(symbol?: string, directionHint?: "LONG" | "SH
   // fetch for >3min). Operator-forced deploys bypass (explicit human override,
   // audited in the SYSTEM event log).
   const feed = getFeedStatus();
-  const feedStale = feed.consecutiveFailures >= 3 || (feed.lastOkAt !== null && Date.now() - feed.lastOkAt > 180_000);
+  // DATA-REVIVAL 2026-10-21 — honest staleness: the feed is degraded only when
+  // NO plane has fetched successfully recently. The old check counted the
+  // fapi failure counter alone, which kept the deploy gate BLOCKED even while
+  // the data-vision spot mirror + 4-venue consensus + Bybit fallback were
+  // feeding live data — a false full veto on a healthy feed.
+  const feedStale = feed.lastOkAt === null || Date.now() - feed.lastOkAt > 180_000;
   if (feedStale && !opts?.forced) {
     if (Date.now() - lastFeedGuardEventAt > 600_000) {
       lastFeedGuardEventAt = Date.now();
@@ -1208,11 +1587,21 @@ export async function deploySignal(symbol?: string, directionHint?: "LONG" | "SH
     await fireEvent(null, null, "SYSTEM", "warn", `SIM-PRICE DEPLOY BAN: ${simBanned.slice(0, 6).join(", ")}${simBanned.length > 6 ? ` +${simBanned.length - 6}` : ""} excluded from auto-deployment — feed degraded (sim), no signals on invented prices`);
   }
 
+  // v11.8 LIQUIDITY-FLOOR pool exclusion (scan path — focus/forced paths are
+  // gated at the deploy stage; mirrors the sim-ban pattern + throttled summary)
+  const liqFloor = await getLiquidityFloorCfg();
+  const liqBanned = opts?.focusSymbol || opts?.forced || !liqFloor.enabled ? [] : assets.filter((a) => !liquidityFloorOk(a, liqFloor)).map((a) => a.symbol);
+  if (liqBanned.length > 0 && Date.now() - lastLiquidityFloorEventAt > 600_000) {
+    lastLiquidityFloorEventAt = Date.now();
+    await fireEvent(null, null, "SYSTEM", "warn", `LIQUIDITY-FLOOR: ${liqBanned.slice(0, 6).join(", ")}${liqBanned.length > 6 ? ` +${liqBanned.length - 6}` : ""} excluded from auto-deployment — volume24h < $${(liqFloor.minQuoteVol24hUsd / 1e6).toFixed(0)}M · <${liqFloor.minVenues} real venue quote(s) · sim-source tape (feed-integrity floor v11.8 + v11.9 sim-veto, Task-42/43)`);
+  }
+
   const pool = assets.filter((asset) => {
     if (opts?.focusSymbol) return asset.symbol === opts.focusSymbol;
     if (openSymbols.has(asset.symbol)) return false; // dedup open-symbol
     if (liveSymbols.size > 0 && !liveSymbols.has(asset.symbol)) return false; // futures-only deployments
     if (isCounterCascadeSuppressed(asset.symbol)) return false; // L3 anti-cascade veto window
+    if (liqBanned.includes(asset.symbol)) return false; // v11.8 liquidity floor
     if (!opts?.forced && asset.source !== "live") return false; // v6.2 sim-price ban
     return true;
   });
@@ -1225,9 +1614,17 @@ export async function deploySignal(symbol?: string, directionHint?: "LONG" | "SH
     if (!snap) return;
     const conf = scoreConfluence(snap, weights);
     // LAYER-0 regime ruling (v5.0 trigger hierarchy) — v6.3: guard-aware
+    // v12.1 R6 RADAR LANE: the SUCCESS-renom cohort's own focus symbol is
+    // exempt from the regime MOOD veto (CHOP direction ladder / breakout
+    // family) — the lane's qualification is the radar's realized SUCCESS
+    // outcome, not the scanner's regime mood. The ruling's threshold/size
+    // metadata still ride (thrAdj/sizeMult unchanged), only the ok=false
+    // drop is overridden, tagged in the CREATED card. Every PHYSICAL gate
+    // (LIQ-FLOOR/PHANTOM/RETEST/LOCKOUT/…) still applies downstream.
+    const radarLaneFocus = !!(opts?.radarLane && opts?.focusSymbol === asset.symbol);
     const regime = getRegimeCached(asset.symbol, candles);
     const ruling = regimeRuling(regime, conf.direction, conf.strategy, gate.regimeGuard);
-    if (!ruling.ok) {
+    if (!ruling.ok && !radarLaneFocus) {
       void recordGateBlock({ gate: "REGIME", symbol: asset.symbol, direction: conf.direction, reason: ruling.reason ?? "regime ruling veto" });
       if (opts?.focusSymbol) await fireEvent(null, asset.symbol, "ENGINE", "info", `Regime gate: ${ruling.reason}`);
       return;
@@ -1365,12 +1762,52 @@ export async function deploySignal(symbol?: string, directionHint?: "LONG" | "SH
   // v10.12 HONEST-SWEEP TELEMETRY — record the real best |adjScore| of this sweep
   lastSweepBest = { at: Date.now(), best: withEff.length ? Math.max(...withEff.map((c) => Math.abs(c.adjScore))) : 0, minScore: gate.minScore, candidates: withEff.length };
   let eligibleFinal = withEff.filter((c) => Math.abs(c.adjScore) >= c.effMin);
+  // ── FEATURE-SCALE RESCUE (operator mandate 2026-10-21) ──────────────
+  // «بجای وتوی کامل، ویژگی‌های منفی را حذف کن و ویژگی‌های مثبت را بیشتر زیر نظر بگیر»
+  // Candidates dropped ONLY by the score band get ONE measured rescale: the
+  // ledger-derived anti-signal features are pruned from the vote pool and the
+  // score recomputed — the same effMin must still be cleared. Journaled in the
+  // candidate note; capped at 3 rescues/sweep; data-integrity gates upstream
+  // (feed-fresh, sim-ban) are NOT rescuable by design.
+  if (eligibleFinal.length === 0 && !opts?.forced && !opts?.authorityBypass && !opts?.calCapture) {
+    try {
+      const fsOn = await featureScaleOn();
+      if (fsOn) {
+        const stats = await loadFeatureStats();
+        if (featureScaleHealth().statsLoaded && stats.size > 0) {
+          let rescueBudget = 3;
+          for (const c of withEff) {
+            if (rescueBudget <= 0) break;
+            const rs = rescaleCandidate(c.conf.votes, c.conf.strategy, c.conf.direction, stats);
+            if (rs.pruned.length === 0) continue;
+            const newScore = rs.rescore >= 0 ? rs.rescore + c.regimeAdj : rs.rescore - c.regimeAdj;
+            if (Math.abs(newScore) >= c.effMin) {
+              c.adjScore = newScore;
+              c.conf.score = rs.rescore;
+              const note = `FEATURE-RESCALED: pruned ${rs.pruned.join(" · ")} → rescore →${rs.rescore}${rs.watched.length ? ` · positive-watch: ${rs.watched.join(",")}` : ""}`;
+              c.regimeNote = c.regimeNote ? `${c.regimeNote} · ${note}` : note;
+              eligibleFinal.push(c);
+              noteRescale("rescue", note);
+              rescueBudget--;
+            } else {
+              noteRescale("fail", null);
+            }
+          }
+        }
+      }
+    } catch {
+      /* fail-open — the plain gate result stands */
+    }
+  }
   // v9.1 CALIBRATION CAPTURE: when every threshold says no and the caller
   // carries capture authority, the BEST measured candidate of the scan is
   // issued anyway — the whole point is to sample the flow the filters reject.
   // calCapture → strongest scan row overall; authorityBypass (radar) → the
-  // strongest row of the focus symbol only.
-  if (eligibleFinal.length === 0 && bypassQuality) {
+  // strongest row of the focus symbol only. v12.1: radarLane joins the
+  // fallback (focus-symbol row) — the renom cohort's qualification is the
+  // realized SUCCESS outcome, not the scanner's MIN_SCORE on a 15m candle
+  // composite (replay: renom vetoes read "best |score| 0 vs eff 27").
+  if (eligibleFinal.length === 0 && (bypassQuality || opts?.radarLane)) {
     const fallbackPool = opts?.calCapture ? withEff : withEff.filter((c) => c.asset.symbol === opts?.focusSymbol);
     const fallback = fallbackPool.sort((a, b) => Math.abs(b.adjScore) - Math.abs(a.adjScore))[0] ?? null;
     if (fallback) eligibleFinal = [fallback];
@@ -1415,10 +1852,12 @@ export async function deploySignal(symbol?: string, directionHint?: "LONG" | "SH
   }
 
   // memory gate — v9.1: quality layer, skipped under capture/authority bypass
+  // v12.1: radarLane skips too (cohort-blind mood gate; the lane's realized-
+  // SUCCESS filter replaces it)
   const mgProbeKeys = new Set<string>(); // v10.9.3 — candidates admitted as MG-PROBE half-size re-entry
   const memoryPassed: typeof eligibleFinal = [];
   for (const c of eligibleFinal) {
-    if (bypassQuality) {
+    if (bypassQuality || opts?.radarLane) {
       memoryPassed.push(c);
       continue;
     }
@@ -1449,8 +1888,37 @@ export async function deploySignal(symbol?: string, directionHint?: "LONG" | "SH
   // 2 veto. The advisor tracks the BO-EXP cohort: ≥20 settled with PF>1.2 keeps
   // the trial alive, PF≤1.2 proposes reverting to veto. Operator-forced bypasses.
   const boGuard = gate.breakoutGuard;
-  const strategyPassed = boGuard >= 2 && !opts?.forced && !bypassQuality ? memoryPassed.filter((c) => c.conf.strategy !== "BREAKOUT") : memoryPassed;
-  const boVetoed = memoryPassed.length - strategyPassed.length;
+  // FEATURE-SCALE (operator mandate 2026-10-21): with the knob on, the blanket
+  // BREAKOUT veto becomes a measured rescale — the anti-signal features are
+  // pruned from the vote pool and the candidate must STILL clear the same
+  // effMin. Rescale-fails still veto (the cohort evidence stands when feature
+  // surgery cannot rescue it). Legacy behavior with the knob off.
+  let strategyPassed: typeof memoryPassed = memoryPassed;
+  let boVetoed = 0;
+  if (boGuard >= 2 && !opts?.forced && !bypassQuality && !opts?.radarLane) {
+    const fsOn = await featureScaleOn().catch(() => true);
+    strategyPassed = [];
+    for (const c of memoryPassed) {
+      if (c.conf.strategy !== "BREAKOUT") {
+        strategyPassed.push(c);
+        continue;
+      }
+      const stats = fsOn ? await loadFeatureStats().catch(() => null) : null;
+      const rs = fsOn && stats && stats.size > 0 && featureScaleHealth().statsLoaded ? rescaleCandidate(c.conf.votes, c.conf.strategy, c.conf.direction, stats) : null;
+      const newScore = rs ? (rs.rescore >= 0 ? rs.rescore + c.regimeAdj : rs.rescore - c.regimeAdj) : 0;
+      if (rs && rs.pruned.length > 0 && Math.abs(newScore) >= c.effMin) {
+        c.adjScore = newScore;
+        c.conf.score = rs.rescore;
+        const note = `GUARD-RESCALED (BREAKOUT): pruned ${rs.pruned.join(" · ")} → rescore →${rs.rescore}`;
+        c.regimeNote = c.regimeNote ? `${c.regimeNote} · ${note}` : note;
+        noteRescale("rescue", note);
+        strategyPassed.push(c);
+      } else {
+        boVetoed++;
+        if (rs) noteRescale("fail", null);
+      }
+    }
+  }
   if (boVetoed > 0 && Date.now() - lastStratGateEventAt > 600_000) {
     lastStratGateEventAt = Date.now();
     await fireEvent(null, null, "ENGINE", "info", `Strategy guard: ${boVetoed} BREAKOUT setup${boVetoed > 1 ? "s" : ""} vetoed (breakoutGuard=${boGuard}) — realized evidence 14.3% win / −$30.98; advisor may propose re-enable via breakoutGuard knob`);
@@ -1465,15 +1933,43 @@ export async function deploySignal(symbol?: string, directionHint?: "LONG" | "SH
   // fail-closed when the board is cold) · 2 veto ALL auto SHORT deployments
   // until the regime evidence improves. Operator-forced deploys bypass
   // (explicit human override, audited) — the dial lives in gate settings.
+  // FEATURE-SCALE: shortGuard=2 blanket veto → measured rescale for SHORTs
+  // (knob-gated); shortGuard=1 keeps the HTF-align condition (context gate,
+  // not a feature veto — the flow board is DATA, and vetoing against live
+  // flow contradicts the flow-tracking mission).
   const shortGuardPassed =
-    gate.shortGuard === 0 || opts?.forced || bypassQuality
+    gate.shortGuard === 0 || opts?.forced || bypassQuality || opts?.radarLane
       ? strategyPassed
-      : strategyPassed.filter((c) => {
-          if (c.conf.direction !== "SHORT") return true;
-          if (gate.shortGuard === 2) return false;
-          const m = c.mtf;
-          return !!(m && m.netScore <= -40 && m.alignment >= 2);
-        });
+      : await (async () => {
+          const out: typeof strategyPassed = [];
+          const fsOn = await featureScaleOn().catch(() => true);
+          for (const c of strategyPassed) {
+            if (c.conf.direction !== "SHORT") {
+              out.push(c);
+              continue;
+            }
+            if (gate.shortGuard === 1) {
+              const m = c.mtf;
+              if (m && m.netScore <= -40 && m.alignment >= 2) out.push(c);
+              continue;
+            }
+            // shortGuard === 2 — blanket cohort veto → feature-scale rescale
+            const stats = fsOn ? await loadFeatureStats().catch(() => null) : null;
+            const rs = fsOn && stats && stats.size > 0 && featureScaleHealth().statsLoaded ? rescaleCandidate(c.conf.votes, c.conf.strategy, c.conf.direction, stats) : null;
+            const newScore = rs ? (rs.rescore >= 0 ? rs.rescore + c.regimeAdj : rs.rescore - c.regimeAdj) : 0;
+            if (rs && rs.pruned.length > 0 && Math.abs(newScore) >= c.effMin) {
+              c.adjScore = newScore;
+              c.conf.score = rs.rescore;
+              const note = `GUARD-RESCALED (SHORT): pruned ${rs.pruned.join(" · ")} → rescore →${rs.rescore}`;
+              c.regimeNote = c.regimeNote ? `${c.regimeNote} · ${note}` : note;
+              noteRescale("rescue", note);
+              out.push(c);
+            } else {
+              if (rs) noteRescale("fail", null);
+            }
+          }
+          return out;
+        })();
   const sgVetoed = strategyPassed.length - shortGuardPassed.length;
   if (sgVetoed > 0) {
     void recordGateBlock({ gate: "SHORT-GUARD", symbol: null, direction: "SHORT", reason: `SHORT veto ×${sgVetoed} (shortGuard=${gate.shortGuard}) — audit: WR 11.1%, −$9.69 of −$9.95 net` });
@@ -1492,8 +1988,9 @@ export async function deploySignal(symbol?: string, directionHint?: "LONG" | "SH
   // selection at entry, and until now no venue-consistency check existed
   // (CHASE-ADJ is order-level only). Reuses the existing 4-venue consensus
   // telemetry (maxDevBps, zero new feeds); the decision reads the ROLLING-5
-  // SCAN median. median ≥ skipBps → skip; ≥ warnBps → admitted at HALF margin
-  // downstream (DISLOCATION-HALF). Operator-forced deploys bypass (audited).
+  // SCAN median. median ≥ skipBps → skip; ≥ warnBps → admitted tagged
+  // DISLOCATION-HALF (FLAT-10: cohort tag, margin fixed).
+  // Operator-forced deploys bypass (audited).
   const dislocationPassed =
     gate.dislocationGate === 0 || opts?.forced || bypassQuality
       ? shortGuardPassed
@@ -1533,7 +2030,7 @@ export async function deploySignal(symbol?: string, directionHint?: "LONG" | "SH
         if (droughtMs >= 2 * 3600_000) {
           probeAllowed = true;
           probeBypass = true;
-          await fireEvent(null, null, "ENGINE", "info", `G4 RECOVERY PROBE: learned gate closed (${learned.reason}) — deploy drought ${droughtMs === Number.POSITIVE_INFINITY ? "∞" : Math.floor(droughtMs / 3600_000) + "h"} ≥ 2h — ONE bounded probe deploy allowed (half margin, LONG-only, every other guard live) to recharge the G1 rolling window with fresh R-protected settles.`);
+          await fireEvent(null, null, "ENGINE", "info", `G4 RECOVERY PROBE: learned gate closed (${learned.reason}) — deploy drought ${droughtMs === Number.POSITIVE_INFINITY ? "∞" : Math.floor(droughtMs / 3600_000) + "h"} ≥ 2h — ONE bounded probe deploy allowed (LONG-only, every other guard live) to recharge the G1 rolling window with fresh R-protected settles.`);
         } else if (Date.now() - lastLearnedGateEventAt > 600_000) {
           lastLearnedGateEventAt = Date.now();
           await fireEvent(null, null, "ENGINE", "warn", `Learned gate: auto-deployment SUPPRESSED — ${learned.reason}. G4 probe re-arms in ${Math.ceil((2 * 3600_000 - droughtMs) / 60_000)}min; operator-forced deploys bypass.`);
@@ -1578,6 +2075,35 @@ export async function deploySignal(symbol?: string, directionHint?: "LONG" | "SH
 
   if (!chosen || !chosenFlow) return { error: `all ${shortlist.length} shortlisted setups vetoed by flow gate`, status: 409 };
 
+  // ── v12.1 TASK-48 ② FLOW-GATE (optional — EngineSetting "flow-gate") ──
+  // Ships TAG-ONLY by default: the 10d ledger measured the blind cohort at
+  // +$204.20 (n=553, WR 57.1%) vs sighted +$7.11 (n=235, WR 52.8%) — blocking
+  // flow-blind deploys would have CUT positive net, so the honest NO-DATA
+  // verdict + card label is the enforced part; mode="block" is the operator's
+  // optional escalation (then a blind chosen-flow refuses the deploy and
+  // journals FLOW-GATE, near-miss captured). RAW-CAL capture bypasses per
+  // doctrine (tagged).
+  {
+    let flowGateMode: "off" | "tag" | "block" = "tag";
+    try {
+      const row = await db.engineSetting.findUnique({ where: { key: "flow-gate" } });
+      if (row) {
+        const p = JSON.parse(row.value) as { mode?: string };
+        if (p.mode === "off" || p.mode === "tag" || p.mode === "block") flowGateMode = p.mode;
+      }
+    } catch { /* fail-open: default tag */ }
+    if (flowGateMode === "block" && chosenFlow.blind && !opts?.forced && !opts?.calCapture) {
+      const fgReason = `flow-gate block: ${chosen.asset.symbol} deployed blind — flow verdict NO-DATA (all decision metrics null — fapi-gate starvation/ban window) · mode=block (EngineSetting "flow-gate")`;
+      void recordGateBlock({ gate: "FLOW-GATE", symbol: chosen.asset.symbol, direction: chosen.conf.direction, reason: fgReason });
+      void nearMissCaptureGate({ symbol: chosen.asset.symbol, direction: chosen.conf.direction, strategy: chosen.conf.strategy, reason: `FLOW-GATE: blind deploy refused` }).catch(() => undefined);
+      if (Date.now() - lastFlowGateEventAt > 600_000) {
+        lastFlowGateEventAt = Date.now();
+        await fireEvent(null, chosen.asset.symbol, "ENGINE", "warn", `FLOW-GATE BLOCK: ${chosen.conf.direction} ${chosen.asset.symbol} deploy refused — flow-blind (verdict NO-DATA) · 10d ledger context: blind WR 57.1% vs sighted 52.8% — mode=block is the operator's call, ships tag-only`);
+      }
+      return { error: `flow-gate: ${chosen.asset.symbol} refused — deploy would be flow-blind (NO-DATA)`, status: 409 };
+    }
+  }
+
   // build the deployment
   const asset = chosen.asset;
   const conf = chosen.conf;
@@ -1588,36 +2114,166 @@ export async function deploySignal(symbol?: string, directionHint?: "LONG" | "SH
   const direction = (directionHint ?? conf.direction) as "LONG" | "SHORT";
   const isLong = direction === "LONG";
 
+  // ── v11.8 LIQUIDITY-FLOOR DEPLOY GATE (authoritative — covers the
+  // focus/event-trigger paths that short-circuit the scan pool; the pool
+  // filter already removed these symbols for scans, this is the backstop) ──
+  // v11.9: + sim-source veto + engine-price/real-kline divergence leg
+  // (Task-43: NX-2741 AGTUSDT slipped through on a flickering synthetic tape
+  // priced ~11% above the real Binance close).
+  let liquidityFloorTag: string | null = null;
+  {
+    const liqFloorCfg = await getLiquidityFloorCfg();
+    const cachedCandles = klineCache.get(asset.symbol)?.candles;
+    const klineClose = cachedCandles && cachedCandles.length ? Number(cachedCandles[cachedCandles.length - 1].close) : undefined;
+    const floorLeg = liquidityFloorLeg(asset, liqFloorCfg, klineClose);
+    if (floorLeg) {
+      if (!opts?.forced && !bypassQuality) {
+        const vq = venueQuoteCount(asset);
+        const floorReason = `liquidity floor: ${asset.symbol} — ${floorLeg} · volume24h $${(asset.volume24h / 1e6).toFixed(1)}M · real venue quotes ${vq < 0 ? "unparsable(fail-open)" : vq} — no auto deploy on unvalidated/thin/divergent tape (feed-integrity floor v11.8 + v11.9 hardening, Task-42/43)`;
+        void recordGateBlock({ gate: "LIQUIDITY-FLOOR", symbol: asset.symbol, direction, reason: floorReason });
+        void nearMissCaptureGate({ symbol: asset.symbol, direction, strategy: conf.strategy, reason: `LIQUIDITY-FLOOR: ${asset.symbol} leg=${floorLeg}` }).catch(() => undefined);
+        if (Date.now() - lastLiquidityFloorEventAt > 600_000) {
+          lastLiquidityFloorEventAt = Date.now();
+          await fireEvent(null, asset.symbol, "ENGINE", "warn", `LIQUIDITY-FLOOR BLOCK: ${direction} ${asset.symbol} deploy refused — ${floorLeg} (Task-42/43: AGTUSDT tape drifted ~+11% above the real Binance close)`);
+        }
+        return { error: `liquidity-floor gate: ${direction} ${asset.symbol} refused — ${floorReason}`, status: 409 };
+      }
+      liquidityFloorTag = "LIQUIDITY-FLOOR"; // forced/capture override — audited cohort
+    }
+  }
+
+  // ── v11.9 PHANTOM-FEED GATE (Task-43 audit: XMRUSDT phantom tape) ──
+  let phantomFeedTag: string | null = null;
+  {
+    const pfCfg = await getPhantomFeedCfg();
+    const sanity = await assessFeedSanity(asset.symbol, pfCfg);
+    if (!sanity.ok) {
+      if (!opts?.forced && !bypassQuality) {
+        const pfReason = `phantom-feed: ${asset.symbol} tape regime discontinuity — max step ${sanity.maxStepPct.toFixed(1)}% (block ≥${pfCfg.stepBlockPct}%) · ${sanity.warnSteps} steps ≥${pfCfg.stepWarnPct}% across last ${sanity.windowPoints} ticks (block ≥${pfCfg.stepWarnMax}) — no auto deploy on a corrupted price tape (Task-43: XMRUSDT oscillated 118.7↔607.75 while two stops printed on phantom data)`;
+        void recordGateBlock({ gate: "PHANTOM-FEED", symbol: asset.symbol, direction, reason: pfReason });
+        void nearMissCaptureGate({ symbol: asset.symbol, direction, strategy: conf.strategy, reason: `PHANTOM-FEED: ${asset.symbol} maxStep ${sanity.maxStepPct.toFixed(1)}% warns ${sanity.warnSteps}` }).catch(() => undefined);
+        if (Date.now() - lastPhantomFeedEventAt > 600_000) {
+          lastPhantomFeedEventAt = Date.now();
+          await fireEvent(null, asset.symbol, "ENGINE", "warn", `PHANTOM-FEED BLOCK: ${direction} ${asset.symbol} deploy refused — corrupted tape (max step ${sanity.maxStepPct.toFixed(1)}% / ${sanity.warnSteps} warn steps in last ${sanity.windowPoints} ticks)`);
+        }
+        return { error: `phantom-feed gate: ${direction} ${asset.symbol} refused — ${pfReason}`, status: 409 };
+      }
+      phantomFeedTag = "PHANTOM-FEED"; // forced/capture override — audited cohort
+    }
+  }
+
+  // ── v12.1 TASK-48 ③④ BOTTOM-FADE + V-REVERSAL GATES (operator mandate
+  // «پیشنهادها را کامل و مهندسی اجرا کن» — the two APR/BRU failure-class
+  // guards from the Task-47 forensics) ──
+  // Both read the SAME evidence the audit measured: the ±30min PricePoint
+  // local range + the 15m kline closes the factors were computed from.
+  // Replay (scripts/verify-task48-guards.ts): BOTTOM-FADE blocks NX-2770
+  // (RSI 18.0, entryH 23%), NX-2779 (%B −0.01, entryH 25%), NX-2769 (%B
+  // −0.25, entryH 19%) = −$18.42 combined; V-REVERSAL blocks NX-2770's
+  // inverse-V (+3.71% bounce → +21% pump); BOTH pass 14/14 recent winners
+  // (RSI 30.2–47.3, %B 0.03–0.53, bounce ≤ 0.92%). RAW-CAL capture rides
+  // through tagged (audited doctrine); operator-forced never refused.
+  // Fail-open: telemetry context problems never wedge the deploy path.
+  {
+    let bfCfg: BottomFadeCfg = { ...BOTTOM_FADE_DEFAULTS };
+    let vrCfg: VRevCfg = { ...VREV_DEFAULTS };
+    try {
+      const row = await db.engineSetting.findUnique({ where: { key: "bottom-fade" } });
+      if (row) {
+        const p = JSON.parse(row.value) as Partial<BottomFadeCfg>;
+        if (p.enabled === false) bfCfg.enabled = false;
+        if (typeof p.bottomPct === "number") bfCfg.bottomPct = Math.max(5, Math.min(60, p.bottomPct));
+        if (typeof p.rsiMax === "number") bfCfg.rsiMax = Math.max(10, Math.min(45, p.rsiMax));
+        if (typeof p.bbMax === "number") bfCfg.bbMax = Math.max(-0.5, Math.min(0.3, p.bbMax));
+        if (typeof p.rangeMinutes === "number") bfCfg.rangeMinutes = Math.max(10, Math.min(120, Math.floor(p.rangeMinutes)));
+      }
+      const row2 = await db.engineSetting.findUnique({ where: { key: "v-reversal" } });
+      if (row2) {
+        const p = JSON.parse(row2.value) as Partial<VRevCfg>;
+        if (p.enabled === false) vrCfg.enabled = false;
+        if (typeof p.bouncePct === "number") vrCfg.bouncePct = Math.max(0.5, Math.min(6, p.bouncePct));
+        if (typeof p.minRangePct === "number") vrCfg.minRangePct = Math.max(0.5, Math.min(15, p.minRangePct));
+        if (typeof p.enforceLongMirror === "boolean") vrCfg.enforceLongMirror = p.enforceLongMirror;
+        if (typeof p.rangeMinutes === "number") vrCfg.rangeMinutes = Math.max(10, Math.min(120, Math.floor(p.rangeMinutes)));
+      }
+    } catch { /* fail-open: defaults */ }
+    const closes15m = klineCache.get(asset.symbol)?.candles?.map((c) => c.close) ?? null;
+    const tapeCtx = await getDeployTapeContext(asset.symbol, asset.price, bfCfg.rangeMinutes);
+    if (tapeCtx.ok) {
+      const bf = bottomFadeVerdict(tapeCtx, closes15m, direction, bfCfg);
+      if (bf.blocked) {
+        if (!opts?.forced && !bypassQuality) {
+          const bfReason = `bottom-fade: ${asset.symbol} — ${bf.reason}`;
+          void recordGateBlock({ gate: "BOTTOM-FADE", symbol: asset.symbol, direction, reason: bfReason });
+          void nearMissCaptureGate({ symbol: asset.symbol, direction, strategy: conf.strategy, reason: `BOTTOM-FADE: ${asset.symbol} entryH ${tapeCtx.entryHeightPct.toFixed(0)}% RSI ${bf.rsi14?.toFixed(1) ?? "-"} %B ${bf.bbB?.toFixed(2) ?? "-"}` }).catch(() => undefined);
+          if (Date.now() - lastBottomFadeEventAt > 600_000) {
+            lastBottomFadeEventAt = Date.now();
+            await fireEvent(null, asset.symbol, "ENGINE", "warn", `BOTTOM-FADE BLOCK: ${direction} ${asset.symbol} deploy refused — ${bf.reason}`);
+          }
+          return { error: `bottom-fade gate: ${direction} ${asset.symbol} refused — ${bf.reason}`, status: 409 };
+        }
+        void recordGateBlock({ gate: "BOTTOM-FADE", symbol: asset.symbol, direction, reason: `[OVERRIDE-TAGGED] ${bf.reason}` });
+      }
+      const vr = vRevVerdict(tapeCtx, direction, vrCfg);
+      if (vr.blocked || vr.shadow) {
+        if (vr.blocked && !opts?.forced && !bypassQuality) {
+          const vrReason = `V-reversal: ${asset.symbol} — ${vr.reason}`;
+          void recordGateBlock({ gate: "V-REVERSAL", symbol: asset.symbol, direction, reason: vrReason });
+          void nearMissCaptureGate({ symbol: asset.symbol, direction, strategy: conf.strategy, reason: `V-REVERSAL: ${asset.symbol} bounce +${tapeCtx.bounceOffLowPct.toFixed(2)}% off ±${vrCfg.rangeMinutes}m low` }).catch(() => undefined);
+          if (Date.now() - lastVRevEventAt > 600_000) {
+            lastVRevEventAt = Date.now();
+            await fireEvent(null, asset.symbol, "ENGINE", "warn", `V-REVERSAL BLOCK: ${direction} ${asset.symbol} deploy refused — ${vr.reason}`);
+          }
+          return { error: `v-reversal gate: ${direction} ${asset.symbol} refused — ${vr.reason}`, status: 409 };
+        }
+        void recordGateBlock({ gate: "V-REVERSAL", symbol: asset.symbol, direction, reason: vr.blocked ? `[OVERRIDE-TAGGED] ${vr.reason}` : vr.reason });
+      }
+    }
+  }
+
   // ── v6.7.2 VOL-ONSET RETEST GATE (operator mandate: «هر سه را مهندسی انجام بده») ──
-  // DURATION-LAB evidence: the 9 real fast-kills were chase entries into fresh
-  // eruption bursts — flow CONFIRMS the burst while it is already terminal.
-  // A deployment CHASING a hot (<90min) eruption is now BLOCKED until price has
-  // retraced ≥30% of the impulse leg (entry on retest, not on burst). Retested
-  // entries earn the VOL-ONSET-RETEST tag so the ledger can A/B the cohort.
-  // Counter-eruption deployments (fading the burst) are not gated here.
-  // Operator-forced deploys bypass (explicit human override, audited).
+  // v11.8 TASK-42 RE-ARM + STORM-CLASS FIX (operator mandate: «دو توصیه باقی
+  // مانده را کامل و مهندسی اجرا کن»): the knob was found at 0 in live settings
+  // and the AGTUSDT storm (Task-41: 4 fade-stops into a −16%/100s intra-bar
+  // leg) showed the armed gate would have missed that class three times over —
+  // (a) detectOnset anchors the FIRST eruption of 24h (a pump erases its own
+  // follow-through on the crash), (b) closed-bar lag (a 21-minute storm ends
+  // before the 15m bar closes), (c) fade-direction exemption (the storm LONGs
+  // were counter-eruption knife-catches, ungated by design). Fixes, all under
+  // the same onsetRetestGuard knob: the gate now evaluates the LATEST eruption
+  // (onsetGateViewFor — backward scan incl. the FORMING bar, telemetry/tags
+  // unchanged), the impulse leg is measured from the PRE-eruption close (a
+  // forming-bar leg used to collapse to ~0 and pass as "noise"), and BOTH
+  // alignments are gated — CHASE (same direction) and FADE (counter) alike
+  // wait for the ≥30% retest: entry on retest, not on burst, either way.
+  // Evidence: DURATION-LAB 9 chase fast-kills (v6.7.2) + Task-41 AGT 4 fade
+  // stops −$18.36. Retested entries earn the VOL-ONSET-RETEST tag. Operator-
+  // forced and capture-authority deploys bypass (audited doctrine).
   let onsetRetested = false;
-  if (gate.onsetRetestGuard >= 1 && onsetInfo?.hot && !opts?.forced && !bypassQuality) {
-    const erupUp = onsetInfo.direction === "UP";
-    const chasing = (isLong && erupUp) || (!isLong && !erupUp);
-    if (chasing) {
-      const bars = klineCache.get(asset.symbol)?.candles ?? [];
-      const erupTime = Date.now() - onsetInfo.minutesSince * 60_000;
-      const post = bars.filter((b) => b.openTime >= erupTime - 15 * 60_000);
-      const erupRef = post[0]?.close;
-      if (post.length >= 1 && erupRef && erupRef > 0) {
+  if (gate.onsetRetestGuard >= 1 && !opts?.forced && !bypassQuality) {
+    const gateView = await onsetGateViewFor(asset.symbol, klineCache.get(asset.symbol)?.candles).catch(() => null);
+    const gateHot = gateView?.tag.hot ?? false;
+    if (gateView && gateHot) {
+      const erupUp = gateView.core.direction === 1;
+      const aligned = (isLong && erupUp) || (!isLong && !erupUp);
+      const kind = aligned ? "CHASE" : "FADE";
+      const bars = gateView.bars;
+      const erupIdx = bars.findIndex((b) => b.openTime === gateView.core.eruptionAt);
+      const erupRef = erupIdx > 0 ? bars[erupIdx - 1]!.close : bars[erupIdx]?.open; // PRE-eruption close = leg origin
+      if (erupRef && erupRef > 0) {
+        const post = bars.slice(Math.max(0, erupIdx));
         const extreme = erupUp ? Math.max(...post.map((b) => b.high)) : Math.min(...post.map((b) => b.low));
         const leg = Math.abs(extreme - erupRef);
         if (leg / erupRef >= 0.003) {
           // clean impulse leg ≥0.3% — otherwise the "burst" is noise, don't gate on it
           const retr = leg > 0 ? (erupUp ? extreme - asset.price : asset.price - extreme) / leg : 1;
           if (retr < 0.3) {
-            void recordGateBlock({ gate: "ONSET-RETEST", symbol: asset.symbol, direction, reason: `chasing a ${erupUp ? "UP" : "DOWN"} eruption ${onsetInfo.minutesSince.toFixed(0)}m old — ${(retr * 100).toFixed(0)}% retraced, ≥30% required` });
+            void recordGateBlock({ gate: "ONSET-RETEST", symbol: asset.symbol, direction, reason: `${kind === "FADE" ? "fading" : "chasing"} a ${erupUp ? "UP" : "DOWN"} eruption ${gateView.core.minutesSince.toFixed(0)}m old — ${(retr * 100).toFixed(0)}% retraced, ≥30% required (v11.8 storm-class gate, both alignments)` });
             if (Date.now() - lastRetestGateEventAt > 600_000) {
               lastRetestGateEventAt = Date.now();
-              await fireEvent(null, asset.symbol, "ENGINE", "warn", `VOL-ONSET RETEST GATE: ${asset.symbol} ${direction} blocked — chasing a ${erupUp ? "UP" : "DOWN"} eruption ${onsetInfo.minutesSince.toFixed(0)}m old with only ${(retr * 100).toFixed(0)}% retracement (need ≥30%). Entry on retest, not on burst — DURATION-LAB evidence: 9 fast-kills were untested-burst chases.`);
+              await fireEvent(null, asset.symbol, "ENGINE", "warn", `VOL-ONSET RETEST GATE: ${asset.symbol} ${direction} blocked — ${kind === "FADE" ? "fading" : "chasing"} a ${erupUp ? "UP" : "DOWN"} eruption ${gateView.core.minutesSince.toFixed(0)}m old with only ${(retr * 100).toFixed(0)}% retracement (need ≥30%). Entry on retest, not on burst — evidence: 9 chase fast-kills (v6.7.2) + AGTUSDT 4 fade-stops −$18.36 (Task-41).`);
             }
-            return { error: `vol-onset retest gate: ${asset.symbol} ${direction} chases a hot ${erupUp ? "UP" : "DOWN"} eruption (${(retr * 100).toFixed(0)}% retraced, ≥30% required) — wait for the retest`, status: 409 };
+            return { error: `vol-onset retest gate: ${asset.symbol} ${direction} ${kind === "FADE" ? "fades" : "chases"} a hot ${erupUp ? "UP" : "DOWN"} eruption (${(retr * 100).toFixed(0)}% retraced, ≥30% required) — wait for the retest`, status: 409 };
           }
           onsetRetested = true;
         }
@@ -1650,6 +2306,65 @@ export async function deploySignal(symbol?: string, directionHint?: "LONG" | "SH
   const price = asset.price;
   const entry = price;
 
+  // ── v11.0 STABLECOIN FLOW GATES (family-E substrate) ─────────────────────
+  // (a) DEPEG-MUTE — ENFORCED from day one: |pegDev| ≥ 1% on ANY tracked
+  //     stable (USDT/USDC/DAI/USDE/USDS) = systemic liquidity emergency
+  //     (USDC-May2023 class). New deploys are refused fail-closed — the
+  //     false-positive cost of this gate ≈ 0 (a real peg break outranks any
+  //     setup), while its tail-risk protection is the exact scenario where
+  //     every other signal source lies. Operator-forced deploys stay the
+  //     audited human override.
+  // (b) STABLE-REGIME — SHADOW ONLY: a RISK-OFF stable contraction flags
+  //     LONG deploys as a would-block cohort in the gate journal so the
+  //     shadow arms can ground-truth the filter BEFORE it ever refuses a
+  //     trade. Enforcement switch = EngineSetting "stableflow.regimeGate".
+  const sBoard = await getStableBoard().catch(() => null);
+  if (sBoard) {
+    const dm = depegMuted(sBoard);
+    if (dm.muted && !opts?.forced) {
+      void recordGateBlock({ gate: "DEPEG-MUTE", symbol: asset.symbol, direction, reason: dm.reason });
+      await fireEvent(null, asset.symbol, "ENGINE", "error", `DEPEG-MUTE: ${direction} ${asset.symbol} deploy refused — ${dm.reason} · systemic stablecoin emergency, deploys paused (STABLEFLOW doctrine)`).catch(() => undefined);
+      return { error: `depeg-mute: ${dm.reason}`, status: 409 };
+    }
+    const rv = stableRegimeVerdict(sBoard, direction as "LONG" | "SHORT");
+    if (rv.flag) {
+      void recordGateBlock({ gate: "STABLE-REGIME", symbol: asset.symbol, direction, reason: `${rv.note} [shadow — journaled, NOT enforcing]` });
+    }
+  }
+
+  // ── TASK-50 STALE-ANCHOR GUARD (RESET-0929 post-mortem: phantom NX-0748) ──
+  // After the 2026-09-29 18:06Z platform reset restored a 2-day-old workspace,
+  // MarketAsset.price still held the 09-27 snapshot price while the GLOBAL feed
+  // gate above saw "ok" (other symbols ticked fine). QNTUSDT deployed LONG
+  // @152.12 vs real ~255 — settlement then judged REAL klines against the
+  // stale anchor and "hit" all 3 TPs in 150s (+104.71% phantom). Lesson: global
+  // feed freshness ≠ per-symbol anchor freshness. The anchor must match a FRESH
+  // per-symbol ticker before any deploy; deviation > 5% = stale anchor =
+  // fail-closed (operator-forced deploys stay the audited human override).
+  if (!opts?.forced) {
+    let anchorOk = false;
+    let anchorReason = "";
+    try {
+      const fresh = await fetchTickers([asset.symbol]);
+      const ft = fresh.get(asset.symbol);
+      const fp = ft ? Number(ft.lastPrice) : 0;
+      if (fp > 0) {
+        const dev = Math.abs(entry - fp) / fp;
+        if (dev <= 0.05) anchorOk = true;
+        else anchorReason = `anchor ${entry} vs fresh ticker ${fp} = ${(dev * 100).toFixed(1)}% deviation (> 5%)`;
+      } else {
+        anchorReason = "no fresh per-symbol ticker (feed warming or down) — fail-closed";
+      }
+    } catch (e) {
+      anchorReason = `fresh ticker fetch failed: ${e instanceof Error ? e.message : String(e)}`;
+    }
+    if (!anchorOk) {
+      void recordGateBlock({ gate: "STALE-ANCHOR", symbol: asset.symbol, direction, reason: anchorReason });
+      await fireEvent(null, asset.symbol, "ENGINE", "warn", `STALE-ANCHOR GUARD: ${direction} ${asset.symbol} deploy refused — ${anchorReason} · RESET-0929 doctrine: a stale anchor cannot trade even when the global feed looks healthy`).catch(() => undefined);
+      return { error: `stale-anchor guard: ${asset.symbol} ${direction} ${anchorReason}`, status: 409 };
+    }
+  }
+
   // ── v9.3 ANTI-LATE-ENTRY PRICE GUARD (operator mandate) ──
   // Duration-Lab verdict LATE_ENTRY_CASCADE_CHASE: the real fast-kill cohort
   // NEVER went green — they were entries executed well after detection, buying
@@ -1674,11 +2389,10 @@ export async function deploySignal(symbol?: string, directionHint?: "LONG" | "SH
   // regime + crowd scaling constants (needed before SL math)
   const slMult = chosen.slMult ?? 1;
   const crowdCut = isCrowdCut(asset.symbol);
-  const regimeSize = chosen.sizeMult ?? 1;
   // v10.15 DISLOCATION-GATE warn band: the candidate survived the skip floor —
   // a rolling-5 median still ≥ warnBps means the venue board is stretched but
-  // not broken: admit at HALF margin, tagged DISLOCATION-HALF, so the cohort's
-  // settles are auditable (same measured-caution pattern as G4-PROBE/MG-PROBE).
+  // not broken: admit, tagged DISLOCATION-HALF, so the cohort's settles are
+  // auditable (FLAT-10: the tag is cohort-only — margin no longer halves).
   const dislocMedian = rollingDislocationBps(asset.symbol, asset.maxDevBps);
   const dislocationMult = gate.dislocationGate !== 0 && !opts?.forced && !bypassQuality && dislocMedian >= gate.dislocationWarnBps ? 0.5 : 1;
 
@@ -1740,9 +2454,21 @@ export async function deploySignal(symbol?: string, directionHint?: "LONG" | "SH
   // TP2 scales with RR (was frozen at 1.8R) — keeps the ladder proportional
   const tp2Mult = Number(Math.min(2.2, Math.max(1.5, 1.2 + rr * 0.22)).toFixed(2));
   const rrDrivers = `base ${RR_BASE[conf.strategy] ?? 2.6} · flow ${flowAdj >= 0 ? "+" : ""}${flowAdj.toFixed(2)} · conv ${confAdj >= 0 ? "+" : ""}${confAdj.toFixed(2)} · regime ${regimeAdjRR >= 0 ? "+" : ""}${regimeAdjRR.toFixed(1)} · vol ${volGeo.rrAdj >= 0 ? "+" : ""}${volGeo.rrAdj.toFixed(1)} · gov-scale ×${gate.rrScale.toFixed(2)}`;
-  const tp1 = isLong ? entry + risk : entry - risk;
+  // ── v12.6 TP1 MFE-SCALE RE-RANK (operator mandate 2026-10-20 «توصیهٔ مهندسی ترتیب ۱
+  // سپس ۲ … را کامل و مهندسی اجرا کن» — OP-AUDIT-TP-1020 proposal ① approved): TP1 was
+  // hard-locked at 1R while the ledger's realized MFE median sits at 0.37–0.52R (TP1
+  // levered-median 14.5% vs MFE 5.4–7.6% · only 11% of expired rows ever reached ≥80%
+  // of the TP1 path) — the first bank lived beyond the typical excursion and the
+  // TP-proven rate collapsed. TP1 = gate.tp1RMult × R (default 0.55 — inside the
+  // measured MFE envelope); tp2/tp3/SL geometry untouched. The first decision
+  // min(TP1dist, SLdist) becomes fdMult·R — the vol-barrier and decisive projections
+  // below solve for the SAME distance so the gates stay coherent with the ladder.
+  const tp1 = isLong ? entry + risk * gate.tp1RMult : entry - risk * gate.tp1RMult;
   const tp2 = isLong ? entry + risk * tp2Mult : entry - risk * tp2Mult;
   const tp3 = isLong ? entry + risk * rr : entry - risk * rr;
+  // v12.6 first-decision distance in R — min(TP1dist, SLdist)/R (≤1 by knob clamp)
+  const fdMult = Math.min(1, gate.tp1RMult);
+
   // ── v8.4 R5 RESEARCH-SHADOW LADDER — the audit caught the live geometry
   // CONTRADICTING the flow-factor research optimum (slAtr 1.8 vs 1.2, rrScale
   // 0.75 vs 1.15, BE-trail on vs off). Flipping the live book to unproven
@@ -1802,7 +2528,7 @@ export async function deploySignal(symbol?: string, directionHint?: "LONG" | "SH
   // behavior. Residual rejects feed the BARRIER-CAP-NEAR-MISS paper queue
   // with volPctile/capUsed metadata (counterfactual audit of the widening).
   if (gate.volBarrier > 0 && !opts?.forced && !opts?.authorityBypass && opts?.ttlMinutes === undefined) {
-    const vbRequiredPct = slDistPct * 100;
+    const vbRequiredPct = slDistPct * fdMult * 100; // v12.6: first decision = min(TP1dist, SLdist) = fdMult·R
     const vbSkip = (reason: string, detail: string) =>
       ({ reason, detail }) as const;
     let vbSkipInfo: ReturnType<typeof vbSkip> | null = null;
@@ -1827,13 +2553,13 @@ export async function deploySignal(symbol?: string, directionHint?: "LONG" | "SH
       vbT1r = t1r;
       if (t1r > effCap) {
         vbSkipInfo = vbSkip(
-          `projected 1R touch ${Math.round(t1r)}m beyond the ${effCap}m barrier cap (ATR ${atrPct.toFixed(2)}% × ER ${exEr.toFixed(2)}) — slow-touch candidate`,
+          `projected ${fdMult.toFixed(2)}R touch ${Math.round(t1r)}m beyond the ${effCap}m barrier cap (ATR ${atrPct.toFixed(2)}% × ER ${exEr.toFixed(2)}) — slow-touch candidate`,
           `t1r ${Math.round(t1r)}m > cap ${effCap}m`,
         );
       } else {
         const barrier = Math.round(Math.min(effCap, Math.max(30, t1r * gate.volBarrierMult)));
         if (Math.abs(barrier - ttl) >= 10) {
-          void fireEvent(null, asset.symbol, "ENGINE", "info", `VOL-SCALED BARRIER: ${direction} ${asset.symbol} ${conf.strategy} TTL ${ttl}m → ${barrier}m (projected 1R touch ${Math.round(t1r)}m × ${gate.volBarrierMult.toFixed(2)} headroom · ATR ${atrPct.toFixed(2)}% · ER ${exEr.toFixed(2)}${vbRegime})`).catch(() => undefined);
+          void fireEvent(null, asset.symbol, "ENGINE", "info", `VOL-SCALED BARRIER: ${direction} ${asset.symbol} ${conf.strategy} TTL ${ttl}m → ${barrier}m (projected ${fdMult.toFixed(2)}R touch ${Math.round(t1r)}m × ${gate.volBarrierMult.toFixed(2)} headroom · ATR ${atrPct.toFixed(2)}% · ER ${exEr.toFixed(2)}${vbRegime})`).catch(() => undefined);
         }
         ttl = barrier;
       }
@@ -1875,11 +2601,11 @@ export async function deploySignal(symbol?: string, directionHint?: "LONG" | "SH
     // actually live under; for barrier-qualified candidates the projection is
     // ≥1R by construction and this degrades to its chop-floor guard.
     if (exEr !== null) {
-      const requiredPct = slDistPct * 100; // min(TP1dist, SLdist) = 1R (tp1 = entry ± risk)
+      const requiredPct = slDistPct * fdMult * 100; // v12.6: min(TP1dist, SLdist) = fdMult·R (tp1 = ±tp1RMult·R)
       const decMult = gate.decisiveFilter >= 2 ? 1 : 0.85; // level 1 lenient ×0.85 · level 2 strict ×1.0
       const projPct = atrPct * Math.sqrt(ttl / 15) * exEr; // 15m-ATR diffusion projection × efficiency
       if (exEr < gate.decisiveErMin || projPct < requiredPct * decMult) {
-        const reason = `projected travel ${projPct.toFixed(2)}% in ${ttl}m (ATR ${atrPct.toFixed(2)}% × √(ttl/15m) × ER ${exEr.toFixed(2)}) vs required ${(requiredPct * decMult).toFixed(2)}% = 1R min(TP1,SL)${exEr < gate.decisiveErMin ? ` · ER ${exEr.toFixed(2)} below chop floor ${gate.decisiveErMin}` : ""} — predicted no-touch`;
+        const reason = `projected travel ${projPct.toFixed(2)}% in ${ttl}m (ATR ${atrPct.toFixed(2)}% × √(ttl/15m) × ER ${exEr.toFixed(2)}) vs required ${(requiredPct * decMult).toFixed(2)}% = ${fdMult.toFixed(2)}R min(TP1,SL)${exEr < gate.decisiveErMin ? ` · ER ${exEr.toFixed(2)} below chop floor ${gate.decisiveErMin}` : ""} — predicted no-touch`;
         void recordGateBlock({ gate: "DECISIVE", symbol: asset.symbol, direction, reason });
         if (Date.now() - lastDecisiveEventAt > 600_000) {
           lastDecisiveEventAt = Date.now();
@@ -1901,24 +2627,22 @@ export async function deploySignal(symbol?: string, directionHint?: "LONG" | "SH
   tfIdx = Math.max(0, Math.min(TF_LADDER.length - 1, tfIdx + tfVolTilt + (chosen.regimeTag.includes("TREND") && conf.strategy === "AI-SWING" ? 1 : 0)));
   const timeframe = TF_LADDER[tfIdx]!;
 
-  // equity + confidence-sized margin, regime-scaled (VOLATILE ×0.6 etc.) + L3.5 crowd cut
+  // equity book (realized + unrealized) + open exposure — free-margin input for
+  // the tradeability floor below; sizing itself is FLAT-10 fixed (v11.1).
   const settled = await db.signal.findMany({ where: { status: { in: ["TP1", "TP2", "TP3", "SL", "EXPIRED", "CLOSED"] } }, select: { pnlPercent: true, marginUsd: true } });
-  const openSigs = await db.signal.findMany({ where: { status: { in: ["ACTIVE", "TP1", "TP2"] } }, select: { pnlPercent: true, marginUsd: true } });
+  const openSigs = await db.signal.findMany({ where: { status: { in: ["ACTIVE", "TP1", "TP2"] } }, select: { pnlPercent: true, marginUsd: true, symbol: true } });
   const realized = settled.reduce((a, s) => a + (s.marginUsd * s.pnlPercent) / 100, 0);
   const unrealized = openSigs.reduce((a, s) => a + (s.marginUsd * s.pnlPercent) / 100, 0);
   const equity = ACCOUNT_START_USD + realized + unrealized;
   const exposure = openSigs.reduce((a, s) => a + s.marginUsd, 0);
-  const marginBase = confidenceMargin(conf.confidence, equity, Math.max(0, equity - exposure));
-
   // ── v8.1 P2 RISK OVERLAY (risk-overlay.ts) ──
   // getRiskState(symbol, direction) assesses the STANDING book (union-merge
   // clusters |ρ|≥0.65, drawdown sizing ×1/×0.75/×0.5 at 3%/7%) plus the
   // candidate join test (same-direction correlated share ≥35% of equity →
   // blocked). Auto path: refused with an audited, rate-limited event.
-  // Operator-forced deploys are never refused — they deploy HALF-SIZED with
-  // the RISK-CLUSTER tag so the ledger can judge the override cohort.
+  // Operator-forced deploys are never refused — they deploy with the
+  // RISK-CLUSTER tag so the ledger can judge the override cohort.
   const riskOv = await getRiskState(asset.symbol, direction);
-  let riskMult = riskOv.state.sizeMult;
   let riskTag: string | null = null;
   let riskNote: string | null = riskOv.candidateJoinsBlocked || riskOv.state.verdict !== "OK" ? riskOv.state.reasons.join(" · ") : null;
   if (riskOv.candidateJoinsBlocked) {
@@ -1930,11 +2654,267 @@ export async function deploySignal(symbol?: string, directionHint?: "LONG" | "SH
       void recordGateBlock({ gate: "RISK-CLUSTER", symbol: asset.symbol, direction, reason: riskOv.state.reasons[0] ?? "correlated cluster over cap" });
       return { error: `risk overlay: ${direction} ${asset.symbol} would join an over-cap correlated cluster (${riskOv.state.reasons[0] ?? "exposure cap"})`, status: 409 };
     }
-    riskMult = Math.min(riskMult, 0.5);
     riskTag = "RISK-CLUSTER";
-    riskNote = `${opts?.forced ? "operator-forced" : "capture-authority"} deploy joins an over-cap correlated cluster — HALF-SIZED per overlay policy (${riskNote ?? "exposure cap"})`;
+    riskNote = `${opts?.forced ? "operator-forced" : "capture-authority"} deploy joins an over-cap correlated cluster — cohort recorded (sizing is FLAT-10 fixed) (${riskNote ?? "exposure cap"})`;
   } else if (riskOv.state.drawdownPct >= 3) {
     riskTag = "RISK-DD";
+  }
+
+  // ── v11.4 SAME-SYMBOL CONCENTRATION CAP (EQ-92 P2 + EQ-94 operator mandate
+  // «توصیه‌ها و پیشنهادها را کامل و مهندسی اجرا کن») ──
+  // Forensics: the two worst bleeding clusters were SAME-SYMBOL PAIRS taken
+  // back-to-back — RLCUSDT ×2 consecutive SL (−$12.8, 63% of Oct-11 24h loss)
+  // and LUMIA ×2 SL on Oct-11. One symbol carrying two concurrent FLAT-10
+  // positions is double concentration with zero diversification. This is a
+  // RISK overlay (same family as RISK-CLUSTER — it shapes exposure, it does
+  // not judge alpha): auto deploys are refused when the symbol already holds
+  // ≥ maxPerSymbol open positions (ANY direction — a hedged pair is also
+  // double fee-bleed with no added edge). Operator-forced and RAW-CAL capture
+  // deploys are never refused — they deploy tagged SYMBOL-CAP so the override
+  // cohort stays auditable. Fail-open on internal error. Cap is
+  // operator-tunable via EngineSetting key "symbol-cap" {maxPerSymbol}.
+  let symbolCapTag: string | null = null;
+  {
+    let maxPerSymbol = 1;
+    try {
+      const row = await db.engineSetting.findUnique({ where: { key: "symbol-cap" } });
+      if (row) {
+        const parsed = JSON.parse(row.value) as { maxPerSymbol?: number };
+        if (typeof parsed.maxPerSymbol === "number") maxPerSymbol = Math.max(0, Math.min(4, Math.floor(parsed.maxPerSymbol)));
+      }
+    } catch {
+      /* fail-open: default cap 1 */
+    }
+    if (maxPerSymbol > 0) {
+      const openSameSymbol = openSigs.filter((s) => s.symbol === asset.symbol).length;
+      if (openSameSymbol >= maxPerSymbol) {
+        if (!opts?.forced && !bypassQuality) {
+          const capReason = `same-symbol concurrent positions ${openSameSymbol} ≥ cap ${maxPerSymbol} (${asset.symbol}) — concentration cap v11.4`;
+          void recordGateBlock({ gate: "SYMBOL-CAP", symbol: asset.symbol, direction, reason: capReason });
+          void nearMissCaptureGate({ symbol: asset.symbol, direction, strategy: conf.strategy, reason: `SYMBOL-CAP: ${openSameSymbol} open on ${asset.symbol} ≥ cap ${maxPerSymbol}` }).catch(() => undefined);
+          if (Date.now() - lastSymbolCapEventAt > 600_000) {
+            lastSymbolCapEventAt = Date.now();
+            await fireEvent(null, asset.symbol, "ENGINE", "warn", `SYMBOL-CAP BLOCK: ${direction} ${asset.symbol} deploy refused — ${openSameSymbol} position(s) already open on this symbol (cap ${maxPerSymbol}) · same-symbol concentration cap v11.4 (EQ-92 P2: RLC×2/LUMIA×2 SL-chain forensics; paper-tracked via near-miss rails)`);
+          }
+          return { error: `symbol-cap gate: ${direction} ${asset.symbol} refused — ${openSameSymbol} same-symbol position(s) already open (cap ${maxPerSymbol})`, status: 409 };
+        }
+        symbolCapTag = "SYMBOL-CAP"; // forced/capture override — audited cohort
+      }
+    }
+  }
+
+  // ── v12.7 RE-ARM BRAKE — same-direction post-stop cooldown (SENTINEL-20261020
+  // operator mandate, acceptance: صفر ورود تکراری هم‌جهت پس از استاپ) ──
+  // Forensics (2026-10-20): NX-2910 APRUSDT LONG SL closed 12:41:16 → NX-2911
+  // RAW-CAL capture LONG created 12:41:22 (6 SECONDS later) → SL again −$6.12;
+  // NX-2913 BTWUSDT SHORT SL 14:08:26 → NX-2916 capture 14:09:34 (68s) → SL
+  // again. The v11.7 lockout binds the AUTO path only — calCapture (RAW-CAL
+  // calibration mandate) and authorityBypass ride through tagged, and with
+  // RAW-CAL armed (paper-veto 0/30) the capture lane degenerated into a
+  // repeat-stop relay: 13 repeat entries today ≈ half the −$50.48 day. This
+  // brake: after a net-negative SL close on symbol X direction D, ALL machine
+  // deploys on X+D (auto + calCapture + authorityBypass + radarLane) are
+  // refused for stopCooldownMin (default 360m = 6h), escalating to
+  // escalatedCooldownMin (default 720m) at ≥ escalateAfterStops same-direction
+  // stops inside windowHours (default 24h). ONLY the operator's own forced
+  // deploy passes (tagged REARM-BRAKE — audited override cohort). Opposite
+  // direction stays allowed (a LONG stop is not a SHORT veto). RAW-CAL capture
+  // loses nothing: the calibrator rotates to the other ~40 pool symbols.
+  // Fail-open on internal error (a risk overlay must never wedge the engine).
+  // Tunable via EngineSetting key "rearm-brake" {enabled, stopCooldownMin,
+  // escalatedCooldownMin, escalateAfterStops, windowHours}.
+  let rearmBrakeTag: string | null = null;
+  {
+    let cfg = { enabled: true, stopCooldownMin: 360, escalatedCooldownMin: 720, escalateAfterStops: 2, windowHours: 24 };
+    let lastStop: { closedAt: Date; pnlPercent: number } | null = null;
+    let stopCount = 0;
+    try {
+      const row = await db.engineSetting.findUnique({ where: { key: "rearm-brake" } });
+      if (row) {
+        const p = JSON.parse(row.value) as Partial<typeof cfg>;
+        if (p.enabled === false) cfg.enabled = false;
+        if (typeof p.stopCooldownMin === "number") cfg.stopCooldownMin = Math.max(30, Math.min(1440, Math.floor(p.stopCooldownMin)));
+        if (typeof p.escalatedCooldownMin === "number") cfg.escalatedCooldownMin = Math.max(60, Math.min(2880, Math.floor(p.escalatedCooldownMin)));
+        if (typeof p.escalateAfterStops === "number") cfg.escalateAfterStops = Math.max(1, Math.min(10, Math.floor(p.escalateAfterStops)));
+        if (typeof p.windowHours === "number") cfg.windowHours = Math.max(1, Math.min(168, Math.floor(p.windowHours)));
+      }
+      if (cfg.enabled) {
+        // stop-class close = terminal SL with negative NET (BE-banked SL closes
+        // positive — banked wins are not relay fuel; same doctrine as v11.7).
+        const stops = await db.signal.findMany({
+          where: { symbol: asset.symbol, direction, status: "SL", pnlPercent: { lt: 0 }, closedAt: { gte: new Date(Date.now() - cfg.windowHours * 3600_000) } },
+          select: { closedAt: true, pnlPercent: true },
+          orderBy: { closedAt: "desc" },
+          take: 10,
+        });
+        stopCount = stops.length;
+        lastStop = stops[0] ?? null;
+      }
+    } catch {
+      /* fail-open: no brake on internal error */
+    }
+    if (cfg.enabled && lastStop) {
+      const minutesSince = (Date.now() - new Date(lastStop.closedAt).getTime()) / 60_000;
+      const cooldownMin = stopCount >= cfg.escalateAfterStops ? cfg.escalatedCooldownMin : cfg.stopCooldownMin;
+      if (minutesSince < cooldownMin) {
+        if (!opts?.forced) {
+          const brakeReason = `re-arm brake: ${asset.symbol} ${direction} last same-direction stop ${minutesSince.toFixed(1)}m ago (NET ${lastStop.pnlPercent.toFixed(1)}%) — cooldown ${cooldownMin}m (${stopCount} same-direction stop${stopCount === 1 ? "" : "s"} in ${cfg.windowHours}h) — binds auto+capture+radar v12.7 (NX-2910→NX-2911 6s relay forensics)`;
+          void recordGateBlock({ gate: "REARM-BRAKE", symbol: asset.symbol, direction, reason: brakeReason });
+          void nearMissCaptureGate({ symbol: asset.symbol, direction, strategy: conf.strategy, reason: `REARM-BRAKE: ${asset.symbol} ${direction} ${minutesSince.toFixed(0)}m after same-direction stop (${cooldownMin}m window)` }).catch(() => undefined);
+          if (Date.now() - lastRearmBrakeEventAt > 600_000) {
+            lastRearmBrakeEventAt = Date.now();
+            await fireEvent(null, asset.symbol, "ENGINE", "warn", `REARM-BRAKE BLOCK: ${direction} ${asset.symbol} deploy refused — same-direction stop ${minutesSince.toFixed(0)}m ago, cooldown ${cooldownMin}m · post-stop relay guard v12.7 (acceptance: صفر ورود تکراری پس از استاپ)`);
+          }
+          return { error: `rearm-brake gate: ${direction} ${asset.symbol} refused — same-direction stop ${minutesSince.toFixed(1)}m ago < cooldown ${cooldownMin}m (${stopCount} stops/${cfg.windowHours}h)`, status: 409 };
+        }
+        rearmBrakeTag = "REARM-BRAKE"; // operator-forced override — audited cohort
+      }
+    }
+  }
+
+  // ── v11.7 RE-ENTRY LOCKOUT — per-symbol stop-chain guard (Task 41 operator
+  // mandate 2026-10-17: «فعال شدن مداوم این سیگنال در فاصلهٔ کوتاه و پشت سرهم
+  // که منجر به استاپ‌های زیادی شده») ──
+  // Forensics (AGTUSDT 01:10-01:31Z Oct-17): 6 LONG deploys in 21 minutes on a
+  // −21% crash leg — each SL closed SECONDS before the next deploy cleared the
+  // gate (closed→create gaps 0.1-2.5m; 4 full stops −61.2% each). The v11.4
+  // SYMBOL-CAP only limits CONCURRENT exposure — a sequential close→re-enter
+  // relay never trips it, and the v10.16 design had removed the old per-symbol
+  // cooldown (backtest.ts:400). This guard restores it evidence-tuned:
+  // after a net-negative SL close on a symbol, AUTO deploys on that symbol
+  // (ANY direction — a symbol in stop-chain dislocation is toxic for fresh
+  // exposure either way, same philosophy as SYMBOL-CAP) are refused for
+  // lockoutMinutes (default 60m), escalating to escalateMinutes (default
+  // 180m) when the symbol already took ≥ escalateAfterStops (default 2)
+  // net-negative SL closes inside windowHours (default 24h). Operator-forced
+  // deploys are never refused. RAW-CAL capture deploys bypass (calibration
+  // mandate, same doctrine as STRAT-PAUSE/SYMBOL-CAP overrides) but deploy
+  // tagged REENTRY-LOCKOUT so the override cohort stays ledger-sliceable.
+  // Fail-open on internal error (a risk overlay must never wedge the engine).
+  // Tunable via EngineSetting key "reentry-lockout" {enabled, lockoutMinutes,
+  // escalateMinutes, escalateAfterStops, windowHours}.
+  let reentryLockoutTag: string | null = null;
+  {
+    let cfg = { enabled: true, lockoutMinutes: 60, escalateMinutes: 180, escalateAfterStops: 2, windowHours: 24 };
+    let lastStop: { closedAt: Date; pnlPercent: number } | null = null;
+    let stopCount = 0;
+    try {
+      const row = await db.engineSetting.findUnique({ where: { key: "reentry-lockout" } });
+      if (row) {
+        const p = JSON.parse(row.value) as Partial<typeof cfg>;
+        if (p.enabled === false) cfg.enabled = false;
+        if (typeof p.lockoutMinutes === "number") cfg.lockoutMinutes = Math.max(5, Math.min(720, Math.floor(p.lockoutMinutes)));
+        if (typeof p.escalateMinutes === "number") cfg.escalateMinutes = Math.max(10, Math.min(1440, Math.floor(p.escalateMinutes)));
+        if (typeof p.escalateAfterStops === "number") cfg.escalateAfterStops = Math.max(1, Math.min(10, Math.floor(p.escalateAfterStops)));
+        if (typeof p.windowHours === "number") cfg.windowHours = Math.max(1, Math.min(168, Math.floor(p.windowHours)));
+      }
+      if (cfg.enabled) {
+        // stop-class close = terminal SL status with negative NET (BE-banked SL
+        // closes positive — banked wins are not chain fuel, evidence: NX-2640
+        // closed +7.32% and its immediate re-entry was the actual disaster).
+        const stops = await db.signal.findMany({
+          where: { symbol: asset.symbol, status: "SL", pnlPercent: { lt: 0 }, closedAt: { gte: new Date(Date.now() - cfg.windowHours * 3600_000) } },
+          select: { closedAt: true, pnlPercent: true },
+          orderBy: { closedAt: "desc" },
+          take: 10,
+        });
+        stopCount = stops.length;
+        lastStop = stops[0] ?? null;
+      }
+    } catch {
+      /* fail-open: no lockout on internal error */
+    }
+    if (cfg.enabled && lastStop) {
+      const minutesSince = (Date.now() - new Date(lastStop.closedAt).getTime()) / 60_000;
+      const lockoutMin = stopCount >= cfg.escalateAfterStops ? cfg.escalateMinutes : cfg.lockoutMinutes;
+      if (minutesSince < lockoutMin) {
+        if (!opts?.forced && !bypassQuality) {
+          const lockReason = `re-entry lockout: ${asset.symbol} last stop ${minutesSince.toFixed(1)}m ago (NET ${lastStop.pnlPercent.toFixed(1)}%) — lockout ${lockoutMin}m (${stopCount} stop${stopCount === 1 ? "" : "s"} in ${cfg.windowHours}h) — stop-chain guard v11.7 (Task-41 AGTUSDT storm forensics)`;
+          void recordGateBlock({ gate: "REENTRY-LOCKOUT", symbol: asset.symbol, direction, reason: lockReason });
+          void nearMissCaptureGate({ symbol: asset.symbol, direction, strategy: conf.strategy, reason: `REENTRY-LOCKOUT: ${asset.symbol} ${minutesSince.toFixed(0)}m after stop (${lockoutMin}m window)` }).catch(() => undefined);
+          if (Date.now() - lastReentryLockoutEventAt > 600_000) {
+            lastReentryLockoutEventAt = Date.now();
+            await fireEvent(null, asset.symbol, "ENGINE", "warn", `REENTRY-LOCKOUT BLOCK: ${direction} ${asset.symbol} deploy refused — last stop on this symbol ${minutesSince.toFixed(0)}m ago, lockout ${lockoutMin}m · stop-chain guard v11.7 (Task-41: 6 deploys/21m/4 SL on AGTUSDT = −$23 bleed)`);
+          }
+          return { error: `reentry-lockout gate: ${direction} ${asset.symbol} refused — last stop ${minutesSince.toFixed(1)}m ago < lockout ${lockoutMin}m (${stopCount} stops/${cfg.windowHours}h)`, status: 409 };
+        }
+        reentryLockoutTag = "REENTRY-LOCKOUT"; // capture override — audited cohort
+      }
+    }
+  }
+
+  // ── v11.6 STRATEGY-PAUSE RISK GATE (EQ-97 operator order) ──
+  // A paused strategy (EngineSetting "strat-pause.state") is refused for AUTO
+  // deploys — evidence-frozen decision, journaled per block, near-miss
+  // captured. Operator-forced and capture-authority deploys are never
+  // refused — they deploy tagged STRAT-PAUSE so the override cohort stays
+  // auditable. Fail-open on internal error (a monitoring switch must never
+  // wedge the engine).
+  let stratPauseTag: string | null = null;
+  {
+    let pausedReason: string | null = null;
+    try {
+      if (await isStrategyPaused(conf.strategy)) {
+        const spState = await getStrategyPauseState();
+        pausedReason = spState.pauses[conf.strategy]?.reason ?? "paused by operator order";
+      }
+    } catch {
+      /* fail-open */
+    }
+    if (pausedReason) {
+      if (!opts?.forced && !bypassQuality) {
+        void recordGateBlock({ gate: "STRAT-PAUSE", symbol: asset.symbol, direction, reason: `${conf.strategy} paused — ${pausedReason}` });
+        void nearMissCaptureGate({ symbol: asset.symbol, direction, strategy: conf.strategy, reason: `STRAT-PAUSE: ${conf.strategy} — ${pausedReason.slice(0, 120)}` }).catch(() => undefined);
+        if (Date.now() - lastStratPauseEventAt > 600_000) {
+          lastStratPauseEventAt = Date.now();
+          await fireEvent(null, asset.symbol, "ENGINE", "warn", `STRAT-PAUSE BLOCK: ${direction} ${asset.symbol} ${conf.strategy} deploy refused — strategy paused (EQ-97) — ${pausedReason.slice(0, 160)}`);
+        }
+        return { error: `strategy-pause gate: ${conf.strategy} paused — ${pausedReason.slice(0, 120)}`, status: 409 };
+      }
+      stratPauseTag = "STRAT-PAUSE"; // forced/capture override — audited cohort
+    }
+  }
+
+  // ── v11.6 QUAD-SHORT GUARD (EQ-97 ③-c: review top-action «تحلیل و
+  // بهینه‌سازی فیلتر BLOCK SHORT in Q2_SQUEEZE» — analyzed, then engineered) ──
+  // Book-edge counterfactual (60d ledger × BTC 1h quadrant, ±10m join fence,
+  // same method as futures-taxonomy attribution): SHORT in Q2_SQUEEZE is the
+  // WORST short cell — n=111, WR 30.6%, net −$28.94 — while every other SHORT
+  // cell is net-positive (Q1 +$12.17, Q3 +$26.08, Q4 +$5.24). Q2_SQUEEZE =
+  // price UP + OI DOWN = shorts covering, no fresh money: fading it with NEW
+  // shorts paid the fee-grinder. This gate refuses SHORT auto deploys while
+  // the BTC 1h quadrant snapshot (≤10m fresh) reads Q2_SQUEEZE. Stale or
+  // missing snapshot → fail-open. Forced/capture bypass tagged. Disable via
+  // EngineSetting "quad-short-guard" {enabled:false}.
+  let quadShortTag: string | null = null;
+  {
+    let blockQuad = false;
+    try {
+      const cfgRow = await db.engineSetting.findUnique({ where: { key: "quad-short-guard" } });
+      const enabled = cfgRow ? (JSON.parse(cfgRow.value) as { enabled?: boolean }).enabled !== false : true;
+      if (enabled && direction === "SHORT") {
+        const snap = await db.futuresSnapshot.findFirst({
+          where: { symbol: "BTCUSDT", quadrant1h: { not: null } },
+          orderBy: { ts: "desc" },
+          select: { quadrant1h: true, ts: true },
+        });
+        if (snap && snap.quadrant1h === "Q2_SQUEEZE" && Date.now() - new Date(snap.ts).getTime() <= 10 * 60_000) blockQuad = true;
+      }
+    } catch {
+      /* fail-open */
+    }
+    if (blockQuad) {
+      if (!opts?.forced && !bypassQuality) {
+        void recordGateBlock({ gate: "QUAD-SHORT", symbol: asset.symbol, direction, reason: "SHORT issued in Q2_SQUEEZE context (BTC 1h quadrant ≤10m fresh) — book-edge n=111 WR 30.6% net −$28.94/60d vs Q1 +$12.17 / Q3 +$26.08 / Q4 +$5.24" });
+        void nearMissCaptureGate({ symbol: asset.symbol, direction, strategy: conf.strategy, reason: "QUAD-SHORT: SHORT in Q2_SQUEEZE context" }).catch(() => undefined);
+        if (Date.now() - lastQuadShortEventAt > 600_000) {
+          lastQuadShortEventAt = Date.now();
+          await fireEvent(null, asset.symbol, "ENGINE", "warn", `QUAD-SHORT BLOCK: SHORT ${asset.symbol} deploy refused — BTC 1h quadrant = Q2_SQUEEZE (short-covering, no fresh money) · book-edge 60d: SHORT@Q2 n=111 net −$28.94 vs other short cells positive · v11.6 EQ-97 ③-c`);
+        }
+        return { error: `quad-short guard: SHORT ${asset.symbol} refused — BTC 1h quadrant Q2_SQUEEZE (book-edge n=111 net −$28.94/60d)`, status: 409 };
+      }
+      quadShortTag = "QUAD-SHORT"; // forced/capture override — audited cohort
+    }
   }
 
   // ── v8.2 SHADOW-VETO DEPLOY GATE (AI-core Phase 0/1, operator 2026-09-09) ──
@@ -1982,26 +2962,17 @@ export async function deploySignal(symbol?: string, directionHint?: "LONG" | "SH
     }
   }
 
-  // v6.3: riskPerTrade is GOVERNOR-OWNED (0.5–1.5) — scales the whole margin so
-  // the LLM can de-risk in drawdowns and re-size on proven positive expectancy
-  // v6.5: two more measured multipliers — shortSizeMult (SHORT book bleeds:
-  // 27.8% win / −$26.65 vs LONG +$2.32) and BREAKOUT half-size under guard L1.
-  // v8.1: risk-overlay multiplier (drawdown throttle + cluster policy).
-  const stratSizeMult = conf.strategy === "BREAKOUT" && boGuard === 1 ? 0.5 : 1;
-  // v10.6 PER-STRATEGY SIZING (SUPERVISOR proposal completed for operator
-  // decision): per-strategy margin multiplier instead of ONE global size —
-  // staged weights cut the AI-SWING bleed (57% of book @ −1.87%/trade) and
-  // feed the proven AI-SCALP/MEAN-REVERT edges. Neutral ×1 while the module
-  // is disabled; activation = explicit operator decision (/api/strategy-weights).
+  // ── v11.1 FLAT-10 MARGIN (operator mandate 2026-10-07 «مارجین هر سیگنال رو 10$ ثابت کن») ──
+  // Every signal deploys at exactly $10. The entire sizing stack — governor
+  // riskPerTrade, regime multiplier, crowd-cut, short-size, strategy weights,
+  // probation, G4/MG probes, dislocation, R6-EDGE — no longer sizes the book;
+  // those cohorts remain TAG-ONLY for audit. pnlPercent stays margin-relative
+  // (the percent book is unchanged); dollars scale linearly with the fixed
+  // unit: +100% pnlPercent ≡ +$10.
   const stratW = await strategyWeightFor(conf.strategy);
-  // v10.11 STRAT-PROBATION — soft margin valve: ×0.5 while the strategy's
-  // EB-shrunk expectancy UCB is negative (sizing only, never a veto; the
-  // memory gate / breakoutGuard / governor semantics are untouched).
   const probF = await probationFactorFor(conf.strategy);
-  // v10.9.3 MG-PROBE — memory-gate hysteresis re-entry: HALF margin until the
-  // 5-probe block proves expectancy ≥ 0 (operator APPROVE 2026-09-16).
   const mgProbe = mgProbeKeys.has(`${asset.symbol}:${conf.strategy}`);
-  let margin = Number((marginBase * gate.riskPerTrade * regimeSize * (crowdCut ? 0.6 : 1) * (volCause?.basis === "LEARNED-CONTINUATION" ? 1.15 : 1) * (direction === "SHORT" ? gate.shortSizeMult : 1) * stratSizeMult * stratW * probF * riskMult * (probeBypass ? 0.5 : 1) * (mgProbe ? 0.5 : 1) * dislocationMult).toFixed(2));
+  let margin = 10; // FLAT-10 — fixed unit margin (operator mandate)
 
   // v6.7.2 LEVERED RISK CAP (operator mandate): slDist% × leverage is the real
   // single-trade swing at the stop. Design targeted a constant ~60%; the 20x
@@ -2020,10 +2991,100 @@ export async function deploySignal(symbol?: string, directionHint?: "LONG" | "SH
     }
   }
 
+  // ── v11.3 ENTRY-LEVERS LATE-ENTRY SHIELD (operator mandate 2026-10-07
+  // «کامل و مهندسی شده اجرا کن» after the EQ-89/EQ-90 forensics) ──
+  // Seven deterministic levers measured on the 14d ledger judge the CHOSEN
+  // candidate after the levered-risk cap (leverage is final here) and before
+  // sizing: EXT extension ≥60×ATR · FLOW crowded-flow ≥+10 · CAUSE chase-tape
+  // blacklist · STALE radar detection age >8s · SCALP effective-score valve ·
+  // LEVCAP leverage trim ≤14× · MOMENTUM valve (v11.4 — per-strategy, the
+  // EQ-93 TIGHTEN alternative with its own statistical gate). Every verdict is
+  // journaled (.data/entry-levers
+  // .jsonl) on EVERY deploy; a lever only BLOCKS once its own statistical gate
+  // passes (n≥100 · flagged avg ≤ −0.5 · separation ≥0.5) and auto-demotes
+  // when its flagged cohort heals — the same shadow→gate ladder as volCause
+  // LEARN_GATE and shadow-veto. Radar emissions ride the full stack since
+  // v10.18, so the shield binds them (STALE exists precisely for that path).
+  // Operator-forced and RAW-CAL capture deploys are OBSERVE-ONLY — the shield
+  // never fights the operator or the calibration sample. Fail-open on any
+  // internal error.
+  let leverNote = "";
+  const leverTags: string[] = [];
+  {
+    const lv = await entryLeversDeployGate(
+      {
+        symbol: asset.symbol,
+        direction,
+        strategy: conf.strategy,
+        votes: conf.votes,
+        flowScore: chosenFlow.score,
+        volCause: volCause?.cause ?? null,
+        leverage,
+        detectionAgeMs: opts?.detectedAt ? Math.max(0, Date.now() - opts.detectedAt) : null,
+        adjScore: chosen.adjScore,
+        effMin: chosen.effMin,
+      },
+      { observe: !!(opts?.forced || opts?.calCapture) },
+    );
+    if (lv.capTo != null && leverage > lv.capTo) leverage = lv.capTo;
+    leverNote = lv.note;
+    leverTags.push(...lv.tags);
+    if (lv.block) {
+      void recordGateBlock({ gate: "ENTRY-LEVER", symbol: asset.symbol, direction, reason: lv.reason ?? "late-entry lever" });
+      // v11.3 anti-censorship: a blocked deploy never settles, so the ledger
+      // cannot measure what the lever refused. The near-miss GATE rails
+      // (8/day · 2h dedup · bounded open) paper-track the refused candidate —
+      // the would-have-been outcomes stay measurable for the operator's audit.
+      void nearMissCaptureGate({ symbol: asset.symbol, direction, strategy: conf.strategy, reason: `ENTRY-LEVER ${lv.lever}: ${lv.reason ?? "late-entry lever"}` }).catch(() => undefined);
+      await fireEvent(null, asset.symbol, "ENGINE", "warn", `ENTRY-LEVER BLOCK [${lv.lever}]: ${direction} ${asset.symbol} deploy refused — ${lv.reason} · late-entry shield v11.3 (paper-tracked; modes via /api/entry-levers)`);
+      return { error: `entry-lever gate: ${direction} ${asset.symbol} blocked by ${lv.lever} — ${lv.reason} (late-entry shield v11.3)`, status: 409 };
+    }
+  }
+
+  // ── Task 66 TRADEABILITY FLOOR (operator bug: «با این مقدار مارجین اصلا امکان
+  // باز شدن پوزیشن وجود دارد؟») — a margin whose notional (margin × leverage)
+  // sits below the exchange MIN_NOTIONAL cannot exist in reality: Binance
+  // USDT-M rejects it. Forensics: 339/1040 (32.6%) of ledger rows were dust
+  // (worst: NX-1042 $0.03×10x = $0.30 notional). Clamp UP to the smallest
+  // tradeable size, still bounded by free margin; the tag makes every
+  // floored deploy auditable in the ledger cohorts.
+  const tradeFloor = tradeableFloorMargin(asset.symbol, leverage);
+  let marginFloored = false;
+  if (margin < tradeFloor) {
+    margin = Number(Math.min(tradeFloor, Math.max(0, equity - exposure) || tradeFloor).toFixed(2));
+    marginFloored = true;
+  }
+
   // v8.4 R4 VETO-ONLY: flow can no longer LIFT conviction either — clamp ≤ 0
   // (a conflicting board still drags it down; a confirming one adds nothing).
   const conviction = Math.round(Math.min(96, Math.max(55, conf.confidence + Math.min(0, chosenFlow.score * 0.3) + (volCause?.boost ?? 0))));
+  // ── v11.0 R6-EDGE — the ledger-proven AGGRESSIVE path (operator mandate
+  // 2026-10-04 «بهترین مسیر تهاجمی واقعی را اعمال کن») ──
+  // Task-74 audit (02→04/10, 393 deploys): Tehran hours 02/07/18 + conviction
+  // 70-89 + regime ≠ TREND + strategy ≠ AI-SCALP measured wr 62.2% avg +8.86%
+  // (n=37) — the best cell in the book, ~2× the base win rate. Under FLAT-10
+  // the size vote is retired: the cell is TAG-ONLY (audit cohort), NOT a gate
+  // change: levered-risk cap, cluster caps, max-active and the trade-floor
+  // still bound every deploy; the R6-EDGE tag builds the A/B cohort the next
+  // audit judges. RAW-CAL capture deploys are excluded from the cohort.
+  const tehranH = Math.floor((new Date().getUTCHours() * 60 + new Date().getUTCMinutes() + 210) / 60) % 24; // Asia/Tehran = UTC+3:30 fixed (daily-scheduler convention)
+  const r6Edge =
+    !opts?.calCapture &&
+    (tehranH === 2 || tehranH === 7 || tehranH === 18) &&
+    conviction >= 70 &&
+    conviction < 90 &&
+    !chosen.regimeTag.includes("TREND") &&
+    conf.strategy !== "AI-SCALP";
   let serial = await nextSerial(); // v10.16 P1 — `let`: the P2002 backstop below may re-issue a fresh serial
+
+  // ── Task 86 DEPLOY-TIME MTF SNAPSHOT (R6 DATA HEALTH fix) ──
+  // Radar/event-trigger spawns often fire on symbols outside the rotating
+  // flow board's fresh coverage → chosen.mtf was null → mtfJson null → the
+  // R6 DATA HEALTH gate read every such row as damaged (snapshots 26.5%,
+  // gate RED). Capture the board on demand for the SNAPSHOT ONLY: decision
+  // tags/thresholds still reflect the scan-time board (cohort semantics
+  // unchanged); the row now carries its measured deploy-time context.
+  const mtfSnapshot = chosen.mtf ?? (await ensureSymbolFlow(asset.symbol).catch(() => null));
 
   // v8.1 P1 — liq-heat cohort tag derived from the evaluate() guard note that
   // rode through on chosen.regimeNote (LIQ-HEAT-* = threshold penalty, LIQ-FUEL-* = discount)
@@ -2042,6 +3103,7 @@ export async function deploySignal(symbol?: string, directionHint?: "LONG" | "SH
     ...(opts?.triggerTag ? ["EVENT-TRIGGER"] : []),
     ...(opts?.extraTags ?? []), // v9.0 — dedicated PUMP/DUMP card cohorts (radar-spawned)
     ...(crowdCut ? ["CROWD-CUT"] : []),
+    ...(marginFloored ? ["MINNOTIONAL-FLOOR"] : []), // Task 66: margin clamped up to exchange min notional
     ...(onsetInfo?.hot ? [onsetInfo.tag] : []),
     ...(volCause?.cause ? [`VOLCAUSE-${volCause.cause}`] : []),
     // v6.7 SMART-MONEY tags: whale prints (aggTrades ≥$250K near entry) and
@@ -2054,12 +3116,47 @@ export async function deploySignal(symbol?: string, directionHint?: "LONG" | "SH
     // auditable A/B arms the advisor judges exactly like BO-EXP.
     ...(onsetRetested ? ["VOL-ONSET-RETEST"] : []),
     ...(riskCapped ? ["RISK-CAP"] : []),
-    // v10.6 per-strategy sizing cohort — rows sized under an ACTIVE strategy
-    // weight carry the multiplier so the ledger can A/B the resized cohorts.
+    // v11.4 same-symbol concentration cap — forced/capture overrides carry the
+    // tag so the audit ledger can judge the override cohort (auto path blocks).
+    ...(symbolCapTag ? [symbolCapTag] : []),
+    // v11.6 strategy-pause + quad-short-guard — forced/capture override tags
+    // (auto path blocks upstream) so both cohorts stay ledger-sliceable.
+    ...(stratPauseTag ? [stratPauseTag] : []),
+    ...(quadShortTag ? [quadShortTag] : []),
+    // v11.7 re-entry lockout — capture/forced override tag (auto path blocks
+    // upstream); slices the override cohort against the Task-41 storm ledger.
+    ...(reentryLockoutTag ? [reentryLockoutTag] : []),
+    // v12.7 re-arm brake — operator-forced override tag (every machine lane
+    // blocks upstream); slices the override cohort against the relay ledger.
+    ...(rearmBrakeTag ? [rearmBrakeTag] : []),
+    // v11.8 liquidity floor — capture/forced override tag (auto path blocks
+    // upstream); the unvalidated/thin-tape override cohort stays sliceable.
+    ...(liquidityFloorTag ? [liquidityFloorTag] : []),
+    ...(phantomFeedTag ? [phantomFeedTag] : []),
+    // v11.3 ENTRY-LEVERS cohorts — fired-lever audit tags (LEV-EXT/FLOW/CAUSE/
+    // STALE/SCALP/CAP): every flagged deploy is sliceable in the ledger and
+    // reconciles with the /api/entry-levers gate numbers.
+    ...(leverTags.length ? leverTags : []),
+    // v10.6 per-strategy sizing cohort — rows under an ACTIVE strategy weight
+    // carry the weight so the ledger can A/B the cohort (FLAT-10: tag-only).
     ...(stratW !== 1 ? [`STRATW-x${stratW.toFixed(2)}`] : []),
-    // v10.11 STRAT-PROBATION cohort — rows sized under probation carry the
-    // factor so the ledger can A/B the halved cohort like STRATW.
+    // v11.7 (EQ-99, operator minScore 12→17 counterfactual mandate, EQ-94②):
+    // persist the deploy-time gate evidence ON THE ROW — the gate-journal
+    // rotates in ~8h, which made the TIGHTEN counterfactual uncomputable from
+    // history. `GS-<|adjScore|>/E<effMin>` makes every issued row's score/threshold
+    // sliceable forever; the 12→17 verdict becomes one ledger query once the
+    // next cohort settles. FLAT-10: tag-only, zero behavioral change.
+    ...(typeof chosen.adjScore === "number" && typeof chosen.effMin === "number"
+      ? [`GS-${Math.round(Math.abs(chosen.adjScore))}/E${Math.round(chosen.effMin)}`]
+      : []),
+    // v10.11 STRAT-PROBATION cohort — rows while the strategy's EB-shrunk
+    // expectancy UCB is negative (FLAT-10: tag-only, never a veto).
     ...(probF !== 1 ? [`STRAT-PROB-x${probF.toFixed(2)}`] : []),
+    // v11.0 R6-EDGE cohort — rows in the aggressive cell (Tehran h∈{02,07,18} +
+    // conviction 70-89 + non-TREND + non-AI-SCALP; FLAT-10: tag-only — the
+    // ×1.5 size vote is retired): the A/B arm the next audit judges exactly
+    // like STRATW/BO-EXP cohorts.
+    ...(r6Edge ? ["R6-EDGE"] : []),
     // v8.0 EPOCH-2 — the operator-ordered reset epoch: ledger wiped, balance
     // reseeded to $100, calibration rebuilt ONLY from the verified backtest.
     // This tag slices the fresh book from every predecessor.
@@ -2081,15 +3178,20 @@ export async function deploySignal(symbol?: string, directionHint?: "LONG" | "SH
     // v9.3 R6-INFORMATIVE package — radar cards: short explicit TTL, expiry
     // extension disabled at settlement (resolve fast → informative outcomes).
     ...(opts?.ttlNoExtend ? ["RADAR-TTL"] : []),
-    // v8.4.1 G4 RECOVERY PROBE cohort — gate-closed bounded deploys at half
-    // margin; their settles are the evidence that re-opens the G1 rolling gate.
+    // v8.4.1 G4 RECOVERY PROBE cohort — gate-closed bounded deploys (FLAT-10:
+    // margin fixed); their settles are the evidence that re-opens the G1 gate.
     ...(probeBypass ? ["G4-PROBE"] : []),
-    // v10.9.3 MG-PROBE cohort — memory-gate hysteresis re-entry at half margin;
-    // their settles are the evidence that restores full size (5-probe block).
+    // v10.9.3 MG-PROBE cohort — memory-gate hysteresis re-entry (FLAT-10:
+    // tag-only; the old half-margin valve is retired);
+    // their settles are the evidence that restores full standing (5-probe block).
     ...(mgProbe ? ["MG-PROBE"] : []),
     // v10.15 DISLOCATION-GATE warn band — admitted through a stretched venue
-    // board at half margin; settles are the adverse-selection cohort evidence.
+    // board; settles are the adverse-selection cohort evidence.
     ...(dislocationMult !== 1 ? ["DISLOCATION-HALF"] : []),
+    // v12.6 TP1 MFE-SCALE RE-RANK cohort (operator proposal ①) — every row
+    // deployed under the non-legacy first rung is sliceable against the 1R book
+    // and the counterfactual replay scripts; reverts to legacy at tp1RMult = 1.
+    ...(gate.tp1RMult !== 1 ? [`TP1-R${Math.round(gate.tp1RMult * 100)}`] : []),
   ];
   const votesStr = `EMA ${conf.votes[0]?.vote >= 0 ? "+" : ""}${conf.votes[0]?.vote}, MACD ${conf.votes[1]?.vote >= 0 ? "+" : ""}${conf.votes[1]?.vote}, RSI ${snap0(conf)}, range ${conf.votes[3]?.vote >= 0 ? "+" : ""}${conf.votes[3]?.vote}`;
   const thrStr = chosen.thrAdj !== 0 ? ` vs dynamic MIN_SCORE ${gate.minScore}${chosen.thrAdj > 0 ? "+" : ""}${chosen.thrAdj} regime adj → eff ${chosen.effMin}` : `/${Math.abs(conf.score) >= gate.minScore ? "PASS" : "FAIL"} gate ${gate.minScore}`;
@@ -2099,13 +3201,14 @@ export async function deploySignal(symbol?: string, directionHint?: "LONG" | "SH
     onsetInfo?.hot ? `Vol-onset: ${onsetInfo.detail}${onsetRetested ? " — RETESTED: impulse retraced ≥30%, entry on the pullback (retest gate passed)" : ""}.` : "",
     riskCapped ? `Levered risk cap: stop swing trimmed from ${(slDistPct * 100 * rawLev).toFixed(0)}% to ${(slDistPct * 100 * leverage).toFixed(1)}%-of-margin via ${rawLev}×→${leverage}× leverage (cap ${gate.leveredRiskCap}%).` : "",
     volCause?.cause ? `Vol-cause: ${volCause.detail ?? volCause.cause}${volCause.basis === "LEARNED-CONTINUATION" ? ` — learned profile applied (+${volCause.boost} conviction, ×1.15 size)` : " — telemetry-only, learned gate pending"}.` : "",
+    leverNote ? `Late-entry shield: ${leverNote}.` : "",
     `Flow ${chosenFlow.verdict} ${chosenFlow.score}/25 — ${chosenFlow.reasons[0] ?? "measured snapshot"}.`,
     chosenFlow.metrics.whalePrint5m ? `Whale prints: ${chosenFlow.metrics.whalePrint5m.count} fill(s) ≥$250K / $${(chosenFlow.metrics.whalePrint5m.totalUsd / 1000).toFixed(0)}K in 5m (${chosenFlow.metrics.whalePrint5m.buyUsd >= chosenFlow.metrics.whalePrint5m.sellUsd ? "buy" : "sell"}-dominant, max $${(chosenFlow.metrics.whalePrint5m.maxUsd / 1000).toFixed(0)}K).` : "",
     sweepInfo.swept ? `Liquidity sweep: ${sweepInfo.detail}.` : "",
     // v8.1 P1/P2 transparency lines — the operator sees WHY geometry/sizing moved
     volGeo.note ? `Vol forecast: ${volGeo.note}.` : volF ? `Vol forecast: regime ${volF.regime} (self-pct ${volF.percentile}, EWMA 1h ${volF.ewma1hPct.toFixed(2)}%) — geometry unchanged.` : "",
-    riskNote ? `Risk overlay: ${riskNote}${riskOv.state.sizeMult < 1 ? ` · drawdown sizing ×${riskMult.toFixed(2)}` : ""}.` : "",
-    `Invalidation ${slDistPct.toFixed(2)}% behind entry (${slMult > 1 ? "widened for volatility, " : ""}${gate.slAtrMult}×ATR${slMult !== 1 ? `×${slMult}` : ""}); targets 1R/${tp2Mult}R/${rr}R — dynamic R:R (${rrDrivers}); horizon ${timeframe}${tfVolTilt !== 0 ? ` (vol-tilted ${tfVolTilt < 0 ? "down" : "up"}, ATR ${atrPct.toFixed(2)}%)` : ""}; TTL ${ttl}m. Margin $${margin.toFixed(2)} @ ${leverage}× (confidence${gate.riskPerTrade !== 1 ? ` × risk ${gate.riskPerTrade.toFixed(2)}` : ""}${regimeSize !== 1 ? ` × regime ${regimeSize}` : ""}${crowdCut ? " × crowd-cut 0.6" : ""}${direction === "SHORT" && gate.shortSizeMult !== 1 ? ` × short-size ${gate.shortSizeMult.toFixed(2)}` : ""}${stratSizeMult !== 1 ? " × breakout-guard 0.5" : ""}${stratW !== 1 ? ` × strategy-weight ${stratW.toFixed(2)}` : ""}${probF !== 1 ? " × strat-probation 0.5" : ""} sizing${gate.beTrailPct > 0 || gate.beArmMovePct > 0 ? ` · BE arms at ${gate.beTrailPct > 0 ? `+${gate.beTrailPct}% NET` : ""}${gate.beTrailPct > 0 && gate.beArmMovePct > 0 ? " or " : ""}${gate.beArmMovePct > 0 ? `+${gate.beArmMovePct}% price (R2)` : ""}` : ""}${gate.earlyExitGuard > 0 ? ` · early-exit ${Math.round(gate.earlyExitFrac * 100)}%TTL@${gate.earlyExitR.toFixed(2)}R (R7)` : ""}${gate.shortGuard > 0 && direction === "SHORT" ? ` · R1 short-guard active` : ""}${probeBypass ? " · G4-PROBE ×0.5" : ""}${mgProbe ? " · MG-PROBE ×0.5" : ""}${dislocationMult !== 1 ? ` · DISLOCATION ×0.5 (venue median ${dislocMedian.toFixed(1)}bps)` : ""}) · fees taker 0.05%×2 + funding 0.01%/8h.`,
+    riskNote ? `Risk overlay: ${riskNote}.` : "",
+    `Invalidation ${slDistPct.toFixed(2)}% behind entry (${slMult > 1 ? "widened for volatility, " : ""}${gate.slAtrMult}×ATR${slMult !== 1 ? `×${slMult}` : ""}); targets ${gate.tp1RMult.toFixed(2)}R/${tp2Mult}R/${rr}R — dynamic R:R (${rrDrivers}); horizon ${timeframe}${tfVolTilt !== 0 ? ` (vol-tilted ${tfVolTilt < 0 ? "down" : "up"}, ATR ${atrPct.toFixed(2)}%)` : ""}; TTL ${ttl}m. Margin $${margin.toFixed(2)} @ ${leverage}× (FLAT-10 fixed — sizing overlays inactive${crowdCut ? " · crowd-cut regime active" : ""}${gate.beArmRMult > 0 || gate.beArmMovePct > 0 || gate.beTrailPct > 0 ? ` · BE arms at ${[gate.beArmRMult > 0 ? `${gate.beArmRMult}×SLdist` : null, gate.beArmMovePct > 0 ? `+${gate.beArmMovePct}%px` : null, gate.beTrailPct > 0 ? `+${gate.beTrailPct}%NET` : null].filter(Boolean).join("/")}${gate.beBankFrac > 0 ? ` · banks ${Math.round(gate.beBankFrac * 100)}% at arm (v11.2)` : ""}` : ""}${gate.earlyExitGuard > 0 ? ` · early-exit ${Math.round(gate.earlyExitFrac * 100)}%TTL@${gate.earlyExitR.toFixed(2)}R (R7)` : ""}${gate.shortGuard > 0 && direction === "SHORT" ? ` · R1 short-guard active` : ""}${probeBypass ? " · G4-PROBE" : ""}${mgProbe ? " · MG-PROBE" : ""}${dislocationMult !== 1 ? ` · DISLOCATION-ADMIT (venue median ${dislocMedian.toFixed(1)}bps)` : ""}) · fees taker 0.05%×2 + funding 0.01%/8h.`,
   ].filter(Boolean).join(" ");
 
   // v10.16 P1 SERIAL RACE — the create runs under the UNIQUE(serial) DB
@@ -2138,7 +3241,7 @@ export async function deploySignal(symbol?: string, directionHint?: "LONG" | "SH
       serial: ser,
       factorsJson,
       flowJson,
-      mtfJson: chosen.mtf ? JSON.stringify(chosen.mtf) : null, // v8.0 multi-TF flow board frozen at deploy
+      mtfJson: mtfSnapshot ? JSON.stringify(mtfSnapshot) : null, // v8.0 multi-TF flow board frozen at deploy (Task 86: on-demand for radar spawns)
       ttlMinutes: ttl,
       expiresAt: new Date(now.getTime() + ttl * 60_000),
       createdAt: now,
@@ -2156,8 +3259,19 @@ export async function deploySignal(symbol?: string, directionHint?: "LONG" | "SH
     await fireEvent(null, asset.symbol, "ENGINE", "warn", `SERIAL COLLISION recovered — UNIQUE(serial) backstop caught a duplicate NX identity; deployed as ${nxToken(serial)} after one fresh MAX(serial) retry (v10.16)`).catch(() => undefined);
   }
 
-  await fireEvent(sig.id, sig.symbol, "CREATED", "ai", `[NX-${String(serial).padStart(4, "0")}] ${direction} ${sig.symbol} deployed @ ${sig.entryPrice} — ${conf.strategy} ${timeframe}${opts?.triggerTag ? " · EVENT-TRIGGER spawn" : ""} · conviction ${conviction}% (flow ${chosenFlow.score >= 0 ? "+" : ""}${chosenFlow.score}) · R:R 1:${rr} · flow ${chosenFlow.verdict.toLowerCase()} (OI ${chosenFlow.metrics.oiDelta1h !== null ? `${chosenFlow.metrics.oiDelta1h >= 0 ? "+" : ""}${chosenFlow.metrics.oiDelta1h.toFixed(2)}%/1h` : "n/a"} · funding ${chosenFlow.metrics.funding8h !== null ? `${chosenFlow.metrics.funding8h.toFixed(4)}%/8h` : "n/a"})${chosen.regimeTag !== "REGIME-UNKNOWN" ? ` · ${chosen.regimeTag.replace("REGIME-", "")}` : ""}${crowdCut ? " · crowd-cut ×0.6" : ""}${opts?.forced ? " · OPERATOR-FORCED (gates bypassed)" : ""}${opts?.calCapture ? " · RAW-CAL CAPTURE (unfiltered, calibration sample)" : ""}${opts?.authorityBypass ? " · RADAR DIRECT AUTHORITY (unfiltered emission — operator mandate; honesty rails only)" : ""}`);
+  await fireEvent(sig.id, sig.symbol, "CREATED", "ai", `[NX-${String(serial).padStart(4, "0")}] ${direction} ${sig.symbol} deployed @ ${sig.entryPrice} — ${conf.strategy} ${timeframe}${opts?.triggerTag ? " · EVENT-TRIGGER spawn" : ""} · conviction ${conviction}% (flow ${chosenFlow.score >= 0 ? "+" : ""}${chosenFlow.score}) · R:R 1:${rr} · flow ${chosenFlow.verdict.toLowerCase()} (OI ${chosenFlow.metrics.oiDelta1h !== null ? `${chosenFlow.metrics.oiDelta1h >= 0 ? "+" : ""}${chosenFlow.metrics.oiDelta1h.toFixed(2)}%/1h` : "n/a"} · funding ${chosenFlow.metrics.funding8h !== null ? `${chosenFlow.metrics.funding8h.toFixed(4)}%/8h` : "n/a"})${chosen.regimeTag !== "REGIME-UNKNOWN" ? ` · ${chosen.regimeTag.replace("REGIME-", "")}` : ""}${crowdCut ? " · crowd-cut regime" : ""}${opts?.forced ? " · OPERATOR-FORCED (gates bypassed)" : ""}${opts?.calCapture ? " · RAW-CAL CAPTURE (unfiltered, calibration sample)" : ""}${opts?.authorityBypass ? " · RADAR DIRECT AUTHORITY (unfiltered emission — operator mandate; honesty rails only)" : ""}${opts?.radarLane ? " · R6 RADAR LANE (success-renom cohort — mood gates bypassed, all physical gates live, probation-governed)" : ""}${chosenFlow.blind ? " · FLOW-BLIND (NO-DATA)" : ""}`);
   // v8.4 R5 — journal the shadow pair (live vs research ladder) for settle-time replay
+  // Task 79 FILL LEDGER — doctrine ②: intended (chase anchor) vs filled entry + latency
+  recordFillLedger({
+    signalId: sig.id,
+    symbol: sig.symbol,
+    engine: sig.engine,
+    direction,
+    refPrice: chaseRef,
+    entryPrice: sig.entryPrice,
+    detectedAt: opts?.detectedAt ?? null,
+    createdAtMs: now.getTime(),
+  });
   if (researchLadder) {
     journalResearchShadowDeploy({
       serial,
@@ -2302,7 +3416,7 @@ export async function tick(force = false): Promise<{ ran: boolean; resolved: num
     // CALIBRATION book. Self-throttled inside (spacing + open-cap + auto-lift
     // at the 100-settled bar); fire-and-forget, never blocks the tick.
     if (tickCount % 10 === 0) {
-      void maybeRawCalDeploy().catch((e) => console.error("[raw-cal]", e));
+      void maybeRawCalDeploy().catch((e) => console.error("[raw-cal]", e instanceof Error ? e.stack : e)); // TASK-49: stack, not just message — the repeating "slice of undefined" is unfixable blind
     }
 
     // v9.2 RAW-CAL PACE MONITOR — telemetry snapshot (self-throttled to one
@@ -2409,10 +3523,20 @@ export async function tick(force = false): Promise<{ ran: boolean; resolved: num
       void import("@/lib/shadow-modules").then((m) => m.maybeRunShadowModules()).catch((e) => console.error("[shadow-modules]", e));
     }
 
-    // v8.0 MULTI-TF FLOW SCANNER (EPOCH-2) — rotating batch (6 symbols/call,
-    // full domain in ~10-16min) builds the per-TF flow board the deploy gate
-    // and the FLOW-SHIFT tracker consume. Internally throttled ≥60s.
-    if (tickCount % 25 === 0 && assets.length > 0) {
+    // v11.0 STABLEFLOW persist — mirror the stable-feed board + events into
+    // StableFlowEvent rows (Prisma owns writes; the service never touches the
+    // DB). Self-throttled to 15min inside; fire-and-forget, never breaks tick.
+    if (tickCount % 30 === 0) {
+      void import("@/lib/stableflow").then((m) => m.maybePersistStableFlow()).catch((e) => console.error("[stableflow-persist]", e));
+    }
+
+    // v8.0 MULTI-TF FLOW SCANNER (EPOCH-2) — rotating batch (6 symbols/call)
+    // builds the per-TF flow board the deploy gate and the FLOW-SHIFT tracker
+    // consume. Internally throttled ≥20s.
+    // DATA-REVIVAL 2026-10-21 — scanner cadence 100s→20s (matches the 20s
+    // MIN_INTERVAL): full 64-symbol board rotates in ~3.5min instead of ~18min.
+    // The operator mandate is flow tracking at high precision AND high speed.
+    if (tickCount % 5 === 0 && assets.length > 0) {
       void maybeFlowScan(assets.map((a) => a.symbol)).catch((e) => console.error("[flow-scan]", e));
     }
     if (tickCount % 50 === 0) {

@@ -94,6 +94,9 @@ export default function FlowMatrixCard() {
           </span>
           <span>
             pool <span className="tabular-nums text-ink-2">{uni.poolTotal || "~"}</span> perps · liquid <span className="tabular-nums text-ink-2">{uni.liquidPool}</span>
+            {uni.poolSource && uni.poolSource !== "BINANCE-FAPI" && (
+              <span className={uni.poolSource === "BYBIT-MIRROR" ? "text-cyan-neon" : "text-amber-neon"}> · via {uni.poolSource}</span>
+            )}
           </span>
           <span>membership follows real turnover — re-ranked every 30min</span>
         </div>

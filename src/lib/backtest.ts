@@ -169,7 +169,7 @@ export interface SimResult {
 /** Knobs the pure settlement needs from the live gate (passed in, never fetched). */
 export interface SimGateCtx {
   margin: number; // position margin — the live BE-arm NET check reads the real margin (engine.ts:456+510)
-  gate: Pick<GateSettings, "beTrailPct" | "beArmMovePct" | "earlyExitGuard" | "earlyExitFrac" | "earlyExitR">;
+  gate: Pick<GateSettings, "beTrailPct" | "beArmMovePct" | "beArmRMult" | "beBankFrac" | "earlyExitGuard" | "earlyExitFrac" | "earlyExitR">;
 }
 
 /** Walk forward candles with the LIVE v6.6 settlement rules (parity — engine.ts resolveSignals 439-662):
@@ -186,20 +186,34 @@ export function simulate(candles: Candle[], entryIdx: number, dir: "LONG" | "SHO
 
   let stop = sl; // EFFECTIVE (trailed) stop — v5.4 semantics: trailed stops are real (engine.ts:461, 477-481)
   let reachedTp = 0; // TP-PROVEN ledger (engine.ts:469-472)
+  let beBank: { frac: number; movePct: number } | null = null; // v11.2 BE-BANK — parity with the live ledger (engine.ts resolveSignals)
 
   // ── v6.6 TRANCHE-AWARE NET ACCOUNTING (arithmetic copied verbatim from engine.ts:569-607) ──
   function finalize(outcome: BacktestTrade["outcome"], exitIdx: number, mark: number): SimResult {
     let finalMovePct: number;
+    // v11.2 BE-BANK tranche — parity with engine.ts settlement: the banked leg
+    // exits at its arm mark, the ladder weights scale by 1−frac so tranches
+    // still sum to 1. Legacy rows (never banked) keep the exact old math.
+    const remain = beBank ? 1 - beBank.frac : 1;
     if (reachedTp >= 1) {
       // TRANCHES FIRST — 50%/30% already left the book at their RUNG prices while
       // the trade was open; the runner leg exits by final status: TP3 → tp3 rung
       // (a deploy-time price stop moves can never touch) · SL → EFFECTIVE (trailed)
       // stop · EXPIRED → closing mark (engine.ts:592-601).
       const runnerMove = outcome === "TP3" ? moveAtPct(tp3) : outcome === "SL" ? moveAtPct(stop) : moveAtPct(mark);
-      const tranches: Array<{ weight: number; movePct: number }> = [{ weight: LADDER_TRANCHES.tp1, movePct: moveAtPct(tp1) }];
-      if (reachedTp >= 2) tranches.push({ weight: LADDER_TRANCHES.tp2, movePct: moveAtPct(tp2) });
-      tranches.push({ weight: 1 - LADDER_TRANCHES.tp1 - LADDER_TRANCHES.tp2, movePct: runnerMove });
+      const tranches: Array<{ weight: number; movePct: number }> = [];
+      if (beBank) tranches.push({ weight: beBank.frac, movePct: beBank.movePct });
+      tranches.push({ weight: LADDER_TRANCHES.tp1 * remain, movePct: moveAtPct(tp1) });
+      if (reachedTp >= 2) tranches.push({ weight: LADDER_TRANCHES.tp2 * remain, movePct: moveAtPct(tp2) });
+      tranches.push({ weight: (1 - LADDER_TRANCHES.tp1 - LADDER_TRANCHES.tp2) * remain, movePct: runnerMove });
       finalMovePct = ladderWeightedMove(tranches);
+    } else if (beBank) {
+      // BE-banked, no rung — bank leg @ arm mark + remainder at the real exit
+      // (SL → the post-arm stop at entry · EXPIRED → the closing mark).
+      finalMovePct = ladderWeightedMove([
+        { weight: beBank.frac, movePct: beBank.movePct },
+        { weight: remain, movePct: outcome === "SL" ? moveAtPct(stop) : moveAtPct(mark) },
+      ]);
     } else if (outcome === "SL") {
       finalMovePct = moveAtPct(stop); // effective (trailed) stop is the real exit — nothing was banked (engine.ts:602-603)
     } else {
@@ -243,13 +257,17 @@ export function simulate(candles: Candle[], entryIdx: number, dir: "LONG" | "SHO
       const stillUntrailed = isLong ? stop < entry : stop > entry; // engine.ts:509
       if (
         stillUntrailed &&
-        ((ctx.gate.beTrailPct > 0 && feeBreakdown(ctx.margin, lev, closeMovePct, heldMin).netPct >= ctx.gate.beTrailPct) ||
-          (ctx.gate.beArmMovePct > 0 && closeMovePct >= ctx.gate.beArmMovePct))
+        ((ctx.gate.beArmRMult > 0 && slDist * 100 > 0 && closeMovePct >= ctx.gate.beArmRMult * slDist * 100) ||
+          (ctx.gate.beArmMovePct > 0 && closeMovePct >= ctx.gate.beArmMovePct) ||
+          (ctx.gate.beTrailPct > 0 && feeBreakdown(ctx.margin, lev, closeMovePct, heldMin).netPct >= ctx.gate.beTrailPct))
       ) {
-        // v6.5/v8.4 R2 DEFINITIVE BREAKEVEN ARM (engine.ts:508-514): once NET ≥
-        // beTrailPct (levered) OR the unlevered price move ≥ beArmMovePct, the
-        // stop moves to entry — downside becomes fee-only from the NEXT candle.
+        // v11.2 STRUCTURAL R-ARM + BE-BANK (engine.ts:699-738): primary trigger
+        // = the trade's own risk geometry (price ≥ beArmRMult × slDist), the
+        // absolute-price arm stays as the wide-stop ceiling, the legacy NET arm
+        // stays governor-available. The bank tranche is captured at the arm
+        // CLOSE mark (candle-close analogue of the live 3.5s tick mark).
         stop = entry;
+        if (ctx.gate.beBankFrac > 0) beBank = { frac: ctx.gate.beBankFrac, movePct: closeMovePct };
       } else if (ctx.gate.earlyExitGuard > 0 && heldMin >= ctx.gate.earlyExitFrac * ttlMinutes) {
         // v8.4 R2/R7 EARLY TIME-EXIT (engine.ts:515-541): an unbanked trade after
         // earlyExitFrac of TTL closes at the mark when ADVERSE (NET ≤ −earlyExitR × 1R)

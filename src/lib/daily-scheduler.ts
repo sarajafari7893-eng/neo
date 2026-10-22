@@ -26,6 +26,15 @@ function tehranDayKey(now = Date.now()): string {
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
 }
 
+// v10.20 Iranian week key (Sat→Fri) — numeric Tehran-day key of the most
+// recent Saturday ≤ ts. Mirrors dailyReport.tehranWeekKey (kept local so this
+// module stays import-light for the pulse hot path).
+function tehranWeekKeyOf(now: number): number {
+  const dow = new Date(now + 210 * 60_000).getUTCDay(); // Sun=0 … Sat=6
+  const daysSinceSat = (dow + 1) % 7; // Sat→0, Sun→1, … Fri→6
+  return Math.floor((now - daysSinceSat * 86_400_000 + 12_600_000) / 86_400_000);
+}
+
 async function readLast(key: string): Promise<{ at: number } | null> {
   try {
     const { db } = await import("@/lib/db");
@@ -76,7 +85,7 @@ export async function maybeRunScheduledReports(force = false): Promise<Record<st
   }
   g.inflight = true;
   g.lastRunAt = now;
-  const out: Record<string, unknown> = { ran: true, tehranDay: tehranDayKey(now), daily: "skip", sre: "skip" };
+  const out: Record<string, unknown> = { ran: true, tehranDay: tehranDayKey(now), daily: "skip", sre: "skip", weekly: "skip" };
   try {
     const tokenReady = !!process.env.TELEGRAM_BOT_TOKEN;
     const keyReady = !!process.env.NEXUS_CONTROL_KEY;
@@ -122,6 +131,26 @@ export async function maybeRunScheduledReports(force = false): Promise<Record<st
       }
     } catch (e) {
       out.sre = `error: ${String(e).slice(0, 100)}`;
+    }
+
+    // v10.20 WEEKLY PERFORMANCE (once per Iranian week Sat→Fri) — fires on the
+    // first scheduler tick of the new Iranian week (normally Saturday, right
+    // after the midnight daily). Catch-up all week: if the app was down on
+    // Saturday, the report still goes out on the next tick (the route owns the
+    // weekKey dedup; failed sends never count, so retries stay possible).
+    try {
+      const last = await readLast("weeklyreport.last");
+      const weekKeyOf = (at: number) => tehranWeekKeyOf(at);
+      const due = !last || weekKeyOf(last.at) !== weekKeyOf(now);
+      if (due) {
+        const r = await selfPost("/api/report/weekly");
+        out.weekly = r.ok ? "sent" : `failed (${r.status ?? r.body})`;
+        if (r.ok) await changelog(`weekly performance report auto-sent for Iranian week containing ${today} (self-driving)`);
+      } else {
+        out.weekly = "already-sent";
+      }
+    } catch (e) {
+      out.weekly = `error: ${String(e).slice(0, 100)}`;
     }
   } catch (e) {
     out.error = String(e).slice(0, 140);

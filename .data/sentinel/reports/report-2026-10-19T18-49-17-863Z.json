@@ -1,0 +1,215 @@
+{
+ "schemaVersion": 1,
+ "kind": "deep",
+ "at": "2026-10-19T18:49:17.275Z",
+ "tehran": "19/10/2026, 22:19:17",
+ "verdict": "AMBER",
+ "anomalies": [
+  {
+   "sev": "warn",
+   "area": "memory",
+   "msg": "MemAvailable 357MB < 400MB — pre-emptive OOM-proximity watch (4GB no-swap box)"
+  }
+ ],
+ "services": [
+  {
+   "key": "app",
+   "label": "app :3000",
+   "up": true,
+   "status": 200,
+   "ms": 18
+  },
+  {
+   "key": "ws",
+   "label": "price-ws :3003",
+   "up": true,
+   "status": 400,
+   "ms": 3
+  },
+  {
+   "key": "bridge",
+   "label": "telegram-bridge :3005",
+   "up": true,
+   "status": 200,
+   "ms": 1
+  },
+  {
+   "key": "liq",
+   "label": "liq :3010",
+   "up": true,
+   "status": 200,
+   "ms": 2
+  },
+  {
+   "key": "trade",
+   "label": "trade :3011",
+   "up": true,
+   "status": 200,
+   "ms": 1
+  },
+  {
+   "key": "watchdog",
+   "label": "p0-watchdog :3020",
+   "up": true,
+   "status": 200,
+   "ms": 2
+  }
+ ],
+ "mem": {
+  "availableMb": 357
+ },
+ "disk": {
+  "rootFreeGb": 5.07,
+  "tmpFreeGb": 5.07
+ },
+ "db": {
+  "ok": true,
+  "signals": 2862,
+  "events": 80054,
+  "prices": 171507,
+  "assets": 50,
+  "pumps": 2191,
+  "events1h": 468,
+  "lastEventAgeMs": 4997,
+  "stuckActive": 0,
+  "orphanEvents": 0,
+  "stuckPumpTracks": 0,
+  "dbBytes": 64393216,
+  "walBytes": 4309552
+ },
+ "backup": {
+  "ok": true,
+  "dir": "/tmp/my-project/backups",
+  "encCount": 12,
+  "zipCount": 12,
+  "newestEncMs": 1792430533268.1917,
+  "newestAnyMs": 1792430533268.1917,
+  "encAgeMs": 5223408.808349609
+ },
+ "watchdog": {
+  "ok": true,
+  "ver": "p0-watchdog 1.4.8",
+  "modes": {
+   "app": "ok",
+   "liq": "ok",
+   "ws": "ok",
+   "bridge": "ok",
+   "trade": "ok",
+   "sentinel": "ok",
+   "armor": "ok",
+   "cron": "ok",
+   "stable": "ok",
+   "kw": "ok",
+   "mem": "ok",
+   "warm": "ok"
+  },
+  "nonOk": 0,
+  "memLevel": "ok",
+  "memAvailableMb": 358,
+  "paused": false
+ },
+ "log": {
+  "windowLines": 256,
+  "errors": 0,
+  "http500": 0,
+  "oom": 0,
+  "enospc": 0,
+  "hydration": 0,
+  "unhandled": 0,
+  "settlementStalled": 0,
+  "turbopackPanic": 0
+ },
+ "shadow": {
+  "ok": true,
+  "source": "live-api",
+  "mode": "veto",
+  "generatedAt": "2026-10-19T18:49:16.709Z",
+  "stats": {
+   "total": 6360,
+   "passSide": 3689,
+   "rejectSide": 2671,
+   "vetoCount": 3805,
+   "tradeCount": 2555,
+   "modelSharePct": 43.1,
+   "modelGroundedPct": 100,
+   "avgConfidence": 68.2,
+   "gateAgreement": 1468,
+   "paperOpen": 8,
+   "paperSettled": 1199,
+   "recent24h": {
+    "n": 163,
+    "modelSharePct": 49.7,
+    "lastModelAgeH": 0,
+    "lastVerdictAgeH": 0
+   }
+  },
+  "arms": [
+   {
+    "id": "real-keep",
+    "n": 30,
+    "target": 30,
+    "pct": 100,
+    "starved": false,
+    "reachable": true,
+    "fed": 1352,
+    "lastFedAgeH": null
+   },
+   {
+    "id": "real-veto",
+    "n": 30,
+    "target": 30,
+    "pct": 100,
+    "starved": false,
+    "reachable": true,
+    "fed": 2337,
+    "lastFedAgeH": null
+   },
+   {
+    "id": "paper-keep",
+    "n": 30,
+    "target": 30,
+    "pct": 100,
+    "starved": false,
+    "reachable": true,
+    "fed": 1207,
+    "lastFedAgeH": null
+   },
+   {
+    "id": "paper-veto",
+    "n": 0,
+    "target": 30,
+    "pct": 0,
+    "starved": false,
+    "reachable": true,
+    "fed": 0,
+    "lastFedAgeH": null
+   }
+  ],
+  "fillPct": 75,
+  "fillPctReach": 75,
+  "nSum": 90,
+  "tSum": 120,
+  "nSumReach": 90,
+  "tSumReach": 120,
+  "fenceEntries24hFloor": 313
+ },
+ "rawcal": {
+  "armed": true,
+  "issued": 417,
+  "issuedTotal": 1828,
+  "target": 2856,
+  "heartbeatAgeH": 0,
+  "heartbeatAt": "2026-10-19T1848Z ARMED issued=417/1828 target=2856"
+ },
+ "cures": {
+  "armed": true,
+  "curing": false,
+  "cures24h": 3,
+  "lastCureAt": "2026-10-19T17:20:17.638Z",
+  "lastCureOutcome": "app-200-post-cure",
+  "failStreak": 0,
+  "baselineMark": 14
+ },
+ "uptimeSec": 27000,
+ "ver": "nexus-sentinel 1.3.2"
+}

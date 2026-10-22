@@ -476,11 +476,16 @@ export default function AnalyticsSection() {
   }
 
   const latest = equity.length ? equity[equity.length - 1] : undefined;
-  const closedTotal = stats.wins + stats.losses + stats.expired;
+  // TASK-40: the WIN/LOSS SPLIT card now headlines the ALL-TIME TP-proven
+  // split (stats.allTimeSplit) — the old pie fed on the rolling 7-day window
+  // (stats.wins/losses/expired), so its counts shrank hourly as rows aged out
+  // of the window and the shrinkage read like data loss. All-time is
+  // monotonic: it only ever grows. The 7d window stays visible as context.
+  const closedTotal = stats.allTimeSplit.settled;
   const outcome = [
-    { name: "WINS", value: stats.wins, color: NEON },
-    { name: "LOSSES", value: stats.losses, color: DANGER },
-    { name: "EXPIRED", value: stats.expired, color: AMBER },
+    { name: "WINS", value: stats.allTimeSplit.wins, color: NEON },
+    { name: "LOSSES", value: stats.allTimeSplit.losses, color: DANGER },
+    { name: "EXPIRED", value: stats.allTimeSplit.expired, color: AMBER },
   ].filter((d) => d.value > 0);
 
   const dirLong = stats.byDirection.long;
@@ -668,14 +673,14 @@ export default function AnalyticsSection() {
           <NetPnlLedgerCard ledger={stats.pnlLedger} afterlife={stats.afterlife} />
         </ChartCard>
 
-        {/* ── C · WIN / LOSS SPLIT (TP-proven accounting) ── */}
+        {/* ── C · WIN / LOSS SPLIT (TP-proven accounting, ALL-TIME) ── */}
         <ChartCard
           title="WIN / LOSS SPLIT"
           delay={0.1}
           className="xl:col-span-1"
           badge={
-            <NeonBadge tone={stats.winRate >= 50 ? "neon" : "danger"} glow>
-              {fmtPct(stats.winRate, false)}
+            <NeonBadge tone={stats.allTimeSplit.winRate >= 50 ? "neon" : "danger"} glow>
+              ALL-TIME {fmtPct(stats.allTimeSplit.winRate, false)}
             </NeonBadge>
           }
         >
@@ -705,9 +710,9 @@ export default function AnalyticsSection() {
                 </ResponsiveContainer>
                 <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
                   <span className="neon-text font-terminal text-xl font-bold text-neon tabular-nums">
-                    {fmtPct(stats.winRate, false)}
+                    {fmtPct(stats.allTimeSplit.winRate, false)}
                   </span>
-                  <span className="label-tech mt-0.5">WIN RATE</span>
+                  <span className="label-tech mt-0.5">ALL-TIME WIN RATE</span>
                 </div>
               </div>
               <div className="mt-3 space-y-1">
@@ -727,6 +732,9 @@ export default function AnalyticsSection() {
               </div>
               <p className="mt-2 font-terminal text-[9px] leading-relaxed tracking-[0.06em] text-ink-3">
                 TP-PROVEN: EVERY TP1/TP2/TP3 TOUCH COUNTS AS A WIN — EVEN IF THE TRADE LATER STOPS OUT AT BREAKEVEN OR EXPIRES
+              </p>
+              <p className="mt-1 font-terminal text-[9px] leading-relaxed tracking-[0.06em] text-ink-3">
+                ALL-TIME LEDGER IS MONOTONIC · 7D WINDOW CONTEXT: {stats.winRate}% WR · {stats.wins}W/{stats.losses}L/{stats.expired}E
               </p>
             </>
           )}

@@ -1,0 +1,24 @@
+# NEXUS//SIGNALS — all bun micro-services in one supervised group (bare-metal)
+# price-ws :3003 · bridge :3005 · liq :3010 · trade :3011 · cron :3015 ·
+# armor :3016 · sentinel :3030
+# KillMode=control-group ⇒ `systemctl restart nexus-minis` restarts them all.
+
+[Unit]
+Description=NEXUS//SIGNALS — micro-services group
+After=network-online.target nexus-app.service
+Wants=network-online.target nexus-app.service
+
+[Service]
+Type=forking
+WorkingDirectory=/home/z/my-project
+EnvironmentFile=/home/z/my-project/.env
+# nohup+setsid children are TRACKED in this cgroup (control-group kill)
+ExecStart=/usr/local/bin/bun /home/z/my-project/deploy/systemd/start-minis.sh
+ExecStop=/bin/bash -c 'pkill -f "mini-services/.*/index.ts" || true'
+Restart=always
+RestartSec=10
+KillMode=control-group
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

@@ -208,6 +208,7 @@ function DashboardSkeleton() {
 /* ── Dashboard assembly ───────────────────────────────────── */
 
 import TelegramBridgeCard from "@/components/bridge/TelegramBridgeCard";
+import GoldenLaneCard from "@/components/terminal/GoldenLaneCard"; // Task 79 — golden-formula paper lanes
 
 export default function DashboardSection() {
   const { data } = usePulse();
@@ -230,6 +231,8 @@ export default function DashboardSection() {
       </div>
       {/* 2026-09-21 operator order: NEXUS-SENTINEL deep-monitor panel (:3030) */}
       <SentinelPanel />
+      {/* Task 79 (2026-10-05 operator mandate): pre-registered golden-formula paper lanes (GFL v1.0 + R6 challenger) */}
+      <GoldenLaneCard />
       {/* 2026-09-11 operator round: two-way Telegram bridge (inbox + reply) */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
         <div className="lg:col-span-7">

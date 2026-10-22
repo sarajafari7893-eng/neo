@@ -17,7 +17,7 @@ export interface PriceRow {
   at: number;
 }
 
-export type PriceSource = "WS PUSH" | "WS·REST 2.5S" | "WS OFFLINE";
+export type PriceSource = "WS PUSH" | "WS·BYBIT" | "WS·REST 2.5S" | "WS OFFLINE";
 
 interface PriceState {
   rows: Map<string, PriceRow>;
@@ -33,7 +33,11 @@ function ensureSocket(): Socket {
   if (socket) return socket;
   // v10.1 resilience: capped jittered backoff — fast first retries (3s),
   // never exceeds 15s, ±50% jitter avoids synchronized reconnect storms.
-  socket = io("/?XTransformPort=3003", {
+  // SELFHOST-0929: the sandbox gateway path (?XTransformPort=3003) is the
+  // default; a self-hosted deploy sets NEXT_PUBLIC_WS_URL (build-time, e.g.
+  // "/ws" behind a reverse proxy, or "http://host:3003" for direct LAN) and
+  // the default keeps sandbox behavior.
+  socket = io(process.env.NEXT_PUBLIC_WS_URL ?? "/?XTransformPort=3003", {
     path: "/",
     transports: ["websocket", "polling"],
     reconnectionDelay: 3000,

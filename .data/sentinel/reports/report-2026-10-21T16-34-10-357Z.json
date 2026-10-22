@@ -1,0 +1,215 @@
+{
+ "schemaVersion": 1,
+ "kind": "deep",
+ "at": "2026-10-21T16:34:10.356Z",
+ "tehran": "21/10/2026, 20:04:10",
+ "verdict": "RED",
+ "anomalies": [
+  {
+   "sev": "crit",
+   "area": "app",
+   "msg": "service down / probe failed"
+  },
+  {
+   "sev": "warn",
+   "area": "watchdog",
+   "msg": "layer-1 non-ok services: {\"app\":\"degraded\",\"liq\":\"ok\",\"ws\":\"ok\",\"bridge\":\"ok\",\"trade\":\"ok\",\"sentinel\":\"ok\",\"armor\":\"ok\",\"cron\":\"ok\",\"stable\":\"ok\",\"kw\":\"ok\",\"mem\":\"ok\",\"warm\":\"ok\",\"tbt\":\"ok\"}"
+  }
+ ],
+ "services": [
+  {
+   "key": "app",
+   "label": "app :3000",
+   "up": false,
+   "status": null,
+   "ms": 26,
+   "tcpOpen": false
+  },
+  {
+   "key": "ws",
+   "label": "price-ws :3003",
+   "up": true,
+   "status": 400,
+   "ms": 4
+  },
+  {
+   "key": "bridge",
+   "label": "telegram-bridge :3005",
+   "up": true,
+   "status": 200,
+   "ms": 4
+  },
+  {
+   "key": "liq",
+   "label": "liq :3010",
+   "up": true,
+   "status": 200,
+   "ms": 4
+  },
+  {
+   "key": "trade",
+   "label": "trade :3011",
+   "up": true,
+   "status": 200,
+   "ms": 4
+  },
+  {
+   "key": "watchdog",
+   "label": "p0-watchdog :3020",
+   "up": true,
+   "status": 200,
+   "ms": 4
+  }
+ ],
+ "mem": {
+  "availableMb": 3156
+ },
+ "disk": {
+  "rootFreeGb": 4.78,
+  "tmpFreeGb": 4.78
+ },
+ "db": {
+  "ok": true,
+  "signals": 2963,
+  "events": 80193,
+  "prices": 125581,
+  "assets": 50,
+  "pumps": 2243,
+  "events1h": 1070,
+  "lastEventAgeMs": 31062,
+  "stuckActive": 0,
+  "orphanEvents": 0,
+  "stuckPumpTracks": 0,
+  "dbBytes": 57778176,
+  "walBytes": 234872
+ },
+ "backup": {
+  "ok": true,
+  "dir": "/tmp/my-project/backups",
+  "encCount": 12,
+  "zipCount": 12,
+  "newestEncMs": 1792590079984.8845,
+  "newestAnyMs": 1792590079984.8845,
+  "encAgeMs": 10370355.115478516
+ },
+ "watchdog": {
+  "ok": true,
+  "ver": "p0-watchdog 1.4.9",
+  "modes": {
+   "app": "degraded",
+   "liq": "ok",
+   "ws": "ok",
+   "bridge": "ok",
+   "trade": "ok",
+   "sentinel": "ok",
+   "armor": "ok",
+   "cron": "ok",
+   "stable": "ok",
+   "kw": "ok",
+   "mem": "ok",
+   "warm": "ok",
+   "tbt": "ok"
+  },
+  "nonOk": 1,
+  "memLevel": "ok",
+  "memAvailableMb": 2773,
+  "paused": false
+ },
+ "log": {
+  "windowLines": 301,
+  "errors": 0,
+  "http500": 0,
+  "oom": 0,
+  "enospc": 0,
+  "hydration": 0,
+  "unhandled": 0,
+  "settlementStalled": 0,
+  "turbopackPanic": 0
+ },
+ "shadow": {
+  "ok": true,
+  "source": "legacy-file",
+  "degraded": true,
+  "fileAgeH": 0,
+  "mode": "veto",
+  "generatedAt": "2026-10-21T16:27:01.165Z",
+  "stats": {
+   "total": 6767,
+   "passSide": 3992,
+   "rejectSide": 2775,
+   "vetoCount": 4182,
+   "tradeCount": 2585,
+   "modelSharePct": 42.8,
+   "modelGroundedPct": 100,
+   "avgConfidence": 68.1,
+   "gateAgreement": 1566,
+   "paperOpen": 8,
+   "paperSettled": 1205,
+   "recent24h": {
+    "n": 224,
+    "modelSharePct": 39.7,
+    "lastModelAgeH": 0.2,
+    "lastVerdictAgeH": 0.2
+   }
+  },
+  "arms": [
+   {
+    "id": "real-keep",
+    "n": 30,
+    "target": 30,
+    "pct": 100,
+    "starved": false,
+    "fed": null,
+    "lastFedAgeH": null
+   },
+   {
+    "id": "real-veto",
+    "n": 30,
+    "target": 30,
+    "pct": 100,
+    "starved": false,
+    "fed": null,
+    "lastFedAgeH": null
+   },
+   {
+    "id": "paper-keep",
+    "n": 30,
+    "target": 30,
+    "pct": 100,
+    "starved": false,
+    "fed": null,
+    "lastFedAgeH": null
+   },
+   {
+    "id": "paper-veto",
+    "n": 0,
+    "target": 30,
+    "pct": 0,
+    "starved": false,
+    "fed": null,
+    "lastFedAgeH": null
+   }
+  ],
+  "fillPct": 75,
+  "nSum": 90,
+  "tSum": 120,
+  "fenceEntries24hFloor": 341
+ },
+ "rawcal": {
+  "armed": null,
+  "error": "api unreachable",
+  "heartbeatAgeH": 0,
+  "heartbeatAt": "2026-10-21T1633Z ARMED issued=505/1916 target=2977"
+ },
+ "cures": {
+  "armed": true,
+  "curing": false,
+  "cures24h": 0,
+  "lastCureAt": null,
+  "lastCureOutcome": null,
+  "failStreak": 0,
+  "baselineMark": 0
+ },
+ "uptimeSec": 10578,
+ "ver": "nexus-sentinel 1.3.2"
+}

@@ -82,6 +82,84 @@ export const PUMP_RULES = {
   trackUpdateMs: 15_000, // DB write throttle per open track
 } as const;
 
+// ── v12.1 TASK-48 ① R6 RADAR LANE — SUCCESS-renom revival (operator mandate
+// «پیشنهادها را کامل و مهندسی اجرا کن») ──
+// Task-47 forensics: the radar→signal conversion is NOT dead code — it is a
+// 100% VETO RATE. 48h funnel: 119 declared / 60 SUCCESS renoms reached
+// deploySignal and EVERY ONE was refused by the four cohort-blind MOOD gates
+// (R1 SHORT-GUARD "HTF board not aligned", regime CHOP ladder, MEMORY-GATE
+// realized<25%, dynamic MIN_SCORE "best |score| 0 vs eff 27"). Last link
+// CTSIUSDT 2026-10-09 ≈ when the mood-gate stack hardened. Revival design:
+// ONLY the SUCCESS-confirmed re-nomination cohort (v11.1's data-proven
+// performance filter — renom cards historically +25.1% avg in the gated era)
+// rides a NARROWER authority: the four mood gates are bypassed, every
+// PHYSICAL gate stays live (ONSET-RETEST CHASE+FADE, LIQUIDITY-FLOOR,
+// PHANTOM-FEED, STALE-ANCHOR, CHASE-PRICE 1.5% anchored at track peak,
+// DEPEG, SYMBOL-CAP, REENTRY-LOCKOUT, STRAT-PAUSE, QUAD-SHORT, FLOW veto +
+// the new BOTTOM-FADE/V-REVERSAL Task-48 guards), plus lane-specific rails:
+// daily cap, max-open 2, spacing 20min, R6-LANE tag for cohort audit, and
+// AUTO-DEMOTE when the settled lane cohort (n≥30) fails the v10.18 probation
+// criteria (WR < baseline OR avgPnl ≤ 0) — the lane shuts itself off on
+// evidence, exactly like the direct-authority era was retired on evidence.
+export const RADAR_LANE_DEFAULTS = {
+  enabled: true,
+  dailyCap: 4, // max R6-LANE deploys per UTC day — bounded blast radius
+  probationN: 30, // settled lane cards before the auto-demote verdict can fire
+} as const;
+
+interface RadarLaneCfg { enabled: boolean; dailyCap: number; probationN: number }
+
+async function getRadarLaneCfg(): Promise<RadarLaneCfg> {
+  const cfg: RadarLaneCfg = { ...RADAR_LANE_DEFAULTS };
+  try {
+    const row = await db.engineSetting.findUnique({ where: { key: "radar-lane" } });
+    if (row) {
+      const p = JSON.parse(row.value) as Partial<RadarLaneCfg>;
+      if (p.enabled === false) cfg.enabled = false;
+      if (typeof p.dailyCap === "number") cfg.dailyCap = Math.max(0, Math.min(20, Math.floor(p.dailyCap)));
+      if (typeof p.probationN === "number") cfg.probationN = Math.max(10, Math.min(200, Math.floor(p.probationN)));
+    }
+  } catch { /* fail-open: defaults */ }
+  return cfg;
+}
+
+/** Auto-demote: settled R6-LANE cohort fails probation → lane self-disables.
+ *  Mirrors the v10.18 retirement doctrine — modes die on evidence, not opinion. */
+async function radarLaneProbationCheck(cfg: RadarLaneCfg): Promise<{ ok: boolean; note: string }> {
+  try {
+    const rows = await db.signal.findMany({
+      where: { tags: { contains: "R6-LANE" } },
+      select: { status: true, reachedTp: true, pnlPercent: true, marginUsd: true, closedAt: true },
+    });
+    const settled = rows.filter((r) => r.closedAt);
+    if (settled.length < cfg.probationN) return { ok: true, note: `probation pending — ${settled.length}/${cfg.probationN} settled` };
+    const wins = settled.filter((r) => r.reachedTp >= 1 || ["TP1", "TP2", "TP3"].includes(r.status)).length;
+    const wr = (wins / settled.length) * 100;
+    const avgPnl = settled.reduce((a, r) => a + r.pnlPercent, 0) / settled.length;
+    // baseline = non-lane settled book over the same window (approx: all-time
+    // tp-proven book minus lane rows — the v10.18 endpoint's cohort logic)
+    const all = await db.signal.findMany({ where: { closedAt: { not: null } }, select: { tags: true, reachedTp: true, status: true } });
+    const nonLane = all.filter((r) => !(r.tags ?? "").includes("R6-LANE"));
+    const nlWins = nonLane.filter((r) => r.reachedTp >= 1 || ["TP1", "TP2", "TP3"].includes(r.status)).length;
+    const baselineWr = nonLane.length ? (nlWins / nonLane.length) * 100 : 0;
+    if (wr < baselineWr || avgPnl <= 0) {
+      await db.engineSetting.upsert({
+        where: { key: "radar-lane" },
+        create: { key: "radar-lane", value: JSON.stringify({ ...cfg, enabled: false, demotedAt: new Date().toISOString(), demoteReason: `probation fail n=${settled.length} WR ${wr.toFixed(1)}% vs baseline ${baselineWr.toFixed(1)}% avgPnl ${avgPnl.toFixed(2)}%` }) },
+        update: { value: JSON.stringify({ ...cfg, enabled: false, demotedAt: new Date().toISOString(), demoteReason: `probation fail n=${settled.length} WR ${wr.toFixed(1)}% vs baseline ${baselineWr.toFixed(1)}% avgPnl ${avgPnl.toFixed(2)}%` }) },
+      }).catch(() => undefined);
+      return { ok: false, note: `AUTO-DEMOTED — n=${settled.length} WR ${wr.toFixed(1)}% < baseline ${baselineWr.toFixed(1)}% or avgPnl ${avgPnl.toFixed(2)}% ≤ 0 (v10.18 probation doctrine)` };
+    }
+    return { ok: true, note: `probation PASS — n=${settled.length} WR ${wr.toFixed(1)}% vs baseline ${baselineWr.toFixed(1)}%, avgPnl ${avgPnl.toFixed(2)}%` };
+  } catch {
+    return { ok: true, note: "probation check failed-open" };
+  }
+}
+
+// lane daily counter (memory; UTC-day keyed — restart resets to a conservative 0,
+// DB recount below re-arms it after every boot)
+const laneDay = { key: "", count: 0 };
+
 // ── in-memory tape ────────────────────────────────────────────────────────
 interface TapePoint {
   t: number;
@@ -94,9 +172,39 @@ const volSamples = new Map<string, Array<{ t: number; dv: number }>>(); // 1m qu
 const lastConfirmAt = new Map<string, number>(); // stage-2 throttle
 const lastResolveAt = new Map<string, number>(); // re-declaration cooldown
 const lastSignalAt = { v: 0 }; // global radar-signal spacing
+
+// ── v11.1 NOMINATION FUNNEL COUNTERS (operator: «چرا ردیابی‌ها تبدیل به سیگنال نمی‌شود؟») ──
+// Every silent drop in the nomination funnel is now counted and surfaced in
+// the pump status block (/api/pulse → pump.nomination). Before v11.1 the
+// spacing/maxActive floors dropped candidates with NO event and NO counter —
+// DB audit (2026-10-04): gated-era 457 tracks → 208 SUCCESS, but only 45 ever
+// passed the one-shot 78 deploy floor (163 SUCCESS tracks permanently missed).
+const nomStats = {
+  declared: 0, // tracks declared (stage-2 confirmation passed)
+  learningHeld: 0, // nominations blocked by the learning gate
+  belowDeployFloor: 0, // declare-time conviction < 78 (one-shot floor)
+  spacingDrop: 0, // dropped by the 20min global spacing floor
+  maxActiveDrop: 0, // dropped by the max-open radar cards floor
+  nominated: 0, // declare-time nominations that reached deploySignal
+  deployed: 0, // declare-time nominations that became signals
+  engineVetoed: 0, // deploySignal refused (full gate stack)
+  successResolutions: 0, // tracks resolving SUCCESS
+  renomSkippedHasCard: 0, // SUCCESS renom skipped — track already has its card
+  renomAttempts: 0, // SUCCESS-confirmed re-nominations that reached the gates
+  renomDeployed: 0, // SUCCESS-confirmed re-nominations deployed
+  renomSpacingDrop: 0, // SUCCESS renoms dropped by spacing
+  renomMaxActiveDrop: 0, // SUCCESS renoms dropped by max-open
+  // v12.1 R6 RADAR LANE counters
+  laneAttempts: 0, // SUCCESS renoms that reached the lane rails
+  laneCapDrop: 0, // dropped by the daily cap / lane disabled
+  laneProbationNote: "", // last probation verdict note
+  laneDeployed: 0, // lane deploys that became signals
+  laneVetoed: 0, // lane deploys refused by the (still-live) physical gates
+};
 let openTracks = new Map<string, TrackState>(); // symbol → live track
 let lastTrackSweepAt = 0;
 let lastSyncAt = 0; // DB reconcile cursor — heals multi-bundle/restart divergence
+let lastLaneProbationAt = 0; // v12.1 lane probation check throttle (10min)
 let memo: { at: number; v: PumpEngineStatus } | null = null;
 let booted = false;
 
@@ -359,6 +467,7 @@ export async function pumpTick(assets: PumpAsset[]): Promise<void> {
 }
 
 async function declareTrack(c: PumpCandidate, score: number, ev: PumpEvidence, now: number): Promise<void> {
+  nomStats.declared++;
   const row = await db.pumpTrack.create({
     data: {
       symbol: c.symbol,
@@ -472,6 +581,17 @@ async function updateTrack(t: TrackState, price: number | null, src: string | nu
   const ageMin = (now - t.detectedAt) / 60_000;
   if (t.mfe >= PUMP_RULES.successMovePct) {
     await resolveTrack(t, "SUCCESS", `MFE +${t.mfe.toFixed(2)}% ≥ +${PUMP_RULES.successMovePct}% in ${ageMin.toFixed(0)}min — continuation validated`, now);
+    // ── v11.1 SUCCESS-CONFIRMED RE-NOMINATION (data-proven performance filter) ──
+    // DB audit 2026-10-04: tracks that converted to signals after a SUCCESS
+    // outcome averaged +20.4% (mixed era, n=59) and +25.1% (gated era, n=7)
+    // vs −14.8% for FAILURE-converted — the realized SUCCESS outcome IS the
+    // performance filter. The one-shot declare-moment 78 floor permanently
+    // missed 163/208 gated-era SUCCESS tracks (score only evaluated at the
+    // detection instant, never re-visited). Nomination now gets a SECOND,
+    // outcome-confirmed chance: still through the full engine gate stack,
+    // still spacing/maxActive-capped, chase-cap anchored at the confirmation
+    // point (track peak) instead of the detection anchor.
+    await renominateSuccessTrack(t, now);
     return;
   }
   if (t.mae >= PUMP_RULES.collapseMaePct) {
@@ -563,7 +683,40 @@ export async function setPumpAuthority(mode: "direct" | "gated"): Promise<void> 
   });
 }
 
-async function maybeSpawnSignal(kind: "PUMP" | "DUMP", symbol: string, score: number, trackId: string, now: number, anchorPrice: number): Promise<void> {
+/** v11.1 — second nomination chance at SUCCESS resolution. Only for tracks
+ *  that never got their card (no signalId). The realized SUCCESS outcome
+ *  replaces the declare-moment 78 conviction floor as the proven filter;
+ *  spacing + max-open + the full engine gate stack still apply. */
+async function renominateSuccessTrack(t: TrackState, now: number): Promise<void> {
+  nomStats.successResolutions++;
+  try {
+    const row = await db.pumpTrack.findUnique({ where: { id: t.id }, select: { signalId: true } });
+    if (!row) return;
+    if (row.signalId) {
+      nomStats.renomSkippedHasCard++;
+      return;
+    }
+  } catch {
+    return; // DB hiccup — never let the funnel heal break the radar loop
+  }
+  await maybeSpawnSignal(t.kind, t.symbol, t.score, t.id, now, t.anchor, {
+    renom: true,
+    // chase-cap anchor = confirmation point (the track's extreme), NOT the
+    // detection anchor: post-SUCCESS the price is by definition ≥2% past the
+    // anchor, so anchoring there would veto every re-nomination.
+    renomRefPrice: t.peak,
+  });
+}
+
+async function maybeSpawnSignal(
+  kind: "PUMP" | "DUMP",
+  symbol: string,
+  score: number,
+  trackId: string,
+  now: number,
+  anchorPrice: number,
+  opts?: { renom?: boolean; renomRefPrice?: number },
+): Promise<void> {
   const engine = await import("./engine");
   // ── v10.18 PHASE-2 CONSOLIDATION (operator option A, 2026-09-24) ──
   // The DIRECT-AUTHORITY bypass is RETIRED. The PUMP/DUMP RADAR is the
@@ -582,15 +735,70 @@ async function maybeSpawnSignal(kind: "PUMP" | "DUMP", symbol: string, score: nu
     // v9.0 gated path — learning gate + 78 deploy floor + spacing + max-open
     const gate = await pumpGateAllows();
     if (!gate.unlocked) {
+      nomStats.learningHeld++;
       await engine.fireEvent(null, symbol, "ENGINE", "info", `PUMP/DUMP RADAR: ${kind} ${symbol} scored ${score}/100 (deploy-grade) but the learning gate holds — ${gate.reason}`);
       return;
     }
-    if (score < PUMP_RULES.scoreDeploy) return;
+    // v11.1: on the SUCCESS-confirmed re-nomination path the realized outcome
+    // (MFE ≥ +2% validated within horizon) replaces the one-shot declare-moment
+    // 78 conviction floor as the performance filter — that floor permanently
+    // missed 163/208 gated-era SUCCESS tracks (funnel audit 2026-10-04).
+    if (!opts?.renom && score < PUMP_RULES.scoreDeploy) {
+      nomStats.belowDeployFloor++;
+      return;
+    }
     const now_ = Date.now();
-    if (now_ - lastSignalAt.v < PUMP_RULES.signalSpacingMs) return;
+    if (now_ - lastSignalAt.v < PUMP_RULES.signalSpacingMs) {
+      if (opts?.renom) nomStats.renomSpacingDrop++;
+      else nomStats.spacingDrop++;
+      return;
+    }
     const openRadar = await db.signal.count({ where: { tags: { contains: kind }, status: { in: ["ACTIVE", "TP1", "TP2"] } } });
-    if (openRadar >= PUMP_RULES.signalMaxActive) return;
+    if (openRadar >= PUMP_RULES.signalMaxActive) {
+      if (opts?.renom) nomStats.renomMaxActiveDrop++;
+      else nomStats.maxActiveDrop++;
+      return;
+    }
+    // ── v12.1 TASK-48 ① R6 RADAR LANE rails (renom cohort only) ──
+    if (opts?.renom) {
+      nomStats.laneAttempts++;
+      const laneCfg = await getRadarLaneCfg();
+      const todayKey = new Date().toISOString().slice(0, 10);
+      if (laneDay.key !== todayKey) {
+        // re-arm the in-memory daily counter from the DB after day roll / boot
+        const c = await db.signal.count({ where: { tags: { contains: "R6-LANE" }, createdAt: { gte: new Date(`${todayKey}T00:00:00.000Z`) } } }).catch(() => 0);
+        laneDay.key = todayKey;
+        laneDay.count = c;
+      }
+      if (!laneCfg.enabled) {
+        nomStats.laneCapDrop++;
+        await engine.fireEvent(null, symbol, "ENGINE", "info", `PUMP/DUMP RADAR: ${kind} ${symbol} SUCCESS re-nom held — R6 LANE disabled (${(await db.engineSetting.findUnique({ where: { key: "radar-lane" } }).catch(() => null))?.value ?? "{}"})`);
+        return;
+      }
+      if (laneDay.count >= laneCfg.dailyCap) {
+        nomStats.laneCapDrop++;
+        await engine.fireEvent(null, symbol, "ENGINE", "info", `PUMP/DUMP RADAR: ${kind} ${symbol} SUCCESS re-nom held — R6 LANE daily cap ${laneDay.count}/${laneCfg.dailyCap} (bounded blast radius)`);
+        return;
+      }
+      // probation verdict — at most one check per 10min (two DB scans)
+      if (now - lastLaneProbationAt >= 600_000) {
+        lastLaneProbationAt = now;
+        const prob = await radarLaneProbationCheck(laneCfg);
+        nomStats.laneProbationNote = prob.note;
+        if (!prob.ok) {
+          nomStats.laneCapDrop++;
+          const e2 = await import("./engine");
+          await e2.fireEvent(null, null, "PUMP_RADAR", "warn", `R6 RADAR LANE AUTO-DEMOTED — ${prob.note} · lane disabled by evidence, SUCCESS renoms return to the strict gate stack`);
+          return;
+        }
+      } else if (nomStats.laneProbationNote.startsWith("AUTO-DEMOTED")) {
+        nomStats.laneCapDrop++;
+        return;
+      }
+    }
     lastSignalAt.v = now_;
+    if (opts?.renom) nomStats.renomAttempts++;
+    else nomStats.nominated++;
   }
   // v9.2 comment RETIRED with the direct path (v10.18, see block above).
   // v9.3 R6-INFORMATIVE PACKAGE (operator mandate الف + anti-late-entry):
@@ -618,19 +826,37 @@ async function maybeSpawnSignal(kind: "PUMP" | "DUMP", symbol: string, score: nu
   //   detection→fill drift of the detected flow.
   const res = await engine.deploySignal(symbol, kind === "PUMP" ? "LONG" : "SHORT", {
     triggerTag: "PUMP-RADAR",
-    extraTags: [kind],
+    extraTags: [kind, ...(opts?.renom ? ["R6-LANE"] : [])],
+    // v12.1 TASK-48 ①: the SUCCESS-renom cohort rides the R6 RADAR LANE —
+    // the four cohort-blind MOOD gates (R1 SHORT-GUARD, regime CHOP ladder,
+    // MEMORY-GATE, dynamic MIN_SCORE) are bypassed; every physical gate stays
+    // live; lane rails (dailyCap/maxActive/spacing/probation) bound the
+    // cohort. Declare-time nominations keep the strict path unchanged.
+    radarLane: !!opts?.renom,
     // v10.18: NO authorityBypass — radar emissions ride the full gate stack.
     focusSymbol: symbol,
     ttlMinutes: 60 + Math.round(Math.random() * 15),
     ttlNoExtend: true,
-    refPrice: anchorPrice,
+    // v11.1: re-nominations anchor the chase cap at the SUCCESS confirmation
+    // point (track peak); declare-time nominations keep the detection anchor.
+    refPrice: opts?.renom ? (opts.renomRefPrice ?? anchorPrice) : anchorPrice,
     chaseCapPct: 1.5,
+    // Task 79 FILL LEDGER — detection instant for the slippage/latency ledger
+    detectedAt: (await db.pumpTrack.findUnique({ where: { id: trackId }, select: { detectedAt: true } }).catch(() => null))?.detectedAt?.getTime(),
   });
   if (res.signal) {
+    if (opts?.renom) nomStats.renomDeployed++;
+    else nomStats.deployed++;
+    if (opts?.renom) {
+      nomStats.laneDeployed++;
+      laneDay.count += 1;
+    }
     await db.pumpTrack.update({ where: { id: trackId }, data: { signalId: res.signal.id } }).catch(() => undefined);
-    await engine.fireEvent(null, symbol, "PUMP_RADAR", "success", `${kind} RADAR DEPLOY — ${symbol} declared at conviction ${score}/100 → NX-${String(res.signal.serial).padStart(4, "0")} deployed THROUGH THE FULL GATE STACK (v10.18 radar-primary gated emission) with the dedicated ${kind} card`);
+    await engine.fireEvent(null, symbol, "PUMP_RADAR", "success", `${kind} RADAR DEPLOY${opts?.renom ? " (SUCCESS-CONFIRMED RE-NOMINATION v11.1 · R6 RADAR LANE — mood gates bypassed, physical gates + probation live)" : ""} — ${symbol} conviction ${score}/100 → NX-${String(res.signal.serial).padStart(4, "0")} deployed${opts?.renom ? " through the R6 lane" : " THROUGH THE FULL GATE STACK (radar-primary gated emission)"} with the dedicated ${kind} card`);
   } else if (res.error) {
-    await engine.fireEvent(null, symbol, "ENGINE", "info", `PUMP/DUMP RADAR: ${kind} ${symbol} nomination VETOED by the engine gates — ${res.error.slice(0, 160)}`);
+    nomStats.engineVetoed++;
+    if (opts?.renom) nomStats.laneVetoed++;
+    await engine.fireEvent(null, symbol, "ENGINE", "info", `PUMP/DUMP RADAR: ${kind} ${symbol} nomination${opts?.renom ? " (SUCCESS re-nom · R6 LANE — physical gates still live)" : ""} VETOED by the engine gates — ${res.error.slice(0, 160)}`);
   }
 }
 
@@ -678,6 +904,7 @@ export async function getPumpEngineStatus(): Promise<PumpEngineStatus> {
         unlockedAt: unlockedRow?.value ?? null,
       },
       authority,
+      nomination: { ...nomStats },
       active: active.map(toDTO),
       recent: recent.map(toDTO),
       tapeSymbols: tape.size,
@@ -689,6 +916,7 @@ export async function getPumpEngineStatus(): Promise<PumpEngineStatus> {
     return {
       gate: { unlocked: false, successful: 0, failed: 0, total: 0, required: PUMP_RULES.requiredSuccesses, unlockedAt: null },
       authority: "gated",
+      nomination: { ...nomStats },
       active: [],
       recent: [],
       tapeSymbols: tape.size,

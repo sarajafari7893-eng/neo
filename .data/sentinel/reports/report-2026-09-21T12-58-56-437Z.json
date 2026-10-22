@@ -1,0 +1,272 @@
+{
+ "schemaVersion": 1,
+ "kind": "deep",
+ "at": "2026-09-21T12:58:56.436Z",
+ "tehran": "21/09/2026, 16:28:56",
+ "verdict": "GREEN",
+ "anomalies": [],
+ "services": [
+  {
+   "key": "app",
+   "label": "app :3000",
+   "up": true,
+   "status": 200,
+   "ms": 22
+  },
+  {
+   "key": "ws",
+   "label": "price-ws :3003",
+   "up": true,
+   "status": 400,
+   "ms": 22
+  },
+  {
+   "key": "bridge",
+   "label": "telegram-bridge :3005",
+   "up": true,
+   "status": 200,
+   "ms": 21
+  },
+  {
+   "key": "liq",
+   "label": "liq :3010",
+   "up": true,
+   "status": 200,
+   "ms": 22
+  },
+  {
+   "key": "trade",
+   "label": "trade :3011",
+   "up": true,
+   "status": 200,
+   "ms": 22
+  },
+  {
+   "key": "watchdog",
+   "label": "p0-watchdog :3020",
+   "up": true,
+   "status": 200,
+   "ms": 22
+  }
+ ],
+ "mem": {
+  "availableMb": 933
+ },
+ "disk": {
+  "rootFreeGb": 6.56,
+  "tmpFreeGb": 6.56
+ },
+ "db": {
+  "ok": true,
+  "signals": 663,
+  "events": 31858,
+  "prices": 18132,
+  "assets": 44,
+  "pumps": 536,
+  "events1h": 2260,
+  "lastEventAgeMs": 14876,
+  "stuckActive": 0,
+  "orphanEvents": 0,
+  "stuckPumpTracks": 0,
+  "dbBytes": 21950464,
+  "walBytes": 4297192
+ },
+ "backup": {
+  "ok": true,
+  "dir": "/tmp/my-project/backups",
+  "encCount": 5,
+  "zipCount": 8,
+  "newestEncMs": 1789990058629.6953,
+  "newestAnyMs": 1789990058629.6953,
+  "encAgeMs": 5477713.3046875
+ },
+ "watchdog": {
+  "ok": true,
+  "ver": "p0-watchdog 1.3.0",
+  "modes": {
+   "app": "ok",
+   "liq": "ok",
+   "ws": "ok",
+   "bridge": "ok",
+   "trade": "ok",
+   "sentinel": "ok"
+  },
+  "nonOk": 0,
+  "memLevel": "ok",
+  "memAvailableMb": 908,
+  "paused": false
+ },
+ "log": {
+  "windowLines": 3531,
+  "errors": 7,
+  "http500": 0,
+  "oom": 0,
+  "enospc": 0,
+  "hydration": 0,
+  "unhandled": 0,
+  "settlementStalled": 0
+ },
+ "shadow": {
+  "ok": true,
+  "source": "live-api",
+  "mode": "shadow",
+  "generatedAt": "2026-09-21T12:50:33.496Z",
+  "stats": {
+   "total": 600,
+   "passSide": 227,
+   "rejectSide": 373,
+   "vetoCount": 156,
+   "tradeCount": 444,
+   "modelSharePct": 80.3,
+   "modelGroundedPct": 100,
+   "avgConfidence": 83.2,
+   "gateAgreement": 70,
+   "paperOpen": 26,
+   "paperSettled": 34
+  },
+  "arms": [
+   {
+    "id": "real-keep",
+    "label": "REAL · core said TRADE",
+    "n": 26,
+    "target": 30,
+    "pct": 87,
+    "starved": false,
+    "starveDetail": null,
+    "fed": 141,
+    "settled": 34,
+    "open": 107,
+    "wins": 9,
+    "winRatePct": 34.6,
+    "wilsonLB": 19.412014972852127,
+    "netUsd": -0.24,
+    "lastFedAgeH": 0
+   },
+   {
+    "id": "real-veto",
+    "label": "REAL · core said VETO (still traded)",
+    "n": 13,
+    "target": 30,
+    "pct": 43,
+    "starved": false,
+    "starveDetail": null,
+    "fed": 86,
+    "settled": 30,
+    "open": 56,
+    "wins": 5,
+    "winRatePct": 38.5,
+    "wilsonLB": 17.70944658123682,
+    "netUsd": 0.87,
+    "lastFedAgeH": 0
+   },
+   {
+    "id": "paper-keep",
+    "label": "PAPER · reject the core would trade",
+    "n": 30,
+    "target": 30,
+    "pct": 100,
+    "starved": false,
+    "starveDetail": null,
+    "fed": 60,
+    "settled": 34,
+    "open": 26,
+    "wins": 13,
+    "winRatePct": 43.3,
+    "wilsonLB": 27.377237430615114,
+    "netUsd": 2.68,
+    "lastFedAgeH": 0
+   },
+   {
+    "id": "paper-veto",
+    "label": "PAPER · pass the core blocked",
+    "n": 0,
+    "target": 30,
+    "pct": 0,
+    "starved": false,
+    "starveDetail": "feed wired, awaiting first qualifying record (disagreement/fence events are rare by design)",
+    "fed": 0,
+    "settled": 0,
+    "open": 0,
+    "wins": 0,
+    "winRatePct": null,
+    "wilsonLB": null,
+    "netUsd": 0,
+    "lastFedAgeH": null
+   }
+  ],
+  "fillPct": 57,
+  "nSum": 69,
+  "tSum": 120,
+  "promotion": {
+   "ready": false,
+   "criteria": [
+    {
+     "id": "n-veto",
+     "ok": false,
+     "detail": "rolling-30 would-veto cohort 13/30"
+    },
+    {
+     "id": "n-keep",
+     "ok": false,
+     "detail": "rolling-30 would-keep cohort 26/30 (fast path n≥20 + LB≥50%: unmet — LB 19.4%)"
+    },
+    {
+     "id": "wr-sep",
+     "ok": false,
+     "detail": "Wilson-LB veto 17.7% < keep 19.4% (95% separation)"
+    },
+    {
+     "id": "net",
+     "ok": false,
+     "detail": "would-veto cohort net $0.87 (must be negative)"
+    },
+    {
+     "id": "seq-stop",
+     "ok": false,
+     "detail": "seq-stop CONTINUE — z=-0.24 inside (−2.43, +2.43) at t=0.65 (α spent 0.0151); keep=26, veto=13 settled"
+    }
+   ],
+   "sequential": {
+    "state": "CONTINUE",
+    "z": -0.236,
+    "boundary": 2.4310361262683307,
+    "infoFrac": 0.65,
+    "alphaSpent": 0.01506,
+    "dPct": -3.8,
+    "minNMet": true,
+    "detail": "seq-stop CONTINUE — z=-0.24 inside (−2.43, +2.43) at t=0.65 (α spent 0.0151); keep=26, veto=13 settled",
+    "checkedAt": 1789995033498
+   },
+   "revocation": {
+    "pressure": false,
+    "detail": "no revocation pressure (paper-veto n=0/15, LB n/a, net $0.00)"
+   }
+  },
+  "pipeline": {
+   "unlinkedPass24h": 8,
+   "unlinkedPassStale": 20,
+   "unlinkedPassExpired": 136,
+   "pendingRealOutcomes": 3,
+   "pendingPapers": 26,
+   "lastVerdictAt": 1789995028429,
+   "lastPaperOpenAt": 1789995028499,
+   "verdicts24h": 92,
+   "papers24h": 31
+  },
+  "realLink": {
+   "ok": false,
+   "detail": "20 stale unlinked PASS verdict(s) — REAL-arm evidence leaking past the 24h retro-link window"
+  },
+  "fenceEntries24hFloor": 129
+ },
+ "rawcal": {
+  "armed": true,
+  "issued": 6,
+  "issuedTotal": 172,
+  "target": 671,
+  "heartbeatAgeH": 49,
+  "heartbeatAt": "2026-09-19T1133Z"
+ },
+ "uptimeSec": 1800,
+ "ver": "nexus-sentinel 1.1.0"
+}

@@ -12,6 +12,8 @@
 // they have their own separate IP budget.
 
 import { gateFetch } from "./fapi-gate";
+import { spotMirrorKlines, bybitKlines, bybitTickerMap } from "./flow-bridge"; // v12.3 TASK-52 klines · v12.4 TASK-53 pool mirror
+import { isTradeableTicker } from "./price-armor"; // v12.0 Task 44-① zombie-ticker rejection at the feed layer
 
 const BINANCE_HOSTS = ["https://api.binance.com", "https://data-api.binance.vision"];
 const FAPI = "https://fapi.binance.com";
@@ -28,9 +30,13 @@ export interface FeedStatus {
   latencyMs: number | null;
   consecutiveFailures: number;
   host: string | null;
+  fallbackVenue?: string | null; // DATA-REVIVAL 2026-10-21 — venue feeding when Binance planes are banned ("BYBIT" | "SPOT-MIRROR")
 }
 
-const feedStatus: FeedStatus = { source: "LIVE", lastOkAt: null, latencyMs: null, consecutiveFailures: 0, host: null };
+const feedStatus: FeedStatus = { source: "LIVE", lastOkAt: null, latencyMs: null, consecutiveFailures: 0, host: null, fallbackVenue: null };
+
+// v12.5 — throttled telemetry for the bybit mirror rung (one line / 10min max)
+let lastBybitMirrorEventAt = 0;
 
 export function getFeedStatus(): FeedStatus {
   if (feedStatus.lastOkAt && feedStatus.source !== "SIMULATED") {
@@ -39,6 +45,24 @@ export function getFeedStatus(): FeedStatus {
     if (age > 20_000 && feedStatus.source === "LIVE") return { ...feedStatus, source: "STALE" };
   }
   return { ...feedStatus };
+}
+
+/** v12.5 TASK-52-REVIVAL — mark the feed alive from a NON-Binance rung.
+ * The FEED-FRESH deploy guard measures liveness of REAL perp data, not the
+ * reachability of one venue: when both Binance REST planes are pool-banned
+ * but the Bybit linear mirror is serving genuine ticks, that is LIVE data —
+ * counting it as a failure-streak starved deployment for no honesty reason
+ * (measured 2026-10-20: 10–28 consecutive failures while Bybit served prices
+ * and deploys continued only through recovery gaps — supervisor SIMULATION
+ * warnings were a venue-liveness artifact, not a stale-data event). */
+export function markFeedOk(host: string): void {
+  feedStatus.lastOkAt = Date.now();
+  feedStatus.latencyMs = null; // cross-venue rung — latency not comparable
+  feedStatus.host = host;
+  feedStatus.consecutiveFailures = 0;
+  // DATA-REVIVAL — honest sourcing: name the venue that actually fed the feed
+  feedStatus.fallbackVenue = host.includes("bybit") ? "BYBIT" : host.includes("binance.vision") ? "SPOT-MIRROR" : feedStatus.fallbackVenue;
+  if (feedStatus.source !== "LIVE") feedStatus.source = "LIVE";
 }
 
 async function fetchJson<T>(path: string, hosts: string[] = BINANCE_HOSTS): Promise<T> {
@@ -56,6 +80,7 @@ async function fetchJson<T>(path: string, hosts: string[] = BINANCE_HOSTS): Prom
       feedStatus.latencyMs = Date.now() - t0;
       feedStatus.consecutiveFailures = 0;
       feedStatus.host = host.replace("https://", "");
+      feedStatus.fallbackVenue = null; // Binance plane healthy — no fallback active
       if (feedStatus.source !== "LIVE") feedStatus.source = "LIVE";
       return json;
     } catch (err) {
@@ -73,6 +98,17 @@ export interface Ticker24h {
   highPrice: string;
   lowPrice: string;
   quoteVolume: string;
+  // v12.0 price-armor: a ticker with bid=0 && ask=0 is a zombie/halted listing
+  // (measured live: XMRUSDT spot 118.70 with an empty book vs perp ~592)
+  bidPrice?: string;
+  askPrice?: string;
+  /** v12.0 — which plane produced this row: "fapi" (the perp market itself)
+   * or "spot" (overlay fallback). The price-armor cross-plane divergence guard
+   * applies ONLY to spot rows — fapi prints are the market.
+   * v12.5 TASK-52-REVIVAL: "bybit" = the Bybit v5 linear mirror rung — a
+   * perp-native real price from another venue, treated exactly like fapi
+   * (no cross-plane spot guard; it IS the perp market, not an overlay). */
+  plane?: "fapi" | "spot" | "bybit";
 }
 
 // v10.16 P1 FUTURES PRICE UNIFICATION — PRIMARY = Binance USDT-M futures
@@ -84,9 +120,12 @@ export interface Ticker24h {
 export async function fetchTickers(symbols: string[]): Promise<Map<string, Ticker24h>> {
   const out = new Map<string, Ticker24h>();
   const want = new Set(symbols);
+  // v12.0 price-armor — zombie filter on BOTH planes: a halted/delisted
+  // listing (empty book) must never masquerade as a live terminal price.
+  const zombie = (t: Ticker24h) => !isTradeableTicker(t);
   try {
     const all = await fetchJsonFapi<Ticker24h[]>("/fapi/v1/ticker/24hr", { priority: "critical", weight: 40 }); // full-universe ticker — heavy, gated
-    for (const t of all) if (want.has(t.symbol)) out.set(t.symbol, t);
+    for (const t of all) if (want.has(t.symbol) && !zombie(t)) out.set(t.symbol, { ...t, plane: "fapi" });
   } catch {
     /* fall through to the spot overlay below */
   }
@@ -94,9 +133,53 @@ export async function fetchTickers(symbols: string[]): Promise<Map<string, Ticke
   if (missing.length > 0) {
     try {
       const spot = await fetchJson<Ticker24h[]>("/api/v3/ticker/24hr");
-      for (const t of spot) if (want.has(t.symbol) && !out.has(t.symbol)) out.set(t.symbol, t);
+      for (const t of spot) if (want.has(t.symbol) && !out.has(t.symbol) && !zombie(t)) out.set(t.symbol, { ...t, plane: "spot" });
     } catch {
-      /* caller falls back to sim drift */
+      /* bybit mirror rung below */
+    }
+  }
+  // v12.5 TASK-52-REVIVAL — BYBIT LINEAR MIRROR rung (perp-native, zero fapi
+  // weight, separate venue/ban pool entirely). Serves the board when BOTH
+  // Binance REST planes are blackholed (fapi pool ban + spot overlay) so the
+  // domain keeps REAL prices instead of drifting to sim → the SIM-PRICE
+  // deploy ban stopped starving detection during bans (audit 2026-10-20:
+  // deploy cadence halved 91→34/day while 7/44 assets sat on sim drift).
+  const stillMissing = symbols.filter((s) => !out.has(s));
+  if (stillMissing.length > 0) {
+    try {
+      const byb = await bybitTickerMap();
+      if (byb.size > 0) {
+        let served = 0;
+        for (const s of stillMissing) {
+          const r = byb.get(s);
+          if (!r || r.lastPrice <= 0) continue;
+          const t: Ticker24h = {
+            symbol: s,
+            lastPrice: String(r.lastPrice),
+            // Bybit reports 24h change as a FRACTION (price24hPcnt 0.0096 = +0.96%)
+            priceChangePercent: r.price24hPcnt !== null ? String(r.price24hPcnt * 100) : "0",
+            highPrice: String(r.highPrice24h ?? r.lastPrice),
+            lowPrice: String(r.lowPrice24h ?? r.lastPrice),
+            quoteVolume: String(r.turnover24h ?? 0),
+            bidPrice: r.bid1Price !== null ? String(r.bid1Price) : undefined,
+            askPrice: r.ask1Price !== null ? String(r.ask1Price) : undefined,
+            plane: "bybit",
+          };
+          if (!zombie(t)) {
+            out.set(s, t);
+            served++;
+          }
+        }
+        if (served > 0) {
+          markFeedOk("bybit-v5-mirror");
+          if (Date.now() - lastBybitMirrorEventAt > 600_000) {
+            lastBybitMirrorEventAt = Date.now();
+            console.log(`[market-feed] BYBIT-MIRROR serving ${served} ticker(s) — both Binance REST planes unavailable (Task-52 revival rung)`);
+          }
+        }
+      }
+    } catch {
+      /* caller falls back to sim drift — unchanged */
     }
   }
   return out;
@@ -115,28 +198,63 @@ function mapKlines(raw: (string | number)[][]): Candle[] {
 }
 
 /**
- * v10.16 P1 FUTURES UNIFICATION — the engine-wide kline fetcher now resolves
- * against USDT-M FUTURES klines (/fapi/v1/klines) FIRST (perp indicators for
- * perp signals) and falls back to SPOT per-symbol only on error/empty
- * (spot-only listings). Response mapping identical to the legacy spot-only
- * version, so every consumer (engine getKlines, shadow sweeps, regime) sees
- * the same Candle shape.
+ * v10.16 P1 FUTURES UNIFICATION — kline fetcher with a resilience ladder.
+ * v12.3 TASK-52 SPOT-MIRROR PRIMARY (operator mandate «مهاجرت لاین REST به
+ * SPOT-MIRROR تا fapi فقط بار ticker وزن-40 را بکشد»): the engine-wide TA
+ * kline line (15m/160 per scanned symbol — the single heaviest kline lane)
+ * now resolves against the SPOT mirror FIRST (api.binance.com lives in a
+ * SEPARATE rate/ban pool — every kline call it absorbs is one the fapi gate
+ * never spends and one that can never escalate an fapi ban). TA indicators
+ * (EMA/RSI/MACD/ATR) are venue-agnostic at bps level; rung 2 is fapi (gate,
+ * critical) for 1000X-style perp-only listings; rung 3 is BYBIT linear.
+ * Response mapping identical to the legacy version — every consumer (engine
+ * getKlines, shadow sweeps, regime) sees the same Candle shape.
  */
 export async function fetchKlines(symbol: string, interval: string, limit: number): Promise<Candle[]> {
   try {
-    const perp = await fetchJsonFapi<(string | number)[][]>(`/fapi/v1/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`, { priority: "critical" });
+    const spot = await fetchJson<(string | number)[][]>(`/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`);
+    if (spot.length) return mapKlines(spot);
+  } catch {
+    /* fapi rung below */
+  }
+  try {
+    const perp = await gateFetch<(string | number)[][]>(`/fapi/v1/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`, { priority: "critical" });
     if (perp.length) return mapKlines(perp);
   } catch {
-    /* spot fallback below */
+    /* bybit rung below */
   }
-  const raw = await fetchJson<(string | number)[][]>(`/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`);
-  return mapKlines(raw);
+  const byb = await bybitKlines(symbol, interval, limit).catch(() => null);
+  if (byb && byb.length > 0) {
+    return byb.map((k) => ({ openTime: k.openTime, open: k.open, high: k.high, low: k.low, close: k.close, volume: k.volume }));
+  }
+  throw new Error(`fetchKlines: all rungs failed for ${symbol} ${interval}`);
 }
 
-/** Futures klines (USDT-M) — same payload shape (gated, critical). */
+/**
+ * Futures-native klines (USDT-M) — same payload shape (gated, critical).
+ * v12.3 TASK-52: fapi stays RUNG 1 here (backtest/volOnset/volCause are
+ * futures-calibrated analytics — spot-first would silently re-baseline
+ * them), but the ladder degrades to SPOT-MIRROR → BYBIT during fapi
+ * starvation instead of hard-failing.
+ */
 export async function fetchFuturesKlines(symbol: string, interval: string, limit: number): Promise<Candle[]> {
-  const raw = await fetchJsonFapi<(string | number)[][]>(`/fapi/v1/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`, { priority: "critical" });
-  return mapKlines(raw);
+  try {
+    const raw = await gateFetch<(string | number)[][]>(`/fapi/v1/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`, { priority: "critical" });
+    if (raw.length) return mapKlines(raw);
+  } catch {
+    /* spot rung below */
+  }
+  try {
+    const spot = await fetchJson<(string | number)[][]>(`/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`);
+    if (spot.length) return mapKlines(spot);
+  } catch {
+    /* bybit rung below */
+  }
+  const byb = await bybitKlines(symbol, interval, limit).catch(() => null);
+  if (byb && byb.length > 0) {
+    return byb.map((k) => ({ openTime: k.openTime, open: k.open, high: k.high, low: k.low, close: k.close, volume: k.volume }));
+  }
+  throw new Error(`fetchFuturesKlines: all rungs failed for ${symbol} ${interval}`);
 }
 
 // ── futures-only universe (R15) ───────────────────────────────
@@ -171,17 +289,64 @@ export async function fetchFuturesSymbols(): Promise<Set<string>> {
   return new Set(info.symbols.filter((s) => s.contractType === "PERPETUAL" && s.status === "TRADING" && s.quoteAsset === "USDT").map((s) => s.symbol));
 }
 
-// ── futures pool stats (v5.1 — scan-domain coverage) ─────────
+// ── futures pool stats (v5.2 — scan-domain coverage, TASK-53 mirror rung) ──
 export interface FuturesPoolStats {
   totalUsdtPerps: number; // every USDT-M perpetual trading right now
   liquidPool: number; // those with >$1M 24h quote volume (the scannable pool)
   measuredAt: string;
+  /** honest venue label — which market counted this pool (Task 53 honesty laws) */
+  source: "BINANCE-FAPI" | "BYBIT-MIRROR" | "PERSISTED";
 }
 
 let poolCache: { at: number; value: FuturesPoolStats } | null = null;
 const POOL_TTL = 15 * 60_000;
 
-/** How big is the whole futures market? Cached 15min — powers SCAN DOMAIN coverage. */
+// v5.2 TASK-53: persist the last good board so an app restart during an fapi
+// ban doesn't zero the POOL readout (23:14Z boot with the ban live did exactly
+// that — lastPoolSize seeded from nothing while the ban starved both rungs).
+const POOL_FILE = ".data/pool-stats.json";
+const POOL_PERSIST_MAX_AGE = 24 * 60 * 60_000;
+
+function persistPool(value: FuturesPoolStats): void {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const fs = require("fs") as typeof import("fs");
+    fs.writeFileSync(POOL_FILE, JSON.stringify(value), "utf8");
+  } catch {
+    /* best-effort telemetry — never a gate */
+  }
+}
+
+function persistedPool(): FuturesPoolStats | null {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const fs = require("fs") as typeof import("fs");
+    const raw = JSON.parse(fs.readFileSync(POOL_FILE, "utf8")) as FuturesPoolStats;
+    if (!raw || typeof raw.totalUsdtPerps !== "number") return null;
+    if (Date.now() - new Date(raw.measuredAt).getTime() > POOL_PERSIST_MAX_AGE) return null;
+    return { ...raw, source: "PERSISTED" };
+  } catch {
+    return null;
+  }
+}
+
+/** BYBIT-MIRROR rung — v5 linear tickers (ONE weight-cheap call, zero fapi weight). */
+async function bybitPoolStats(): Promise<FuturesPoolStats | null> {
+  const map = await bybitTickerMap().catch(() => null);
+  if (!map || map.size === 0) return null;
+  const usdtPerps = [...map.entries()].filter(([sym]) => sym.endsWith("USDT") && !LEVERAGED.test(sym));
+  if (usdtPerps.length === 0) return null;
+  return {
+    totalUsdtPerps: usdtPerps.length,
+    liquidPool: usdtPerps.filter(([sym, r]) => (r.turnover24h ?? 0) > 1_000_000 && !isStablePrice(r.lastPrice) && !STABLE_BASES.has(sym.replace("USDT", ""))).length,
+    measuredAt: new Date().toISOString(),
+    source: "BYBIT-MIRROR",
+  };
+}
+
+/** How big is the whole futures market? Cached 15min — powers SCAN DOMAIN coverage.
+ *  v5.2 LADDER: fapi (weight-40 board) → BYBIT-MIRROR (v5 linear tickers) →
+ *  PERSISTED (≤24h old) → zeros. The ladder keeps POOL alive through fapi bans. */
 export async function fetchFuturesPoolStats(): Promise<FuturesPoolStats> {
   if (poolCache && Date.now() - poolCache.at < POOL_TTL) return poolCache.value;
   try {
@@ -191,11 +356,26 @@ export async function fetchFuturesPoolStats(): Promise<FuturesPoolStats> {
       totalUsdtPerps: usdtPerps.length,
       liquidPool: usdtPerps.filter((t) => Number(t.quoteVolume) > 1_000_000 && !isStablePrice(Number(t.lastPrice)) && !STABLE_BASES.has(t.symbol.replace("USDT", ""))).length,
       measuredAt: new Date().toISOString(),
+      source: "BINANCE-FAPI",
     };
     poolCache = { at: Date.now(), value };
+    persistPool(value);
     return value;
   } catch {
-    return poolCache?.value ?? { totalUsdtPerps: 0, liquidPool: 0, measuredAt: new Date().toISOString() };
+    // fapi banned/unreachable — mirror rung (Task 53): count the pool off Bybit
+    const mirror = await bybitPoolStats().catch(() => null);
+    if (mirror) {
+      console.log(`[pool-stats] fapi unavailable — BYBIT-MIRROR serving pool board ${mirror.totalUsdtPerps}/${mirror.liquidPool} (Task-53)`); // honest venue telemetry
+      poolCache = { at: Date.now(), value: mirror };
+      persistPool(mirror);
+      return mirror;
+    }
+    const saved = persistedPool();
+    if (saved) {
+      poolCache = { at: Date.now(), value: saved };
+      return saved;
+    }
+    return poolCache?.value ?? { totalUsdtPerps: 0, liquidPool: 0, measuredAt: new Date().toISOString(), source: "BINANCE-FAPI" };
   }
 }
 
@@ -217,6 +397,7 @@ async function fetchJsonFapi<T>(path: string, opts?: { priority?: "critical" | "
       feedStatus.latencyMs = Date.now() - t0;
       feedStatus.consecutiveFailures = 0;
       feedStatus.host = host.replace("https://", "");
+      feedStatus.fallbackVenue = null; // Binance plane healthy — no fallback active
       if (feedStatus.source !== "LIVE") feedStatus.source = "LIVE";
       return json;
     }

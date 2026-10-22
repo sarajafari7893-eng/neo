@@ -1,0 +1,214 @@
+{
+ "schemaVersion": 1,
+ "kind": "deep",
+ "at": "2026-09-25T12:05:12.097Z",
+ "tehran": "25/09/2026, 15:35:12",
+ "verdict": "RED",
+ "anomalies": [
+  {
+   "sev": "crit",
+   "area": "bridge",
+   "msg": "service down / probe failed"
+  },
+  {
+   "sev": "crit",
+   "area": "liq",
+   "msg": "service down / probe failed"
+  },
+  {
+   "sev": "crit",
+   "area": "trade",
+   "msg": "service down / probe failed"
+  },
+  {
+   "sev": "warn",
+   "area": "watchdog",
+   "msg": "layer-1 non-ok services: {\"app\":\"ok\",\"liq\":\"degraded\",\"ws\":\"ok\",\"bridge\":\"degraded\",\"trade\":\"degraded\",\"sentinel\":\"ok\"}"
+  }
+ ],
+ "services": [
+  {
+   "key": "app",
+   "label": "app :3000",
+   "up": true,
+   "status": 200,
+   "ms": 346
+  },
+  {
+   "key": "ws",
+   "label": "price-ws :3003",
+   "up": true,
+   "status": 400,
+   "ms": 59
+  },
+  {
+   "key": "bridge",
+   "label": "telegram-bridge :3005",
+   "up": false,
+   "status": null,
+   "ms": 58
+  },
+  {
+   "key": "liq",
+   "label": "liq :3010",
+   "up": false,
+   "status": null,
+   "ms": 58
+  },
+  {
+   "key": "trade",
+   "label": "trade :3011",
+   "up": false,
+   "status": null,
+   "ms": 58
+  },
+  {
+   "key": "watchdog",
+   "label": "p0-watchdog :3020",
+   "up": true,
+   "status": 200,
+   "ms": 65
+  }
+ ],
+ "mem": {
+  "availableMb": 1885
+ },
+ "disk": {
+  "rootFreeGb": 7.26,
+  "tmpFreeGb": 7.26
+ },
+ "db": {
+  "ok": true,
+  "signals": 716,
+  "events": 55028,
+  "prices": 52891,
+  "assets": 59,
+  "pumps": 703,
+  "events1h": 27,
+  "lastEventAgeMs": 351,
+  "stuckActive": 0,
+  "orphanEvents": 0,
+  "stuckPumpTracks": 0,
+  "dbBytes": 25645056,
+  "walBytes": 1306072
+ },
+ "backup": {
+  "ok": true,
+  "dir": "/tmp/my-project/backups",
+  "encCount": 12,
+  "zipCount": 12,
+  "newestEncMs": 1790327291316.2803,
+  "newestAnyMs": 1790327291316.2803,
+  "encAgeMs": 10620089.719726562
+ },
+ "watchdog": {
+  "ok": true,
+  "ver": "p0-watchdog 1.2.0",
+  "modes": {
+   "app": "ok",
+   "liq": "degraded",
+   "ws": "ok",
+   "bridge": "degraded",
+   "trade": "degraded",
+   "sentinel": "ok"
+  },
+  "nonOk": 3,
+  "memLevel": "ok",
+  "memAvailableMb": 1886,
+  "paused": false
+ },
+ "log": {
+  "windowLines": 31,
+  "errors": 2,
+  "http500": 0,
+  "oom": 0,
+  "enospc": 0,
+  "hydration": 0,
+  "unhandled": 0,
+  "settlementStalled": 0
+ },
+ "shadow": {
+  "ok": true,
+  "source": "live-api",
+  "mode": "shadow",
+  "generatedAt": "2026-09-25T12:05:11.796Z",
+  "stats": {
+   "total": 600,
+   "passSide": 275,
+   "rejectSide": 325,
+   "vetoCount": 258,
+   "tradeCount": 342,
+   "modelSharePct": 73.3,
+   "modelGroundedPct": 100,
+   "avgConfidence": 79.5,
+   "gateAgreement": 125,
+   "paperOpen": 2,
+   "paperSettled": 58,
+   "recent24h": {
+    "n": 0,
+    "modelSharePct": null,
+    "lastModelAgeH": 37.8,
+    "lastVerdictAgeH": 25.4
+   }
+  },
+  "arms": [
+   {
+    "id": "real-keep",
+    "n": 20,
+    "target": 30,
+    "pct": 67,
+    "starved": false,
+    "reachable": true,
+    "fed": 142,
+    "lastFedAgeH": null
+   },
+   {
+    "id": "real-veto",
+    "n": 12,
+    "target": 30,
+    "pct": 40,
+    "starved": false,
+    "reachable": true,
+    "fed": 133,
+    "lastFedAgeH": null
+   },
+   {
+    "id": "paper-keep",
+    "n": 30,
+    "target": 30,
+    "pct": 100,
+    "starved": false,
+    "reachable": true,
+    "fed": 60,
+    "lastFedAgeH": null
+   },
+   {
+    "id": "paper-veto",
+    "n": 0,
+    "target": 30,
+    "pct": 0,
+    "starved": false,
+    "reachable": true,
+    "fed": 0,
+    "lastFedAgeH": null
+   }
+  ],
+  "fillPct": 52,
+  "fillPctReach": 52,
+  "nSum": 62,
+  "tSum": 120,
+  "nSumReach": 62,
+  "tSumReach": 120,
+  "fenceEntries24hFloor": 0
+ },
+ "rawcal": {
+  "armed": false,
+  "issued": 35,
+  "issuedTotal": 201,
+  "target": 672,
+  "heartbeatAgeH": 25,
+  "heartbeatAt": "2026-09-24T1042Z IDLE disarmed by policy (target 672)"
+ },
+ "uptimeSec": 5,
+ "ver": "nexus-sentinel 1.1.1"
+}

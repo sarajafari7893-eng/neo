@@ -4,7 +4,9 @@
 //   added in BOTH places — (1) the SvcKey type + SVCS map AND (2) the state
 //   initializer below (`state.cron = freshSvc()`) — missing (2) throws
 //   TypeError on the first tick and kills the watchdog. Heal command mirrors
-//   the service's battle-tested start (`bun --hot index.ts` from its own dir).
+//   the service's battle-tested start (`bun index.ts` from its own dir — plain,
+//   no --hot: LEASH-0929b proved hot-reload turns mid-life inode replacement
+//   (git reset under a live process) into zombie-module timers).
 // v1.1.0 (task 4-b · audit P0-1): `x-nexus-key` header (matching
 //   NEXUS_CONTROL_KEY from env/.env) is now REQUIRED on POST /pause and
 //   POST /probe-now (trigger endpoints). GET /health + GET /status stay open
@@ -34,8 +36,22 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import { Database } from "bun:sqlite";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import net from "node:net";
 
-const VER = "p0-watchdog 1.4.0";
+// v1.4.7 (2026-10-15, MEM-GUARD v2 mandate): mem-guard :3019 guarded — the dual-layer
+// guardian (memory preemptive restart + filesystem freshness gate) born from the
+// 2026-10-15 incident (kernel OOM 2.87GB + stale platform restore + frozen tick loop).
+// TWO-PLACE RULE respected: type+map here AND state initializer below.
+// Also: /status now re-reads the pause file (fresh paused display — the stale
+// cached pausedUntil display masked real pauses during the 2026-10-15 morning).
+const VER = "p0-watchdog 1.4.9";
+// v1.4.4 (SENTINEL-RED-0929, live-fire 21:52-21:57Z): probe TIMEOUT ≠ down.
+// Dev-mode Turbopack cold-compile ran 15-29s/route under memory pressure while
+// this probe cap is 4s — a HEALTHY-but-compiling app read as "down", heals
+// fired, and every restart re-froze all routes (heal loop, breaker risk, false
+// RED page to the operator). Doctrine: TCP-refused = truly down (fail fast);
+// TCP-open-but-HTTP-slow = "warming" — absorbed for up to WARM_STREAK_GRACE
+// consecutive ticks (~90s) before counting a single hard fail.
 const ROOT = "/home/z/my-project";
 const DIR = `${ROOT}/.data/p0-watchdog`;
 const LOCK = `${DIR}/lock.json`;
@@ -50,6 +66,8 @@ const BOOT_DELAY_MS = 3_000;
 const PROBE_TIMEOUT_MS = 4_000;
 const FAILS_TO_ACT = 2;
 const HEAL_GRACE_S = 75; // boot window granted after a heal before re-judging
+const WARM_TCP_TIMEOUT_MS = 1_200; // v1.4.4: quick TCP connect cap for liveness distinction
+const WARM_STREAK_GRACE = 6; // v1.4.4: consecutive timeout ticks (~90s) with port open before a hard fail
 const COOLDOWN_BASE_S = 120;
 const COOLDOWN_MAX_S = 900;
 const ESCALATE_AFTER = 5; // consecutive heal attempts while still down
@@ -60,7 +78,7 @@ const MEM_CRIT_MB = 250;
 // The 2026-09-20 restore resurrected bridge :3005 / trade :3011 / sentinel :3030
 // WITHOUT guardians — trade ran down for hours unnoticed. All six are now
 // probe+heal covered; heal commands mirror each service's battle-tested start.
-type SvcKey = "app" | "liq" | "ws" | "bridge" | "trade" | "sentinel" | "armor" | "cron";
+type SvcKey = "app" | "liq" | "ws" | "bridge" | "trade" | "sentinel" | "armor" | "cron" | "stable" | "kw" | "mem" | "warm" | "tbt";
 type Mode = "init" | "ok" | "degraded" | "healing" | "escalated";
 
 interface SvcCfg {
@@ -92,14 +110,14 @@ const SVCS: Record<SvcKey, SvcCfg> = {
     url: "http://127.0.0.1:3003/",
     expect: (s) => s < 500, // 400 = expected socket.io root response
     expectNote: "<500 (400=socket.io)",
-    healCmd: `cd ${ROOT}/mini-services/price-ws && nohup bun --hot index.ts >> ${ROOT}/logs/price-ws.log 2>&1 &`,
+    healCmd: `cd ${ROOT}/mini-services/price-ws && nohup bun index.ts >> ${ROOT}/logs/price-ws.log 2>&1 &`,
   },
   bridge: {
     label: "bridge :3005",
     url: "http://127.0.0.1:3005/health",
     expect: (s) => s === 200,
     expectNote: "200",
-    healCmd: `cd ${ROOT}/mini-services/telegram-bridge && nohup bun --hot index.ts >> ${ROOT}/logs/telegram-bridge.log 2>&1 &`,
+    healCmd: `cd ${ROOT}/mini-services/telegram-bridge && nohup bun index.ts >> ${ROOT}/logs/telegram-bridge.log 2>&1 &`,
   },
   trade: {
     label: "trade :3011",
@@ -113,7 +131,7 @@ const SVCS: Record<SvcKey, SvcCfg> = {
     url: "http://127.0.0.1:3030/health",
     expect: (s) => s === 200,
     expectNote: "200",
-    healCmd: `cd ${ROOT}/mini-services/sentinel-service && nohup bun --hot index.ts >> ${ROOT}/logs/sentinel-service.log 2>&1 &`,
+    healCmd: `cd ${ROOT}/mini-services/sentinel-service && nohup bun index.ts >> ${ROOT}/logs/sentinel-service.log 2>&1 &`,
   },
   // v2.0.1 (2026-09-26, Task 30): push-armor guarded after rollback #4 — the ONLY
   // anti-restore armor. Probe /health; heal spawns armor v2.0 from its own dir.
@@ -122,7 +140,7 @@ const SVCS: Record<SvcKey, SvcCfg> = {
     url: "http://127.0.0.1:3016/health",
     expect: (s) => s === 200,
     expectNote: "200",
-    healCmd: `cd ${ROOT}/mini-services/push-armor && nohup bun --hot index.ts >> ${ROOT}/logs/push-armor.log 2>&1 &`,
+    healCmd: `cd ${ROOT}/mini-services/push-armor && nohup bun index.ts >> ${ROOT}/logs/push-armor.log 2>&1 &`,
   },
   // v1.4.0 (2026-09-26, Task 34-c): supervisor-cron :3015 — the senior-supervisor
   // cron (sweep 10m / progress 6h / LLM review 12h) rebuilt after rollback #4.
@@ -132,7 +150,62 @@ const SVCS: Record<SvcKey, SvcCfg> = {
     url: "http://127.0.0.1:3015/health",
     expect: (s) => s === 200,
     expectNote: "200",
-    healCmd: `cd ${ROOT}/mini-services/supervisor-cron && nohup bun --hot index.ts >> ${ROOT}/logs/supervisor-cron.log 2>&1 &`,
+    healCmd: `cd ${ROOT}/mini-services/supervisor-cron && nohup bun index.ts >> ${ROOT}/logs/supervisor-cron.log 2>&1 &`,
+  },
+  // v1.4.5 (2026-09-30, STABLEFLOW build): stable-feed :3017 — family-E
+  // substrate (DefiLlama free, no key, no AI). Probe /health; heal spawns
+  // plain bun index.ts from its own dir (no --hot — LEASH-0929b doctrine).
+  stable: {
+    label: "stable-feed :3017",
+    url: "http://127.0.0.1:3017/health",
+    expect: (s) => s === 200,
+    expectNote: "200",
+    healCmd: `cd ${ROOT}/mini-services/stable-feed && nohup bun index.ts >> ${ROOT}/logs/stable-feed.log 2>&1 &`,
+  },
+  // v1.4.6 (2026-09-30, KEEP-WARM-INTERNAL): keep-warm :3018 — the in-environment
+  // heartbeat cron (operator order: «از همین محیط»). Observer-only: pings
+  // healthz+pulse+watchdog every 5min, one line to logs/keep-warm.log. It must
+  // never silently die → guarded here like every other service. Plain bun,
+  // no --hot (LEASH doctrine).
+  kw: {
+    label: "keep-warm :3018",
+    url: "http://127.0.0.1:3018/health",
+    expect: (s) => s === 200,
+    expectNote: "200",
+    healCmd: `cd ${ROOT}/mini-services/keep-warm && nohup bun index.ts >> ${ROOT}/logs/keep-warm-service.log 2>&1 &`,
+  },
+  // v1.4.7 (2026-10-15, MEM-GUARD v2): mem-guard :3019 — dual-layer guardian.
+  // --hot so threshold/config tweaks land without a manual restart; the service
+  // holds its own pid-lock so double-spawn is impossible.
+  mem: {
+    label: "mem-guard :3019",
+    url: "http://127.0.0.1:3019/health",
+    expect: (s) => s === 200,
+    expectNote: "200",
+    healCmd: `cd ${ROOT}/mini-services/mem-guard && nohup bun index.ts >> ${ROOT}/logs/mem-guard.log 2>&1 &`,
+  },
+  // v1.4.8 (2026-10-18, Task-45 Q4): warm-loop :3012 — the HEADLESS PULSE
+  // DRIVER (operator 2026-09-23: «داشبورد را بدون مرورگر گرم نگه دار»). Found
+  // ORPHANED since the 2026-10-16 platform recycle — with no browser tab open
+  // the engine tick ran at 1/15 cadence (watchdog.sh 60s probe was the only
+  // pulser). It holds its own pid-lock singleton, so double-spawn is impossible.
+  warm: {
+    label: "warm-loop :3012",
+    url: "http://127.0.0.1:3012/health",
+    expect: (s) => s === 200,
+    expectNote: "200",
+    healCmd: `cd ${ROOT}/mini-services/warm-loop && nohup bun index.ts >> ${ROOT}/logs/warm-loop.log 2>&1 &`,
+  },
+  // v1.4.9 (2026-10-20, Task-52 TOOBIT-BRIDGE): toobit-bridge :3021 — the
+  // signal-card EXECUTION mirror (PAPER/LIVE, reconciliation, latency
+  // telemetry). Read-only on the ledger (bun:sqlite readonly); orders go to
+  // api.toobit.com. Plain bun, no --hot (LEASH doctrine). Two-place rule kept.
+  tbt: {
+    label: "toobit-bridge :3021",
+    url: "http://127.0.0.1:3021/health",
+    expect: (s) => s === 200,
+    expectNote: "200",
+    healCmd: `cd ${ROOT}/mini-services/toobit-bridge && nohup bun index.ts >> ${ROOT}/logs/toobit-bridge.log 2>&1 &`,
   },
 };
 
@@ -150,6 +223,7 @@ interface SvcState {
   nextHealAllowedAt: number | null;
   breakerAnnounced?: boolean; // v10.16: one-shot log for open-breaker state
   recoveries: number;
+  warmStreak?: number; // v1.4.4: consecutive timeout ticks with TCP open (warming) — runtime only
 }
 
 const BOOT = Date.now();
@@ -158,6 +232,11 @@ const state: Record<SvcKey, SvcState> = {
   bridge: freshSvc(), trade: freshSvc(), sentinel: freshSvc(),
   armor: freshSvc(),
   cron: freshSvc(), // v1.4.0 two-place rule (Task 30-b lesson) — DO NOT remove
+  stable: freshSvc(), // v1.4.5 two-place rule — DO NOT remove
+  kw: freshSvc(), // v1.4.6 two-place rule (KEEP-WARM-INTERNAL) — DO NOT remove
+  mem: freshSvc(), // v1.4.7 two-place rule (MEM-GUARD v2) — DO NOT remove
+  warm: freshSvc(), // v1.4.8 two-place rule (Task-45 Q4 warm-loop orphan) — DO NOT remove
+  tbt: freshSvc(), // v1.4.9 two-place rule (TOOBIT-BRIDGE) — DO NOT remove
 };
 function freshSvc(): SvcState {
   return { mode: "init", fails: 0, heals: 0, lastProbeAt: null, lastOkAt: null, lastStatus: null, lastLatencyMs: null, lastDownAt: null, lastHealAt: null, healingUntil: null, nextHealAllowedAt: null, recoveries: 0 };
@@ -306,6 +385,18 @@ async function tgSend(kind: "crit" | "recov", text: string) {
 }
 
 // ── probe + heal ─────────────────────────────────────────────────────────────
+const svcPort = (cfg: SvcCfg): number => Number(cfg.url.match(/127\.0\.0\.1:(\d+)/)?.[1] ?? 0);
+// v1.4.4: TCP liveness probe — distinguishes "dead" from "alive but slow".
+function tcpAlive(port: number): Promise<boolean> {
+  if (!port) return Promise.resolve(false);
+  return new Promise((res) => {
+    const sock = net.connect({ host: "127.0.0.1", port });
+    const done = (ok: boolean) => { try { sock.destroy(); } catch { /* never */ } res(ok); };
+    const timer = setTimeout(() => done(false), WARM_TCP_TIMEOUT_MS);
+    sock.once("connect", () => { clearTimeout(timer); done(true); });
+    sock.once("error", () => { clearTimeout(timer); done(false); });
+  });
+}
 async function probe(cfg: SvcCfg): Promise<{ up: boolean; status: number | null; ms: number }> {
   const t0 = nowMs();
   try {
@@ -330,11 +421,28 @@ const BREAKER_COOLDOWN_MS = 30 * 60 * 1000;
 const CROSS_LAYER_GUARD_MS = 300 * 1000;
 const breaker: Record<string, { times: number[]; openUntil: number }> = {};
 const healStampPath = (key: string) => `${DIR}/heal-${key}`;
-function readHealStamp(key: string): number {
-  try { return (parseInt(readFileSync(healStampPath(key), "utf8").trim(), 10) || 0) * 1000; } catch { return 0; }
+// v1.4.3 (RESET-0929 live-fire): a bare timestamp stamp cannot tell WHO wrote
+// it — after a watchdog restart the new process reads its dead predecessor's
+// stamp (or layer-2's) and self-defers up to 300s while the app stays down
+// (21:09-21:21Z incident chain). Stamp now carries the writer pid; a stamp
+// from a DEAD writer (or ourselves) never justifies deferring.
+function readHealStamp(key: string): { atMs: number; pid: number } | null {
+  try {
+    const raw = readFileSync(healStampPath(key), "utf8").trim();
+    const m = raw.match(/^(\d+)(?::(\d+))?$/);
+    if (!m) return null;
+    return { atMs: (parseInt(m[1]!, 10) || 0) * 1000, pid: parseInt(m[2] ?? "0", 10) || 0 };
+  } catch {
+    return null;
+  }
 }
 function writeHealStamp(key: string) {
-  try { writeFileSync(healStampPath(key), String(Math.floor(nowMs() / 1000))); } catch { /* best-effort */ }
+  try { writeFileSync(healStampPath(key), `${Math.floor(nowMs() / 1000)}:${process.pid}`); } catch { /* best-effort */ }
+}
+function pidAlive(pid: number): boolean {
+  if (!pid || pid === process.pid) return false;
+  try { process.kill(pid, 0); return true; } catch { return false;
+  }
 }
 function heal(key: SvcKey, cfg: SvcCfg, st: SvcState) {
   const br = (breaker[key] ??= { times: [], openUntil: 0 });
@@ -365,16 +473,32 @@ function heal(key: SvcKey, cfg: SvcCfg, st: SvcState) {
   writeHealStamp(key); // v10.16: announce to layer-2 (300s cross-layer guard)
 }
 
+// v1.4.1 (2026-09-27, Task 41, operator report «sentinel warnings + cron down»):
+// the tick loop froze silently at 13:57:50 — one throw inside tick() (outside
+// probe's try/catch, e.g. a sync fs op mid-rewrite) rejected the `void tick()`
+// promise; bun dedupes identical unhandled rejections so NOTHING appeared in
+// the log afterward, the interval kept firing into a dead tick and the guardian
+// was blind for ~50min (cron stayed down, nobody healed). Three defenses:
+//   (a) every service body is try/catch-isolated — one bad service can't kill
+//       the loop for the other seven;
+//   (b) the interval calls tickSafely() — any rejection is logged as
+//       tick-crash instead of vanishing into dedupe silence;
+//   (c) an independent 60s heartbeat verifies lastTickDoneAt freshness and
+//       re-arms a frozen tick (self-healing guardian).
+// v1.4.1: init to boot time — a falsy 0 would keep the heartbeat dormant until
+// the FIRST successful tick, exactly when a frozen-first-tick needs it most.
+let lastTickDoneAt = BOOT;
 async function tick() {
   ticks += 1;
   const paused = readPause();
   for (const key of Object.keys(SVCS) as SvcKey[]) {
     const cfg = SVCS[key], st = state[key];
+    try {
     const r = await probe(cfg);
     st.lastProbeAt = nowMs(); st.lastStatus = r.status; st.lastLatencyMs = r.ms;
 
     if (r.up) {
-      st.lastOkAt = nowMs();
+      st.lastOkAt = nowMs(); st.warmStreak = 0;
       if (st.mode !== "ok") {
         const wasEsc = st.mode === "escalated";
         log("info", "recovered", { via: st.heals > 0 ? `heal#${st.heals}` : "self", downtimeFrom: st.lastDownAt ? tehran(st.lastDownAt) : null, http: r.status }, key);
@@ -389,6 +513,24 @@ async function tick() {
     // down path
     if (st.mode === "ok" || st.mode === "init") { st.lastDownAt = nowMs(); st.mode = "degraded"; log("warn", "down", { http: r.status, paused }, key); }
     if (paused) { st.fails = 0; st.mode = st.mode === "escalated" ? "escalated" : "degraded"; continue; } // operator-driven window: never race it
+    // v1.4.4: timeout with the port still ACCEPTING connections = warming, not
+    // down. Absorb up to WARM_STREAK_GRACE consecutive ticks before one hard
+    // fail — a compile storm self-resolves; a true hang still heals (~90s later).
+    if (r.status === null) {
+      const alive = await tcpAlive(svcPort(cfg));
+      if (alive) {
+        st.warmStreak = (st.warmStreak ?? 0) + 1;
+        if (st.warmStreak === 1) log("info", "warming-not-down", { note: "TCP open, HTTP slow — compile-storm tolerated" }, key);
+        if (st.warmStreak <= WARM_STREAK_GRACE) {
+          // v1.4.4 fix: grace-expiry must stay reachable while warming, else a
+          // "healing" mode with a slow app is stuck forever (seen 22:02-22:08Z).
+          if (st.mode === "healing" && st.healingUntil && nowMs() > st.healingUntil) {
+            st.mode = "degraded"; log("warn", "heal-grace-expired", { warming: true }, key);
+          }
+          continue;
+        }
+      } else st.warmStreak = 0;
+    } else st.warmStreak = 0;
     st.fails += 1;
 
     if (st.mode === "healing") {
@@ -405,23 +547,36 @@ async function tick() {
           st.breakerAnnounced = true;
         }
       } else if (nowMs() >= gate) {
-        const otherLayer = readHealStamp(key);
-        if (otherLayer && nowMs() - otherLayer < CROSS_LAYER_GUARD_MS) {
-          log("info", "heal-deferred-cross-layer", { by: "watchdog.sh", agoS: Math.floor((nowMs() - otherLayer) / 1000) }, key);
+        const other = readHealStamp(key);
+        // v1.4.3: defer ONLY to a fresh stamp written by ANOTHER LIVING layer
+        // (watchdog.sh). Our own stamps and dead writers' stamps never block
+        // a heal — the 21:09-21:21Z mutual-defer deadlock is closed for good.
+        const deferValid = !!other && other.pid !== process.pid && pidAlive(other.pid) && nowMs() - other.atMs < CROSS_LAYER_GUARD_MS;
+        if (deferValid) {
+          log("info", "heal-deferred-cross-layer", { by: "watchdog.sh", agoS: Math.floor((nowMs() - other!.atMs) / 1000) }, key);
         } else {
           heal(key, cfg, st);
         }
       }
     }
+    } catch (e) {
+      // v1.4.1: one service must never freeze the other seven (see header note)
+      log("crit", "svc-loop-error", { err: String(e).slice(0, 160) }, key);
+    }
   }
   memCheck();
   persistState();
+  lastTickDoneAt = nowMs();
 }
 
 // ── control API :3020 ────────────────────────────────────────────────────────
 function summary() {
   const s = Object.fromEntries((Object.keys(SVCS) as SvcKey[]).map((k) => [k, state[k].mode])) as Record<SvcKey, Mode>;
-  return { ok: true, ver: VER, pid: process.pid, uptimeSec: Math.floor((nowMs() - BOOT) / 1000), tehran: tehran(), services: s, paused: pausedUntil > nowMs() / 1000, pausedUntil: pausedUntil || null, mem, ticks };
+  // v1.4.7: re-read the pause file so `paused` reflects reality immediately —
+  // during the 2026-10-15 morning the cached pausedUntil served a stale value
+  // and masked a live pause (mem-guard coordination depends on this field).
+  readPause();
+  return { ok: true, ver: VER, pid: process.pid, uptimeSec: Math.floor((nowMs() - BOOT) / 1000), tehran: tehran(), services: s, paused: pausedUntil > nowMs() / 1000, pausedUntil: pausedUntil > nowMs() / 1000 ? pausedUntil : null, mem, ticks };
 }
 function recentActions(n: number) {
   try {
@@ -430,10 +585,12 @@ function recentActions(n: number) {
 }
 
 // ── control gate (task 4-b · audit P0-1) ─────────────────────────────────────
-// NEXUS_CONTROL_KEY: process.env first, then .env (same pattern as the token
-// above). Fail-closed when unset. Never echo/log the key value.
-const CONTROL_KEY = process.env.NEXUS_CONTROL_KEY ?? envFromDotenv("NEXUS_CONTROL_KEY") ?? "";
+// NEXUS_CONTROL_KEY: Task 36 — .env FILE first (envFromDotenv re-reads per
+// call), process.env fallback. The boot env is frozen and heal-spawn chains
+// inherit it stale — file-first keeps the gate on the live source of truth.
+// Fail-closed when unset. Never echo/log the key value.
 function controlOk(req: Request): boolean {
+  const CONTROL_KEY = envFromDotenv("NEXUS_CONTROL_KEY") ?? process.env.NEXUS_CONTROL_KEY ?? "";
   if (!CONTROL_KEY) return false; // fail-closed
   const provided = req.headers.get("x-nexus-key") ?? "";
   if (provided.length !== CONTROL_KEY.length) return false;
@@ -448,7 +605,7 @@ async function handle(req: Request): Promise<Response> {
   const url = new URL(req.url);
   if (url.pathname === "/health") return Response.json(summary());
   if (url.pathname === "/status") {
-    return Response.json({ ...summary(), config: { tickMs: TICK_MS, failsToAct: FAILS_TO_ACT, cooldownBaseS: COOLDOWN_BASE_S, cooldownMaxS: COOLDOWN_MAX_S, escalateAfter: ESCALATE_AFTER, healGraceS: HEAL_GRACE_S, memWarnMb: MEM_WARN_MB, memCritMb: MEM_CRIT_MB }, servicesDetail: state, telegram: { armed: !!(getChat() && (process.env.TELEGRAM_BOT_TOKEN ?? envFromDotenv("TELEGRAM_BOT_TOKEN"))) }, recentActions: recentActions(40) });
+    return Response.json({ ...summary(), config: { tickMs: TICK_MS, failsToAct: FAILS_TO_ACT, cooldownBaseS: COOLDOWN_BASE_S, cooldownMaxS: COOLDOWN_MAX_S, escalateAfter: ESCALATE_AFTER, healGraceS: HEAL_GRACE_S, warmTcpTimeoutMs: WARM_TCP_TIMEOUT_MS, warmStreakGrace: WARM_STREAK_GRACE, memWarnMb: MEM_WARN_MB, memCritMb: MEM_CRIT_MB }, servicesDetail: state, telegram: { armed: !!(getChat() && (process.env.TELEGRAM_BOT_TOKEN ?? envFromDotenv("TELEGRAM_BOT_TOKEN"))) }, recentActions: recentActions(40) });
   }
   if (url.pathname === "/probe-now" && req.method === "POST") {
     if (!controlOk(req)) return CONTROL_401(); // trigger endpoint (4-b)
@@ -477,7 +634,7 @@ try {
   process.exit(0);
 }
 log("info", "boot", { ver: VER, pid: process.pid, port: PORT });
-console.log(`[${tehran()}] ${VER} armed on :${PORT} — app:3000 ws:3003 bridge:3005 liq:3010 trade:3011 sentinel:3030 armor:3016 cron:3015`);
+console.log(`[${tehran()}] ${VER} armed on :${PORT} — app:3000 ws:3003 bridge:3005 liq:3010 trade:3011 sentinel:3030 armor:3016 cron:3015 stable:3017 kw:3018 mem:3019 tbt:3021`);
 persistState();
 
 process.on("SIGTERM", () => { log("info", "shutdown", { sig: "SIGTERM" }); releaseLock(); process.exit(0); });
@@ -486,9 +643,27 @@ process.on("uncaughtException", (e) => { log("crit", "uncaught", { err: String(e
 
 // bun --hot safety: a reload must never leave the previous interval running
 // (globalThis survives hot reloads → new boot reaps the old timer)
-const g = globalThis as typeof globalThis & { __p0wdTimer?: ReturnType<typeof setTimeout> };
+const g = globalThis as typeof globalThis & { __p0wdTimer?: ReturnType<typeof setTimeout>; __p0wdHb?: ReturnType<typeof setTimeout> };
+function tickSafely() {
+  void tick().catch((e) => {
+    // v1.4.1: a rejected tick must be VISIBLE (the 13:57 freeze was silent)
+    try { log("crit", "tick-crash", { err: String(e).slice(0, 180) }); } catch { /* never */ }
+  });
+}
 setTimeout(() => {
   if (g.__p0wdTimer) clearInterval(g.__p0wdTimer);
-  g.__p0wdTimer = setInterval(() => void tick(), TICK_MS);
-  void tick();
+  g.__p0wdTimer = setInterval(tickSafely, TICK_MS);
+  tickSafely();
 }, BOOT_DELAY_MS);
+// v1.4.1 heartbeat: independent 60s liveness check — if the tick loop froze
+// (lastTickDoneAt stale beyond 6 ticks + grace), log crit and re-arm it.
+setTimeout(() => {
+  if (g.__p0wdHb) clearInterval(g.__p0wdHb);
+  g.__p0wdHb = setInterval(() => {
+    if (lastTickDoneAt && nowMs() - lastTickDoneAt > TICK_MS * 6 + 10_000) {
+      log("crit", "tick-heartbeat-missed", { staleMs: nowMs() - lastTickDoneAt });
+      lastTickDoneAt = nowMs(); // re-arm marker; next real tick refreshes it
+      tickSafely();
+    }
+  }, 60_000);
+}, BOOT_DELAY_MS + 5_000);

@@ -1,0 +1,88 @@
+{
+ "at": 1791233285069,
+ "dayIdx": 20732,
+ "dayKey": "2026-10-06",
+ "durationMs": 140,
+ "verdict": "HEALTHY",
+ "headline": "امروز پاک — هیچ ریشهٔ راستی‌آزمایی‌شده‌ای پیدا نشد",
+ "missions": {
+  "pnl": {
+   "settledToday": 1,
+   "byStatus": {
+    "EXPIRED": 1
+   },
+   "rawNet": 0.05,
+   "basisNet": 1.82,
+   "feesUsd": 0.01,
+   "feeDragPct": 10,
+   "tp1Below1": {
+    "count": 0,
+    "rawNet": 0
+   },
+   "expiredWaste": {
+    "count": 1,
+    "avgMfePct": 15.1
+   },
+   "worstHour": {
+    "hour": 0,
+    "rawNet": 0.05
+   },
+   "postGate": {
+    "gateLiveAt": 1791232784401,
+    "deploys": 1,
+    "basisNet": -0.17,
+    "note": "1 دیپلوی پس از گیت خارج فیلتر (کوهورت bypass عمدی)"
+   }
+  },
+  "gate": {
+   "enabled": true,
+   "state": "ARMED",
+   "vetoToday": 23,
+   "lastVeto": "HYPEUSDT/HOUR_MASK"
+  },
+  "rails": {
+   "state": "ARMED",
+   "dailyUsedPct": 0,
+   "weeklyUsedPct": 0,
+   "k1UsedPct": 0,
+   "kSuite": {
+    "k1Tripped": false,
+    "k2Hits": 1,
+    "k2Locked": false,
+    "k3Locked": false,
+    "k4Invalid": false,
+    "engineVersion": "NEXUS-LIVE v10.18",
+    "locked": false,
+    "lockCode": null
+   },
+   "weeklyBreaches": 1
+  },
+  "pipe": {
+   "tickFiles6h": 7,
+   "latestTickAgeMin": 0,
+   "fillsToday": 1,
+   "avgSlipBps": 0
+  },
+  "system": {
+   "verdict": "GREEN",
+   "servicesDown": 0,
+   "reachable": true
+  }
+ },
+ "findings": [
+  {
+   "id": "RAILS-DISABLED",
+   "mission": "RAILS-AUDIT",
+   "sev": "P2",
+   "title": "ریل‌های روزانه/هفتگی غیرفعال‌اند (BR-2.1 — فرمان اپراتور «حد ضرر روزانه و هفتگی را غیر فعال کن»)",
+   "evidence": "bankroll BR-2.1: DAILY/WEEKLY فقط تلمتری (درصد مصرف + ژورنال برخورد would-have-fired) · پوشش دُم بر عهدهٔ K1 rolling-20 + K3 ruin + K4 — این تصمیم ثبت‌شدهٔ اپراتور است، نه حادثه",
+   "status": "VERIFIED",
+   "fix": {
+    "kind": "RECOMMENDED",
+    "action": "باز-فعال‌سازی بدون دیپلوی: touch .data/bankroll-rails-on",
+    "applied": false
+   }
+  }
+ ],
+ "fixes": []
+}

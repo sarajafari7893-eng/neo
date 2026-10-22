@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+# ── RECOVERY one-shot resurrection hook (flag-gated, self-removing) ──
+if [ -f /home/z/my-project/.data/RESURRECT.flag ]; then
+  rm -f /home/z/my-project/.data/RESURRECT.flag
+  bash /home/z/my-project/scripts/resurrect.sh >> /home/z/my-project/logs/resurrect.log 2>&1
+fi
 # ── NEXUS//SIGNALS sandbox snapshot v3.1 (v3 + operator-approved hardening 2026-09-08) ──
 # v1: full-project zip → backups/ (12 retained)
 # v2: off-site tier — Telegram sendDocument upload (45MB gate)
@@ -171,6 +176,14 @@ try {
 # هماهنگ باشد»): .data state journals ride every snapshot — the shadow-veto A/B arm
 # evidence rings (jsonl, boot-hydrated), the SV telemetry snapshots, the gate journal
 # and RAW-CAL telemetry. Without them a rollback wipes the 30/30 promotion cohorts.
+# ── v11.2 MANIFEST AUTHORITY SYNC (restore-drill finding 2026-10-07) ──
+# calibration-snapshot.ts writes its manifest to ROOT/backups (rootfs) while
+# backup.sh patches the RING manifest on PolarFS ($BACKUPS) with the ARCHIVED
+# copy's contentFingerprint + archivedDbBytes — so the zipped copy used to ride
+# the LIVE fingerprint and the drill had no authoritative anchor inside the
+# archive. The patched ring manifest is the audit truth: it now RIDES the zip.
+cp -f "$BACKUPS/MANIFEST.json" "$ROOT/backups/MANIFEST.json" 2>/dev/null || true
+
 zip -q -r "$OUT" \
   src prisma mini-services docs scripts .zscripts assets \
   package.json bun.lock tsconfig.json next.config.ts postcss.config.mjs components.json eslint.config.mjs \
@@ -482,12 +495,11 @@ for attempt in 1 2; do
 done
 if ! echo "$CANARY" | grep -q 'pulse:200'; then
   echo "SNAP-RESTART canary FAILED [$CANARY] — running drill-vetted repair"
-  echo $(( $(date +%s) + 150 )) > "$ROOT/.data/p0-watchdog/pause-until" 2>/dev/null
-  pkill -f "next dev" 2>/dev/null
-  pkill -f "next-server" 2>/dev/null
-  sleep 2
-  rm -rf "$ROOT/.next/dev/cache/turbopack" 2>/dev/null
-  bash "$ROOT/scripts/dev-up.sh" >> "$ROOT/dev.log" 2>&1
+  # v10.7 (Task 73): repair now rides the CANONICAL guarded purge
+  # (scripts/dev-cache-purge.sh: flock → pause → kill-safe → wipe → dev-up).
+  # The old inline dance had no process-exit wait (double-writer race) and
+  # duplicated the contract in a 3rd place. Single source of truth now.
+  bash "$ROOT/scripts/dev-cache-purge.sh" >> "$ROOT/dev.log" 2>&1
   CANARY2=$(for r in pulse advisor terminal rawcal; do
     code=$(curl -s -m 10 -o /dev/null -w '%{http_code}' "http://localhost:3000/api/$r" 2>/dev/null || echo 000)
     printf '%s:%s ' "$r" "$code"

@@ -42,6 +42,7 @@ import {
   type ShadowVetoHealth,
   type ShadowVetoMode,
 } from "@/lib/shadow-veto";
+import { getStableBoardSync } from "@/lib/stableflow"; // v11.0 family-E substrate
 
 // ── types ─────────────────────────────────────────────────────
 
@@ -83,6 +84,7 @@ export interface SvTelemetrySnapshot {
   captureMs: number;
   mode: ShadowVetoMode;
   config: ShadowVetoConfig;
+  stable: import("@/lib/stableflow").StableBoard | null; // v11.0 family-E substrate — regime context for the arms/LLM review (additive, no behavior change)
   stats: {
     total: number;
     passSide: number;
@@ -328,6 +330,9 @@ export async function captureSvTelemetry(force = false): Promise<SvTelemetrySnap
         captureMs: Date.now() - t0,
         mode: s.config.mode,
         config: s.config,
+        // v11.0 family-E: stablecoin regime board (stable-feed :3017 → file
+        // read, cached). Honest null when the substrate hasn't booted yet.
+        stable: (() => { try { return getStableBoardSync(); } catch { return null; } })(),
         stats: s.stats,
         arms,
         wiring,
@@ -361,6 +366,7 @@ function emptyShell(): SvTelemetrySnapshot {
     captureMs: 0,
     mode: "shadow",
     config: {} as ShadowVetoConfig,
+    stable: null, // v11.0 family-E — empty shell carries no substrate read
     stats: { total: 0, passSide: 0, rejectSide: 0, vetoCount: 0, tradeCount: 0, modelSharePct: null, modelGroundedPct: null, avgConfidence: null, gateAgreement: 0, paperOpen: 0, paperSettled: 0, recent24h: { n: 0, modelSharePct: null, lastModelAgeH: null, lastVerdictAgeH: null } },
     arms: [],
     wiring: {

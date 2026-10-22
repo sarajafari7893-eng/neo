@@ -1,0 +1,65 @@
+═══ ① SIGNAL TIMELINES (decision→card latency + ladder) ═══
+
+NX-2766 APRUSDT SHORT BREAKOUT/5m · created=2026-10-18T07:45:33.970Z · conf=86
+  card-lag(createdAt→CREATED event): 0.2s · life=11.2min · outcome=SL net=3.52% max=20.53%
+  BE-armed: +440s
+    +440s [BE_TRAIL] APRUSDT breakeven armed @ +1.57% price (PX-ARM ≥ +1.5% price) — stop moved to entry, −1R risk retired · BE-BAN
+    +672s [SL] APRUSDT stopped @ 0.0254 — risk contained (+0.0% gross) · breakeven stop executed — runner flat, TP1 profit ba
+
+NX-2767 BRUSDT SHORT AI-SWING/1h · created=2026-10-18T07:58:51.100Z · conf=83
+  card-lag(createdAt→CREATED event): 0.8s · life=108.6min · outcome=SL net=4.67% max=30.87%
+  BE-armed: +2576s
+    +2576s [BE_TRAIL] BRUSDT breakeven armed @ +1.58% price (PX-ARM ≥ +1.5% price) — stop moved to entry, −1R risk retired · BE-BANK
+    +6517s [SL] BRUSDT stopped @ 0.4147 — risk contained (+0.0% gross) · breakeven stop executed — runner flat, TP1 profit ban
+
+NX-2770 APRUSDT SHORT BREAKOUT/5m · created=2026-10-18T09:16:58.189Z · conf=81
+  card-lag(createdAt→CREATED event): 0.1s · life=22.2min · outcome=SL net=-61.23% max=5.79%
+  BE-armed: never (full −1R exposed)
+    +1334s [SL] APRUSDT stopped @ 0.0253 — risk contained (-60.0% gross)
+
+NX-2774 APRUSDT SHORT AI-SWING/1h · created=2026-10-18T09:51:36.820Z · conf=59
+  card-lag(createdAt→CREATED event): 0.6s · life=3.5min · outcome=SL net=4.14% max=20.15%
+  BE-armed: +143s
+    +143s [BE_TRAIL] APRUSDT breakeven armed @ +1.78% price (PX-ARM ≥ +1.5% price) — stop moved to entry, −1R risk retired · BE-BAN
+    +207s [SL] APRUSDT stopped @ 0.0281 — risk contained (+0.0% gross) · breakeven stop executed — runner flat, TP1 profit ba
+
+NX-2777 APRUSDT SHORT AI-SWING/15m · created=2026-10-18T10:27:42.623Z · conf=70
+  card-lag(createdAt→CREATED event): 0.8s · life=15.3min · outcome=SL net=3.4% max=30.98%
+  BE-armed: +480s
+    +480s [BE_TRAIL] APRUSDT breakeven armed @ +1.53% price (PX-ARM ≥ +1.5% price) — stop moved to entry, −1R risk retired · BE-BAN
+    +918s [SL] APRUSDT stopped @ 0.0261 — risk contained (+0.0% gross) · breakeven stop executed — runner flat, TP1 profit ba
+
+NX-2779 BRUSDT SHORT AI-SWING/1h · created=2026-10-18T10:49:24.447Z · conf=86
+  card-lag(createdAt→CREATED event): 0.7s · life=42.2min · outcome=SL net=-62.26% max=16.55%
+  BE-armed: never (full −1R exposed)
+    +2534s [SL] BRUSDT stopped @ 0.4138 — risk contained (-60.5% gross)
+
+═══ ② RADAR LAYER — first-sign capture + conversion health ═══
+APRUSDT DUMP detected=2026-10-18T06:15:41.740Z anchor=0.02855 vel5m=-8.49% phase=RESOLVED/SUCCESS →signal=telemetry-only
+APRUSDT DUMP detected=2026-10-18T07:37:58.180Z anchor=0.026 vel5m=-1.51% phase=RESOLVED/SUCCESS →signal=telemetry-only
+APRUSDT PUMP detected=2026-10-18T08:01:01.976Z anchor=0.0255 vel5m=1.19% phase=RESOLVED/SUCCESS →signal=telemetry-only
+APRUSDT DUMP detected=2026-10-18T09:02:33.581Z anchor=0.0232 vel5m=-12.78% phase=RESOLVED/FAILURE →signal=telemetry-only
+APRUSDT PUMP detected=2026-10-18T09:35:43.767Z anchor=0.0252 vel5m=4.13% phase=RESOLVED/SUCCESS →signal=telemetry-only
+APRUSDT PUMP detected=2026-10-18T11:26:10.171Z anchor=0.02446 vel5m=2.64% phase=RESOLVED/SUCCESS →signal=telemetry-only
+conversion: 48h 0/119 · all-time 397/2190 (18.1%) · LAST LINK: CTSIUSDT 2026-10-09T05:26:17.352Z
+
+═══ ③ TAPE INTEGRITY (data-reception latency check) ═══
+APRUSDT: 437 pts / 6h (~50s cadence) · max gap 113s @ 2026-10-18T10:28:29.468Z
+BRUSDT: 437 pts / 6h (~50s cadence) · max gap 113s @ 2026-10-18T10:28:29.468Z
+
+═══ ④ DEPLOY EVIDENCE — was the first-sign data present? ═══
+NX-2766 APRUSDT: flow=NEUTRAL null-metrics=1/8 · MTF net=undefined bias=undefined align=undefined · RSI 11.1 oversold — mean-revert pressure
+NX-2767 BRUSDT: flow=NEUTRAL null-metrics=8/8 · MTF net=-19 bias=NEUTRAL align=0 · RSI 37.9 neutral-drift · slope -3.9
+NX-2770 APRUSDT: flow=NEUTRAL null-metrics=8/8 · MTF net=-50 bias=SHORT align=3 · RSI 18.0 oversold — mean-revert pressure
+NX-2774 APRUSDT: flow=CONFLICTS null-metrics=1/8 · MTF net=-42 bias=SHORT align=2 · RSI 40.2 neutral-drift · slope 5.6
+NX-2777 APRUSDT: flow=NEUTRAL null-metrics=8/8 · MTF net=-49 bias=SHORT align=3 · RSI 37.4 neutral-drift · slope -1.5
+NX-2779 BRUSDT: flow=NEUTRAL null-metrics=8/8 · MTF net=-21 bias=SHORT align=2 · RSI 30.3 neutral-drift · slope -2.2
+
+═══ ⑤ FLOW-BLINDNESS CENSUS (48h) — NEUTRAL-vs-NO-DATA honesty ═══
+last-48h deploys: flow-SIGHTED 57 · flow-BLIND 132 (70% blind) — blind deploys are tagged FLOW-NEUTRAL as if the book said "neutral"
+
+═══ ⑥ ENTRY QUALITY vs TAPE (the 2 full stops) ═══
+NX-2770 APRUSDT: entry 0.02405 vs ±30min tape [lo 0.02319 / hi 0.0269] — entry sits 23% of the local range
+NX-2779 BRUSDT: entry 0.39956 vs ±30min tape [lo 0.39639 / hi 0.408967] — entry sits 25% of the local range
+
+(readonly — no data mutated)

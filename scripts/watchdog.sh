@@ -32,8 +32,27 @@ INTERVAL=60               # probe cadence (s)
 FAILS_TO_RESTART=2        # consecutive app failures before recovery
 COOLDOWN_SECS=480         # min spacing between recoveries (backoff)
 BREAKER_MAX=3             # max recoveries per rolling hour → then alert-only
-RSS_WARN_MB=1800          # observed operating band top ~1813MB (R29 audit)
-MEM_AVAIL_WARN_MB=300     # OOM proximity on the 4GB no-swap box
+RSS_WARN_MB=2000          # EQ-98 (2026-10-13), re-verified 2026-10-14 on the October
+                          # tree (v11.6, next 16.1.3): warm plateau 2.16-2.30GB with
+                          # V8=768MB + turbopack 384MiB — warn only above the envelope.
+RSS_CRIT_MB=2500          # EQ-98, recalibrated 2026-10-14 (Oct root-cause): the v11.6
+                          # tree legitimately plateaus 2.16-2.39GB under the warm-loop
+                          # 5s tick — 2300×3 would treadmill. True runaway line sits at
+                          # 2.5GB+ (the 10:53Z kernel kill fired at 2.52GB; 2.3GB with
+                          # avail>600MB ran 20+ min unharmed). Box-level protection is
+                          # owned by MEM-GUARD (P1d, avail<550×2) — this channel is
+                          # now the pure runaway backstop.
+MEM_AVAIL_WARN_MB=300     # OOM proximity on the 4GB no-swap box (P1b suspend+hygiene)
+MEM_AVAIL_RESTART_MB=550  # MEM-GUARD v2 (2026-10-14 root-cause: TWO kernel OOMs at
+                          # 10:53/11:05Z killed next-server at RSS 2.18-2.52GB while the
+                          # RSS-CRIT channel sat idle — the kill driver was BOX avail
+                          # (241MB), not app RSS. The October dev graph (78 routes,
+                          # +506 engine lines, warm-loop 5s tick) plateaus ~2.2-2.5GB,
+                          # so avail — not RSS — is the leading indicator. Sustained
+                          # avail <550MB ×2 cycles (~2min, above the 300MB P1b line so
+                          # the big lever engages first) → controlled dev-up restart
+                          # (frees ~2.2GB instantly) under the same stand-down/cooldown/
+                          # breaker contract. No more kernel SIGKILL chaos.
 SIDE_FAILS_TO_ALERT=3     # sidecar consecutive fails before an ERROR line
 HEARTBEAT_EVERY=15        # every N cycles (~15min) log a green heartbeat
 
@@ -90,6 +109,7 @@ one_cycle() {
   exec 9>>"$LOCKF"
   if ! flock -n 9; then
     say "skip: another watchdog cycle holds the lock"
+    exec 9>&-   # v3.2b (RECOVERY-0927): never leak the lock fd on the skip path
     return 1
   fi
   local now; now=$(date +%s)
@@ -144,10 +164,38 @@ one_cycle() {
   local rss; rss=$(rss_mb); setk last_rss_mb "$rss"
   if [ "$rss" -ge "$RSS_WARN_MB" ]; then
     # state-change dedupe: log on enter, not every cycle
-    [ "$(getk rss_warn_active)" != "1" ] && say "MEM WARN: next RSS ${rss}MB >= ${RSS_WARN_MB}MB (heap cap 1400MB bounds JS only — turbopack native sits outside)"
+    [ "$(getk rss_warn_active)" != "1" ] && say "MEM WARN: next RSS ${rss}MB >= ${RSS_WARN_MB}MB (heap cap 768MB bounds JS old-space only — turbopack native + V8 external sit outside)"
     setk rss_warn_active 1
   else
     setk rss_warn_active 0
+  fi
+  # ── P1c · RECOVERY-0928: RSS CRIT restart guard (bounded memory treadmill) ──
+  # The 4GB no-swap box OOM-kills next-server around ~3GB RSS. Sustained
+  # ≥RSS_CRIT_MB for 3 consecutive cycles (~3min) → proactive dev-up restart,
+  # same breaker/cooldown contract as the P0 app-down heal. Keeps MemAvailable
+  # away from the kernel-OOM zone that invites both in-guest kills and
+  # platform distress-recycles.
+  if [ "$rss" -ge "$RSS_CRIT_MB" ]; then
+    local rcst; rcst=$(( $(getk rss_crit_streak) + 1 )); setk rss_crit_streak "$rcst"
+    if [ "$rcst" -ge 3 ]; then
+      setk rss_crit_streak 0
+      local lastr2; lastr2=$(getk last_recovery_epoch)
+      local p0pause2; p0pause2=$(cat "$PROJECT/.data/p0-watchdog/pause-until" 2>/dev/null || echo 0)
+      if [ "$now" -lt "${p0pause2:-0}" ]; then
+        say "RSS CRIT STAND DOWN: layer-1 restart window active — defer"
+      elif [ $(( now - ${lastr2:-0} )) -lt "$COOLDOWN_SECS" ]; then
+        say "RSS CRIT BACKOFF: restart suppressed (cooldown $(( now - lastr2 ))s < ${COOLDOWN_SECS}s)"
+      elif [ "$(breaker_count)" -ge "$BREAKER_MAX" ]; then
+        say "RSS CRIT BREAKER OPEN: $(breaker_count)/h — alert-only, operator attention"
+      else
+        say "RSS CRIT ACTION: RSS ${rss}MB >= ${RSS_CRIT_MB}MB ×3 cycles — proactive restart before kernel OOM"
+        note_recovery
+        pkill -f "next dev" 2>/dev/null; pkill -f "next-server" 2>/dev/null; sleep 1
+        timeout 300 bash "$PROJECT/scripts/dev-up.sh" >> "$LOG" 2>&1
+      fi
+    fi
+  else
+    setk rss_crit_streak 0
   fi
   local avail; avail=$(awk '/^MemAvailable:/{print int($2/1024)}' /proc/meminfo 2>/dev/null)
   if [ -n "$avail" ]; then
@@ -169,6 +217,49 @@ one_cycle() {
       fi
     elif [ "$avail" -ge 450 ] && [ -f "$PROJECT/.data/ai/background-suspend" ]; then
       rm -f "$PROJECT/.data/ai/background-suspend" 2>/dev/null
+    fi
+    # ── P1d · MEM-GUARD v2 (2026-10-14): box-avail restart channel ──
+    # Root-cause fix for the double kernel-OOM (10:53Z RSS 2.52GB / 11:05Z RSS
+    # 2.18GB): in both kills the driver was MemAvailable (241MB at the 11:00
+    # mem-crit log), NOT app RSS — the RSS-CRIT channel never saw a sustained
+    # breach. The October dev plateau (~2.2-2.5GB under the operator-mandated
+    # warm-loop 5s tick) leaves ~1.2GB of headroom against the fleet; a stacked
+    # transient (armor git hashing, backtest, postcss rebuild) can eat it in
+    # minutes. This channel watches the LEADING indicator: sustained
+    # avail < MEM_AVAIL_RESTART_MB ×2 cycles → controlled restart NOW, while
+    # the box still has memory to boot cleanly (a kernel OOM mid-boot is what
+    # produced the three silent dead boots of 11:06-11:11Z). Same defense
+    # ladder as every other recovery: stand-down → cooldown → breaker.
+    if [ "$avail" -lt "$MEM_AVAIL_RESTART_MB" ]; then
+      local mst; mst=$(( $(getk mem_crit_streak) + 1 )); setk mem_crit_streak "$mst"
+      if [ "$mst" -ge 2 ]; then
+        setk mem_crit_streak 0
+        local lastr3; lastr3=$(getk last_recovery_epoch)
+        local p0pause3; p0pause3=$(cat "$PROJECT/.data/p0-watchdog/pause-until" 2>/dev/null || echo 0)
+        if [ "$now" -lt "${p0pause3:-0}" ]; then
+          say "MEM-GUARD STAND DOWN: layer-1 restart window active — defer (avail ${avail}MB)"
+        elif [ $(( now - ${lastr3:-0} )) -lt "$COOLDOWN_SECS" ]; then
+          say "MEM-GUARD BACKOFF: restart suppressed (cooldown; avail ${avail}MB) — P1b levers carry"
+        elif [ "$(breaker_count)" -ge "$BREAKER_MAX" ]; then
+          say "MEM-GUARD BREAKER OPEN: $(breaker_count)/h — alert-only (avail ${avail}MB); operator attention"
+        else
+          say "MEM-GUARD ACTION: available ${avail}MB < ${MEM_AVAIL_RESTART_MB}MB ×2 cycles — controlled restart before kernel OOM (Oct plateau ~2.2-2.5GB + fleet ~1.1GB on 4GB no-swap)"
+          note_recovery; setk last_recovery_epoch "$now"
+          setk recoveries_total $(( $(getk recoveries_total) + 1 ))
+          pkill -f "next dev" 2>/dev/null; pkill -f "next-server" 2>/dev/null; sleep 1
+          timeout 300 bash "$PROJECT/scripts/dev-up.sh" >> "$LOG" 2>&1
+          local postm; postm=$(probe http://localhost:3000/api/pulse 8)
+          if [ "$postm" = "200" ]; then
+            say "MEM-GUARD RESTART OK: pulse 200 — box pressure released (avail $(awk '/^MemAvailable:/{print int($2/1024)}' /proc/meminfo 2>/dev/null)MB)"
+          else
+            say "MEM-GUARD RESTART INCOMPLETE: pulse $postm — dev-up retries own probes; next cycle re-checks"
+          fi
+        fi
+      else
+        say "MEM-GUARD ARMING: available ${avail}MB < ${MEM_AVAIL_RESTART_MB}MB (streak 1/2 — restarts next cycle if sustained)"
+      fi
+    else
+      setk mem_crit_streak 0
     fi
   fi
 
@@ -202,7 +293,7 @@ one_cycle() {
     if [ $(( now - ${blast:-0} )) -ge 300 ]; then
       # v10.16 audit: cross-layer ledger — if layer-1 (p0-watchdog) healed this
       # service <300s ago, defer (no dueling spawns, shared stamp file)
-      local bl2; bl2=$(cat "$PROJECT/.data/p0-watchdog/heal-bridge" 2>/dev/null || echo 0)
+      local bl2; bl2=$(cat "$PROJECT/.data/p0-watchdog/heal-bridge" 2>/dev/null || echo 0); bl2="${bl2%%:*}"
       if [ $(( now - ${bl2:-0} )) -lt 300 ]; then
         say "HEAL SKIP: bridge healed <300s ago by layer-1 (cross-layer ledger)"
       else
@@ -211,7 +302,7 @@ one_cycle() {
         # inheriting child pins the lock forever and deadlocks every cycle)
         ( cd "$PROJECT/mini-services/telegram-bridge" && setsid bash -c 'exec bun index.ts' </dev/null 9>&- >> /tmp/bridge-wd.out 2>&1 & )
         setk last_bridge_spawn "$now"
-        echo "$now" > "$PROJECT/.data/p0-watchdog/heal-bridge" 2>/dev/null
+        echo "$now:$$" > "$PROJECT/.data/p0-watchdog/heal-bridge" 2>/dev/null
       fi
     fi
   else
@@ -227,7 +318,7 @@ one_cycle() {
     local wlast; wlast=$(getk last_ws_spawn)
     if [ $(( now - ${wlast:-0} )) -ge 300 ]; then
       # v10.16 audit: cross-layer ledger (same contract as bridge heal)
-      local wl2; wl2=$(cat "$PROJECT/.data/p0-watchdog/heal-ws" 2>/dev/null || echo 0)
+      local wl2; wl2=$(cat "$PROJECT/.data/p0-watchdog/heal-ws" 2>/dev/null || echo 0); wl2="${wl2%%:*}"
       if [ $(( now - ${wl2:-0} )) -lt 300 ]; then
         say "HEAL SKIP: price-ws healed <300s ago by layer-1 (cross-layer ledger)"
       else
@@ -235,7 +326,28 @@ one_cycle() {
         pkill -f "price-ws" 2>/dev/null
         ( cd "$PROJECT/mini-services/price-ws" && setsid bash -c 'exec bun index.ts' </dev/null 9>&- >> /tmp/ws-wd.out 2>&1 & )
         setk last_ws_spawn "$now"
-        echo "$now" > "$PROJECT/.data/p0-watchdog/heal-ws" 2>/dev/null
+        echo "$now:$$" > "$PROJECT/.data/p0-watchdog/heal-ws" 2>/dev/null
+      fi
+    fi
+  fi
+
+  # ── P2.7 · mem-guard :3019 — OWNED heal (v3.3, RECOVERY-1016) ──
+  # 2026-10-16 incident: the recycle killed mem-guard and NOTHING re-spawned it
+  # → the rollback sentinel + OOM guard + schema gate were all dead for ~50min
+  # while the box ran on a 19-day-stale tree. mem-guard is the boot authority —
+  # it gets an owned heal here (mem-guard-up.sh is idempotent + probe-gated).
+  local mcode; mcode=$(probe http://localhost:3019/health 5)
+  if [ "$mcode" != "200" ]; then
+    local mlast; mlast=$(getk last_memspawn)
+    if [ $(( now - ${mlast:-0} )) -ge 300 ]; then
+      local ml2; ml2=$(cat "$PROJECT/.data/p0-watchdog/heal-mem" 2>/dev/null || echo 0); ml2="${ml2%%:*}"
+      if [ $(( now - ${ml2:-0} )) -lt 300 ]; then
+        say "HEAL SKIP: mem-guard healed <300s ago by layer-1 (cross-layer ledger)"
+      else
+        say "MEM-GUARD DOWN (http:$mcode) — spawn via mem-guard-up.sh (owned by watchdog)"
+        ( setsid bash "$PROJECT/scripts/mem-guard-up.sh" </dev/null 9>&- >> /tmp/mem-wd.out 2>&1 & )
+        setk last_memspawn "$now"
+        echo "$now:$$" > "$PROJECT/.data/p0-watchdog/heal-mem" 2>/dev/null
       fi
     fi
   fi
@@ -265,6 +377,11 @@ one_cycle() {
   setk last_cycle_epoch "$now"
   [ $(( cyc % HEARTBEAT_EVERY )) -eq 0 ] && say "heartbeat: green cycles=$cyc rss=${rss}MB avail=${avail:-?}MB liq=$liq ws=$ws breaker=$(breaker_count)/$BREAKER_MAX"
   trim_log
+  # v3.2b (RECOVERY-0927): release the flock at cycle end. A persistently-open
+  # fd 9 pins the lock across the inter-cycle sleep AND leaks into every spawned
+  # child (dev-up, self-warm, heal spawns) — one inheriting child can blind the
+  # entire two-layer stack.
+  exec 9>&-
   return 0
 }
 
@@ -273,6 +390,15 @@ case "${1:---loop}" in
     one_cycle; exit $?
     ;;
   --loop)
+    # v3.3 INSTANCE LOCK (fd 8) — the pidfile check alone had a TOCTOU race:
+    # 2026-10-16 boot armed TWO loops (pid 1366+1439 same minute — both passed
+    # the pidfile check before either wrote it). flock is atomic; the pidfile
+    # stays for operator visibility. fd 8 ≠ cycle lock fd 9 (nested-safe).
+    exec 8>>"$LOCKF.loop"
+    if ! flock -n 8; then
+      echo "refusing: another watchdog LOOP holds the instance lock"
+      exit 0
+    fi
     if [ -f "$PIDF" ]; then
       held_pid=$(cat "$PIDF" 2>/dev/null)
       if [ -n "$held_pid" ] && [ "$held_pid" != "$$" ] && kill -0 "$held_pid" 2>/dev/null; then

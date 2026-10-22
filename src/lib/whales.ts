@@ -35,6 +35,7 @@
 
 import { db } from "@/lib/db";
 import { gateFetch } from "./fapi-gate";
+import { bridgeTape, bybitTickerRow, bridgeDepth, type TapeTrade } from "./flow-bridge";
 
 const WHALE_MIN_USD = 150_000;
 const WHALE_WINDOW_MS = 15 * 60_000;
@@ -124,7 +125,7 @@ export function setWhaleHitNotifier(fn: (hit: WhaleHit) => void): void {
 }
 
 /** Tape-only aggregation shared by the deep read and the cheap sweep probe. */
-function aggregateWhales(trades: Array<{ price: string; qty: string; quoteQty: string; isBuyerMaker: boolean; time: number }>): WhaleSymbolRead["whales"] {
+function aggregateWhales(trades: TapeTrade[]): WhaleSymbolRead["whales"] {
   const cutoff = Date.now() - WHALE_WINDOW_MS;
   let buyUsd = 0, sellUsd = 0, count = 0, largestUsd = 0;
   for (const tr of trades) {
@@ -139,10 +140,14 @@ function aggregateWhales(trades: Array<{ price: string; qty: string; quoteQty: s
   return { count, buyUsd, sellUsd, netUsd: buyUsd - sellUsd, largestUsd };
 }
 
-/** Cheap discovery probe — trades endpoint ONLY (1 request ≈ weight 20). */
+/** Cheap discovery probe — v12.2 TASK-52: tape LADDER (fapi aggTrades →
+ * BYBIT linear recent-trade → SPOT-MIRROR trades) instead of a raw weight-20
+ * fapi hit per symbol; during ban windows the sweep keeps flowing on the
+ * bridge instead of starving the discovery ring. */
 async function probeTape(symbol: string): Promise<WhaleSymbolRead["whales"]> {
-  const trades = await fapi<Array<{ price: string; qty: string; quoteQty: string; isBuyerMaker: boolean; time: number }>>(`/fapi/v1/trades?symbol=${symbol}&limit=1000`);
-  return aggregateWhales(trades);
+  const b = await bridgeTape(symbol);
+  if (!b) throw new Error(`tape ${symbol} → unavailable`);
+  return aggregateWhales(b.trades);
 }
 
 async function sweepPass(universe: string[], openSet: Set<string>): Promise<void> {
@@ -278,10 +283,15 @@ export function whaleVote(
 }
 
 async function readSymbol(symbol: string): Promise<WhaleSymbolRead> {
-  const [trades, smart, depth, oiHist] = await Promise.allSettled([
-    fapi<Array<{ price: string; qty: string; quoteQty: string; isBuyerMaker: boolean; time: number }>>(`/fapi/v1/trades?symbol=${symbol}&limit=1000`),
+  // v12.2 TASK-52 — the heavy tape leg rides the bridge ladder (fapi → BYBIT
+  // → SPOT-MIRROR); the ratio/book/OI legs are Binance-only lanes that
+  // degrade honestly (stale flags) — no equivalents exist elsewhere.
+  // v12.3 TASK-52 — the book leg now rides the depth ladder too (fapi → BYBIT
+  // linear book → SPOT-MIRROR) instead of dying silently during fapi bans.
+  const [tape, smart, depth, oiHist] = await Promise.allSettled([
+    bridgeTape(symbol),
     fapi<Array<{ longShortRatio: string; longAccount: string; shortAccount: string; timestamp: number }>>(`/futures/data/topLongShortPositionRatio?symbol=${symbol}&period=5m&limit=2`),
-    fapi<{ bids: Array<[string, string]>; asks: Array<[string, string]> }>(`/fapi/v1/depth?symbol=${symbol}&limit=100`),
+    bridgeDepth(symbol, 100),
     fapi<Array<{ sumOpenInterestValue: string; timestamp: number }>>(`/futures/data/openInterestHist?symbol=${symbol}&period=5m&limit=2`),
   ]);
 
@@ -289,8 +299,9 @@ async function readSymbol(symbol: string): Promise<WhaleSymbolRead> {
 
   // ── whale tape — buyerMaker=false ⇒ aggressor was a BUY (market buy lifted asks)
   let whales: WhaleSymbolRead["whales"] = null;
-  if (trades.status === "fulfilled") {
-    whales = aggregateWhales(trades.value);
+  const tapeRows = tape.status === "fulfilled" ? tape.value?.trades ?? null : null;
+  if (tapeRows) {
+    whales = aggregateWhales(tapeRows);
   } else stale = true;
 
   let smartLs: number | null = null;
@@ -298,15 +309,21 @@ async function readSymbol(symbol: string): Promise<WhaleSymbolRead> {
   else stale = true;
 
   let book: WhaleSymbolRead["book"] = null;
-  if (depth.status === "fulfilled") {
-    const bidUsd = depth.value.bids.reduce((a, [p, q]) => a + Number(p) * Number(q), 0);
-    const askUsd = depth.value.asks.reduce((a, [p, q]) => a + Number(p) * Number(q), 0);
+  if (depth.status === "fulfilled" && depth.value) {
+    const bidUsd = depth.value.bids.reduce((a, [p, q]) => a + p * q, 0);
+    const askUsd = depth.value.asks.reduce((a, [p, q]) => a + p * q, 0);
     if (bidUsd + askUsd > 0) book = { bidUsd, askUsd, bidPct: (bidUsd / (bidUsd + askUsd)) * 100 };
   } else stale = true;
 
   let oiUsd: number | null = null;
   if (oiHist.status === "fulfilled" && oiHist.value.length) oiUsd = Number(oiHist.value[oiHist.value.length - 1]!.sumOpenInterestValue);
-  else stale = true;
+  else {
+    // v12.2 TASK-52: bybit tickers carry openInterestValue — the absolute OI
+    // context survives fapi starvation instead of going stale.
+    const t = await bybitTickerRow(symbol).catch(() => null);
+    if (t?.openInterestValue) oiUsd = t.openInterestValue;
+    else stale = true;
+  }
 
   return { symbol, whales, smartLs, book, oiUsd, stale };
 }

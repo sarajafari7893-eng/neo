@@ -1,3 +1,4 @@
+import { liveEnv } from "@/lib/live-env";
 import { NextResponse } from "next/server";
 import { spawn } from "node:child_process";
 import { openSync } from "node:fs";
@@ -65,8 +66,10 @@ function spawnDetached(t: { cwd: string; cmd: string; log: string }): number | n
 }
 
 export async function POST(req: Request) {
-  // defense in depth: middleware already enforces this, re-check here
-  const expected = process.env.NEXUS_CONTROL_KEY ?? "";
+  // defense in depth: middleware already enforces this, re-check here.
+  // Task 36: liveEnv — the .env FILE is the live source of truth (frozen boot
+  // process.env kept validating the OLD key after rotation).
+  const expected = liveEnv("NEXUS_CONTROL_KEY");
   const provided = req.headers.get("x-nexus-key") ?? "";
   if (!expected || provided !== expected) {
     return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });

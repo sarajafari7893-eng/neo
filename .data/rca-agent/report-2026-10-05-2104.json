@@ -1,0 +1,129 @@
+{
+ "at": 1791221659532,
+ "dayIdx": 20731,
+ "dayKey": "2026-10-05",
+ "durationMs": 129,
+ "verdict": "WATCH",
+ "headline": "تحت نظر — یافتهٔ P1 راستی‌آزمایی‌شده",
+ "missions": {
+  "pnl": {
+   "settledToday": 137,
+   "byStatus": {
+    "EXPIRED": 81,
+    "SL": 49,
+    "TP3": 7
+   },
+   "rawNet": -1.92,
+   "basisNet": -17.19,
+   "feesUsd": 1.09,
+   "feeDragPct": 12,
+   "tp1Below1": {
+    "count": 32,
+    "rawNet": -1.65
+   },
+   "expiredWaste": {
+    "count": 29,
+    "avgMfePct": 7.2
+   },
+   "worstHour": {
+    "hour": 10,
+    "rawNet": -1.25
+   },
+   "postGate": {
+    "gateLiveAt": 1791202854910,
+    "deploys": 25,
+    "basisNet": 22.02,
+    "note": "15 دیپلوی پس از گیت خارج فیلتر (کوهورت bypass عمدی)"
+   }
+  },
+  "gate": {
+   "enabled": true,
+   "state": "WEEKLY-STOP",
+   "vetoToday": 39,
+   "lastVeto": "NILUSDT/HOUR_MASK"
+  },
+  "rails": {
+   "state": "WEEKLY-STOP",
+   "dailyUsedPct": 34,
+   "weeklyUsedPct": 100,
+   "k1UsedPct": 0,
+   "kSuite": {
+    "k1Tripped": false,
+    "k2Hits": 1,
+    "k2Locked": false,
+    "k3Locked": false,
+    "k4Invalid": false,
+    "engineVersion": "NEXUS-LIVE v10.18",
+    "locked": false,
+    "lockCode": null
+   },
+   "weeklyBreaches": 1
+  },
+  "pipe": {
+   "tickFiles6h": 7,
+   "latestTickAgeMin": 0,
+   "fillsToday": 114,
+   "avgSlipBps": 3.54
+  },
+  "system": {
+   "verdict": "AMBER",
+   "servicesDown": 0,
+   "reachable": true
+  }
+ },
+ "findings": [
+  {
+   "id": "PNL-TP1-NEG-ZONE",
+   "mission": "PNL-FORENSICS",
+   "sev": "P1",
+   "title": "زون اثبات‌شدهٔ منفی tp1<1٪ امروز فعال بوده (32 ردیف)",
+   "evidence": "rawNet zone=$-1.65 — فیلتر PROVEN از ساعت گیت این زون را وتو می‌کند؛ ردیف‌های باقی‌مانده bypass (کپچر عمدی) هستند",
+   "status": "VERIFIED",
+   "fix": {
+    "kind": "RECOMMENDED",
+    "action": "بررسی برچسب bypass این ردیف‌ها (کپچر داده باید نصف‌مارجین و ثبت‌شده باشد)",
+    "applied": false
+   }
+  },
+  {
+   "id": "PNL-EXPIRED-WASTE",
+   "mission": "PNL-FORENSICS",
+   "sev": "P2",
+   "title": "29 قرارداد منقضی با MFE ≥ +5٪ (پول روی میز)",
+   "evidence": "EXPIRED=81 · avg MFE expired=7.2٪ — کاندید R-EXIT/BE زودتر، نیازمند شواهد OOS قبل از هر تغییر",
+   "status": "VERIFIED",
+   "fix": {
+    "kind": "RECOMMENDED",
+    "action": "مطالعهٔ کانترفکتوال R-EXIT روی آرشیو (بدون lookahead) — ورود به کد فقط با اثبات",
+    "applied": false
+   }
+  },
+  {
+   "id": "RAILS-ENGAGED",
+   "mission": "RAILS-AUDIT",
+   "sev": "P1",
+   "title": "ریل بانکرول (مبنا $1000) فعال: WEEKLY-STOP",
+   "evidence": "basis week=$-187.65 / rail −$100 · daily=$-17.19 / −$50 · K1=21.75 / −60 · K2hits=1 · 830 settled this week — رفتار طراحی‌شدهٔ مدارشکن، نه خرابی",
+   "status": "VERIFIED",
+   "fix": {
+    "kind": "RECOMMENDED",
+    "action": "صبر تا رول‌شدن روز/هفتهٔ تهران — ریل غیرقابل مذاکره است",
+    "applied": false
+   }
+  },
+  {
+   "id": "SYS-AMBER",
+   "mission": "SYSTEM",
+   "sev": "P2",
+   "title": "سنتینل AMBER است",
+   "evidence": ":3030/report verdict=AMBER · servicesDown=0",
+   "status": "VERIFIED",
+   "fix": {
+    "kind": "RECOMMENDED",
+    "action": "بازبینی anomalies در گزارش سنتینل",
+    "applied": false
+   }
+  }
+ ],
+ "fixes": []
+}

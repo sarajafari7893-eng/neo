@@ -1,4 +1,4 @@
-// ── NEXUS//SIGNALS trade-service (v4.8 SPOT-MIRROR · 34-b) ───────────
+// ── NEXUS//SIGNALS trade-service (v4.9 SHARED BAN-LEDGER · TASK-49) ────
 // REAL aggressor tape for the order-flow gate. Every frame is an actual
 // executed trade aggregated by the exchange — NOT a derivation. From the
 // raw tape the service maintains, per symbol:
@@ -44,6 +44,7 @@
 //   silent feed (stalled flag / null block).
 
 const PORT = 3011;
+import { ledgerUnknownScopeBanUntil, writeLedgerBan } from "../_shared/ban-ledger";
 const WS_URL = "wss://fstream.binance.com/ws/!aggTrade";
 const SPOT_WS_HOST = "wss://stream.binance.com:9443"; // SPOT-MIRROR lane (verified working where fstream is suppressed)
 const SPOT_OPEN_GUARD_MS = 15_000; // handshake hang guard — recycle and let backoff retry
@@ -110,9 +111,15 @@ const REST_HOST = "https://fapi.binance.com";
 // 34-b ban-storm fix: REST weight slashed ~7.5× — 1 sym/5s ≈ 240 weight/min (was 3 syms/2s ≈ 1800)
 const REST_BATCH = 1;
 const REST_POLL_MS = 5_000;
-const REST_BAN_CAP_MS = 35 * 60_000; // cap a reported ban window at +35min
+// v4.9 TASK-49: the 35min display cap is GONE from the pause timer — the
+// resume rule is now ledger-driven: stay silent while ANY pool IP has a live
+// recorded ban (Binance's REAL end, sanity-capped 24h). Resuming on a cosmetic
+// cap poked still-banned IPs and re-escalated the expiry (11:58→12:34→13:09
+// spiral of 2026-10-19). The sanity cap exists only to bound parse artifacts.
+const REST_BAN_SANITY_MS = 2 * 3600_000; // single reported window never pauses beyond +2h
 const REST_SOFT_BAN_MS = 60_000; // 418/429 without a "banned until" body — back off anyway
 let restBannedUntil: number | null = null; // ms epoch — ALL REST polling paused until then
+let restProbeConsecutiveFails = 0; // v4.9 — probe streak, resets on a clean 2xx
 
 function stateFor(sym: string): SymbolState {
   let st = symbols.get(sym);
@@ -224,7 +231,7 @@ function parseBanUntil(bodyText: string): number | null {
 }
 
 function applyRestBan(untilMs: number): void {
-  const capped = Math.min(untilMs, Date.now() + REST_BAN_CAP_MS);
+  const capped = Math.min(untilMs, Date.now() + REST_BAN_SANITY_MS);
   if (restBannedUntil === null || capped > restBannedUntil) restBannedUntil = capped;
   console.error(`[tape] Binance REST ban — ALL REST polling paused until ${new Date(restBannedUntil).toISOString()}`);
 }
@@ -237,16 +244,31 @@ async function restPollSymbol(sym: string): Promise<void> {
   try {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), 6000);
-    const res = await fetch(url, { signal: ctrl.signal, cache: "no-store" });
+    // v5.0 connection-recycle: keep-alive pools ONE egress IP for the flow's
+    // life — a pinned-banned connection 418s forever (measured 2026-10-20).
+    // `Connection: close` = fresh NAT lottery draw per poll.
+    const res = await fetch(url, { signal: ctrl.signal, cache: "no-store", headers: { Connection: "close" } });
     clearTimeout(t);
     if (res.status === 418 || res.status === 429) {
       // ban-storm guard: honor "banned until <ms>" bodies, else back off softly
       let until: number | null = null;
+      let namedIp: string | null = null;
       try {
-        until = parseBanUntil(await res.text());
+        const body = await res.text();
+        until = parseBanUntil(body);
+        const m = /IP\(([\d.]+)\)\s*banned until (\d+)/i.exec(body);
+        if (m) {
+          namedIp = m[1]!;
+          const real = Number(m[2]);
+          if (Number.isFinite(real) && real > (until ?? 0)) until = real;
+        }
       } catch {
         /* body unreadable */
       }
+      // v4.9 TASK-49 — write-through: our 418 discovery goes to the SHARED
+      // ledger so the app gate, price-ws and future resumes all stay silent.
+      if (until) writeLedgerBan(namedIp, until);
+      restProbeConsecutiveFails++;
       applyRestBan(until ?? Date.now() + REST_SOFT_BAN_MS);
       restErrors++;
       return;
@@ -254,6 +276,7 @@ async function restPollSymbol(sym: string): Promise<void> {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const rows = (await res.json()) as RestTrade[];
     if (!Array.isArray(rows) || rows.length === 0) return;
+    restProbeConsecutiveFails = 0; // clean 2xx — the pool serves us again
     for (const r of rows) {
       record({ e: "aggTrade", s: sym, p: r.p, q: r.q, m: r.m, T: r.T }, r.a);
     }
@@ -265,8 +288,22 @@ async function restPollSymbol(sym: string): Promise<void> {
 function restPollTick(): void {
   if (restBannedUntil !== null) {
     if (Date.now() < restBannedUntil) return; // hard pause — zero REST weight while banned
+    // v4.9 TASK-49 — LEDGER-GATED RESUME: our own window elapsed, but the
+    // SHARED ledger may still carry a live ban another process discovered
+    // (real ends, not cosmetic caps). v1.1 scope split: resume defers ONLY
+    // while an UNKNOWN-SCOPE ("_pool") ban is live — one named pool member's
+    // ban no longer pauses this poll (majority-clean pool, 2026-10-20). Our
+    // own 418 discoveries still pause THIS lane via applyRestBan as before.
+    const poolBan = ledgerUnknownScopeBanUntil();
+    if (poolBan > Date.now()) {
+      if (restBannedUntil === null || poolBan > restBannedUntil) {
+        restBannedUntil = poolBan;
+        console.log(`[tape] shared ledger still bans fapi pool (unknown scope) until ${new Date(poolBan).toISOString()} — probe deferred`);
+      }
+      return;
+    }
     restBannedUntil = null;
-    console.log("[tape] REST ban window elapsed — polling resumed");
+    console.log("[tape] REST ban window elapsed — PROBE poll (full resume only on 2xx)");
   }
   const list = [...watch];
   if (list.length === 0) return;
@@ -638,6 +675,7 @@ Bun.serve({
         spotStreams: spotSubs.size,
         spotReconnects,
         restBannedUntil,
+        restProbeConsecutiveFails,
         symbols: symbols.size,
         trades,
         restPolls,

@@ -1,7 +1,7 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { Wallet, Gauge, Layers, PiggyBank, TrendingUp } from "lucide-react";
+import { Wallet, Gauge, Layers, PiggyBank, TrendingUp, Lock } from "lucide-react";
 import { BentoCard } from "@/components/shared/primitives";
 import { usePulse } from "@/hooks/usePulse";
 import { fmtUsd } from "@/lib/format";
@@ -56,7 +56,26 @@ export function AccountBar() {
           <div className={cn("mt-1 truncate font-terminal text-sm font-bold tabular-nums", acc.unrealizedPnl >= 0 ? "text-neon" : "text-danger-neon")}>
             {acc.unrealizedPnl >= 0 ? "+" : ""}{fmtUsd(acc.unrealizedPnl, false)}
           </div>
-          <div className="font-terminal text-[9px] tracking-[0.14em] text-ink-3">{acc.openPositions} POSITIONS</div>
+          <div className="font-terminal text-[9px] tracking-[0.14em] text-ink-3">
+            {acc.openPositions} POSITIONS
+            {/* v11.5 close-all breaker — the operator's book-level profit-lock:
+                Σ open NET pnl ≥ target → engine closes every position. */}
+            {acc.closeAll?.enabled && (
+              <span
+                title={`GLOBAL CLOSE-ALL ARMED — when Σ open NET pnl reaches +$${acc.closeAll.targetUsd.toFixed(2)}, the engine closes every position at the mark${acc.closeAll.triggerCount ? ` · triggered ×${acc.closeAll.triggerCount} (last ${acc.closeAll.lastTriggeredAt ? new Date(acc.closeAll.lastTriggeredAt).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }) : "—"})` : " · never fired yet"}`}
+                className={cn(
+                  "ml-1.5 inline-flex items-center gap-0.5 rounded px-1 py-px font-terminal text-[8px] font-bold",
+                  acc.unrealizedPnl >= acc.closeAll.targetUsd
+                    ? "bg-[rgba(0,255,157,0.14)] text-neon"
+                    : acc.unrealizedPnl >= acc.closeAll.targetUsd * 0.5
+                      ? "bg-[rgba(255,179,71,0.12)] text-amber-neon"
+                      : "bg-white/[0.04] text-ink-3",
+                )}
+              >
+                <Lock size={7} aria-hidden /> TP-ALL ${acc.closeAll.targetUsd.toFixed(0)}
+              </span>
+            )}
+          </div>
         </div>
 
         <div className="min-w-0">

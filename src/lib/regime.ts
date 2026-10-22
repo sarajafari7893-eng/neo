@@ -158,25 +158,84 @@ export function regimeRuling(regime: MarketRegime | null, direction: "LONG" | "S
     // strong chop) let the other strategies bleed freely. New guard-governed
     // ladder: L1 vetoes ALL breakout/momentum in ANY chop and taxes every
     // other strategy hard in strong chop; L2 vetoes everything in chop.
+    // (v9.4 amendment below: L2 is now the ASYMMETRIC activation — SHORT
+    // admitted through the tax ladder, LONG stays vetoed, ledger-cited.)
+    //
+    // ── v9.4 ASYMMETRIC CHOP LADDER (EQ-100 operator mandate 2026-10-13:
+    // «ممیزی کامل … رژیم CHOP را فعال کن») — the blanket L2 chop stop was an
+    // over-fit to the AGGREGATE ledger (CHOP cell n=2011 WR 34% net −$16.12).
+    // Deep direction-split forensics of the same ledger (EQ-100 audit,
+    // 1795 settled REGIME-CHOP rows): the damage is entirely LONG-side while
+    // the SHORT book EARNED in every window, including under the CURRENT
+    // guard stack (shortGuard=1 HTF-align + QUAD-SHORT + STRATW, FLAT-10):
+    //   LONG  book: −$123.69 all-time (n=1031) · −$111.22 Oct · −$108.09 W41+42
+    //   SHORT book:  +$37.42 all-time (n=621)  ·  +$37.67 Oct ·  +$40.49 W41+42
+    //     AI-SWING|SHORT  +$36.89 W41+42 (n=105, WR 41%)
+    //     MEAN-REVERT|SHORT +$12.04 W41+42 (n=51, WR 56.9% — doctrinal rotation fit)
+    //   Structural driver: 86% of CHOP rows never touch TP1 (1537/1795
+    //   reachedTp=0) — LONGs round-trip via EXPIRED fees + deep −1R stops,
+    //   while counter-rotation shorts monetize the decay.
+    // L2 is therefore RE-OPENED asymmetrically: LONG vetoed (evidence-ledger),
+    // SHORT admitted through the L1 tax ladder (strong chop ×0.7/+10thr,
+    // moderate ×0.85/+6thr) — FLAT-10 keeps every margin at exactly $10, the
+    // size multipliers remain TAG-ONLY audit metadata. BREAKOUT/MOMENTUM keep
+    // their unconditional hard veto (0/9, −$2.58 in chop).
     const strongChop = regime.strength >= 0.6;
-    if (strategy === "BREAKOUT" || strategy === "MOMENTUM") {
+    // ── v11.6 CHOP FINAL ACTIVATION (EQ-100 re-audit 2026-10-14, full 2411-row
+    // ledger restored from GitHub d7cef8d) ── the asymmetric verdict is
+    // CONFIRMED on the complete book:
+    //   CHOP all-time: LONG −$959.39 (n=1100, WR 33.3%) · SHORT +$1171.84
+    //   (n=812, WR 36.3%). Anatomy: TP1-touch LONG 18.7% vs SHORT 20.3%;
+    //   expired-drift LONG −2.95% vs SHORT +0.70%; avgLoss −9.61 vs avgWin
+    //   +18.5 — rotational decay bleeds longs and monetizes shorts.
+    //   Recent-14d CHOP SHORT cells: AI-SWING +$657.31 (n=266, WR 41.4%) ·
+    //   MEAN-REVERT +$416.88 (n=141, WR 43.3%) — the admitted SHORT tax ladder
+    //   IS the data-driven CHOP activation and stays live (post-ladder cohort
+    //   Oct-13: 5/5 SHORT, 3 wins, +$82.64; post-recovery signals #2410/2411
+    //   deployed SHORT in CHOP).
+    // NEW CELL FLIP (v11.6): AI-SCALP|CHOP is deep-negative BOTH sides in the
+    // recent window (14d: LONG −$245.63 n=146 WR 24% · SHORT −$169.39 n=102
+    // WR 19.6%; all-time it was +$31.48 WR 33.3% — the cell decayed through
+    // it) and the L1 tax does not save it. AI-SCALP therefore joins
+    // BREAKOUT/MOMENTUM in the unconditional CHOP hard-veto. This is the
+    // STRUCTURAL half of the fix; the TEMPORAL half is the EQ-97 STRAT-PAUSE
+    // switch engaged on AI-SCALP book-wide (non-CHOP cells also bleed) — the
+    // veto survives any pause-lift until the cell re-earns its way out.
+    if (strategy === "BREAKOUT" || strategy === "MOMENTUM" || strategy === "AI-SCALP") {
       // v6.3 evidence: BREAKOUT in chop bled −$28 at WR 28% — a soft −7 penalty
       // did not keep the engine out. v9.3: guard L1+ hard-vetoes ANY chop
       // (strong or moderate); guard 0 still vetoes the strong-chop extreme.
+      // v9.4 ledger re-check: 9 settled chop rows, 0 wins, −$2.58 — veto stands.
+      // v11.6: AI-SCALP joins (ledger: scalp decay −$169/−$245 recent-14d, WR
+      // 19.6%/24% — above).
+      const vetoFamily = strategy === "AI-SCALP"
+        ? "scalp VETOED in chop (v11.6 cell-flip: AI-SCALP −$169.39 SHORT / −$245.63 LONG recent-14d, WR 19.6%/24% — tax ladder cannot save a decayed cell)"
+        : "breakout/momentum VETOED in chop";
       if (guard >= 1 || strongChop) {
-        return { ok: false, reason: `CHOP (${regime.note}) — breakout/momentum VETOED in chop (guard L${guard}, strength ${regime.strength.toFixed(2)}${strongChop ? ", strong" : ""}; ledger 197/218 closes CHOP −$29.98)`, sizeMult: 0, slMult: 1, scoreAdj: 0, thrAdj: 0, tag: "REGIME-CHOP" };
+        return { ok: false, reason: `CHOP (${regime.note}) — ${vetoFamily} (guard L${guard}, strength ${regime.strength.toFixed(2)}${strongChop ? ", strong" : ""}; ledger 197/218 closes CHOP −$29.98)`, sizeMult: 0, slMult: 1, scoreAdj: 0, thrAdj: 0, tag: "REGIME-CHOP" };
       }
-      return { ok: true, sizeMult: 0.7, slMult: 1, scoreAdj: -7, thrAdj: 8, reason: `CHOP (${regime.note}) — breakout/momentum decays, +8 threshold + size cut ×0.7 (guard L0 moderate-chop residual)`, tag: "REGIME-CHOP" };
+      return { ok: true, sizeMult: 0.7, slMult: 1, scoreAdj: -7, thrAdj: 8, reason: `CHOP (${regime.note}) — ${strategy === "AI-SCALP" ? "scalp" : "breakout/momentum"} decays, +8 threshold + size cut ×0.7 (guard L0 moderate-chop residual)`, tag: "REGIME-CHOP" };
     }
-    // v9.3: strong chop taxes EVERY strategy — mean-revert/scalp/swing included
-    // (their closes dominate the −$29.98 CHOP ledger). Guard L2 = full stop.
-    if (guard >= 2) {
-      return { ok: false, reason: `CHOP (${regime.note}) — ALL entries vetoed in chop at guard L2 (rotational decay, strength ${regime.strength.toFixed(2)})`, sizeMult: 0, slMult: 1, scoreAdj: 0, thrAdj: 0, tag: "REGIME-CHOP" };
+    // v9.4 ASYMMETRIC GUARD L1+ — the EQ-100 activation. NOTE: the asymmetry
+    // must hold at L1 TOO, not only at L2: the W41+42 LONG bleed (−$108.09)
+    // accrued UNDER L1-style taxation — the tax does not save the LONG book.
+    // Live correction: the AI governor auto-softened L2→L1 minutes after the
+    // v9.4 deploy (its knob, legal) which would have re-opened the condemned
+    // cohort — so the LONG veto is pinned to guard ≥ 1; guard 0 (explicit
+    // legacy softening) is the only path that re-opens CHOP LONGs.
+    if (guard >= 1) {
+      if (long) {
+        return { ok: false, reason: `CHOP (${regime.note}) — LONG vetoed in chop at guard L${guard} (EQ-100 ledger: LONG −$111.22 Oct / −$108.09 W41+42, TP1-touch only 14% — rotational decay, strength ${regime.strength.toFixed(2)})`, sizeMult: 0, slMult: 1, scoreAdj: 0, thrAdj: 0, tag: "REGIME-CHOP" };
+      }
+      return strongChop
+        ? { ok: true, sizeMult: 0.7, slMult: 1, scoreAdj: -6, thrAdj: 10, reason: `CHOP strong (${regime.note}) — SHORT admitted at guard L${guard} (EQ-100: CHOP SHORT +$40.49 W41+42, MR|S WR 56.9%): +10 threshold, conviction −6, size ×0.7`, tag: "REGIME-CHOP" }
+        : { ok: true, sizeMult: 0.85, slMult: 1, scoreAdj: -3, thrAdj: 6, reason: `CHOP (${regime.note}) — SHORT admitted at guard L${guard} (EQ-100: CHOP SHORT +$40.49 W41+42, AI-SWING|S +$36.89 WR41%): +6 threshold, conviction −3, size ×0.85`, tag: "REGIME-CHOP" };
     }
+    // guard 0 — legacy soft ladder (explicit operator softening only)
     if (strongChop) {
       return { ok: true, sizeMult: 0.7, slMult: 1, scoreAdj: -6, thrAdj: 10, reason: `CHOP strong (${regime.note}) — rotational decay taxes all strategies: +10 threshold, size ×0.7, conviction −6`, tag: "REGIME-CHOP" };
     }
-    return { ok: true, sizeMult: 0.85, slMult: 1, scoreAdj: guard >= 1 ? -3 : 0, thrAdj: guard >= 1 ? 6 : 2, reason: `rotational regime —${guard >= 1 ? " hardened +6 threshold / size ×0.85 (guard L1)" : " mean-revert favored (+2 threshold)"}`, tag: "REGIME-CHOP" };
+    return { ok: true, sizeMult: 0.85, slMult: 1, scoreAdj: 0, thrAdj: 2, reason: `rotational regime — mean-revert favored (+2 threshold) (guard L0 legacy soft path)`, tag: "REGIME-CHOP" };
   }
   // VOLATILE — v6.3: expansion regimes tax EVERY entry (unpredictable wick risk);
   // at guard L2 mean-revert is also vetoed (catching knives in vol spikes).

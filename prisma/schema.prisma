@@ -47,6 +47,8 @@ model Signal {
   afterlife     String? // EXPIRED follow-up state: TRACKING | TP1_HIT | TP2_HIT | TP3_HIT | SL_HIT | FLAT
   afterlifeAt   DateTime? // when the afterlife outcome was confirmed
   qualityFlag   String? // v10.18 ledger integrity — DEGEN_STOP | INVERTED_STOP | RESTORE_CATCHUP; non-null rows are EXCLUDED from headline analytics (clean-ledger doctrine)
+  beBankedMovePct Float? // v11.2 BE-BANK — UNLEVERED price move % captured at the moment the mid-ladder BE arm fired and a partial tranche was banked (null = never banked — legacy rows and TP1-first rows)
+  beBankedFrac    Float? // v11.2 BE-BANK — position fraction banked at the arm mark (pairs with beBankedMovePct; the ladder's remaining weights scale by 1−frac so every tranche set sums to exactly 1)
   maxPostPnlPercent Float @default(0) // best levered NET pnl AFTER expiry (post-expiry MFE)
   ttlMinutes    Int
   ttlExtensions Int       @default(0) // dynamic expiry gate — how many TTL extensions were granted (v6.1)
@@ -309,4 +311,63 @@ model PumpTrack {
   @@index([outcome])
   @@index([phase])
   @@index([signalId]) // v10.16 audit fix — track→signal linkage
+}
+
+// ── v11.0 STABLECOIN FLOW FEED (operator mandate 2026-09-30: «تمام فازها را
+// کامل و مهندسی اجرا کن») ──
+// Family-E substrate — on-chain stablecoin liquidity layer. Source: DefiLlama
+// free API (no key, no AI — IRAN-VPS compatible), collected by the
+// stable-feed mini-service (:3017) into .data/stable-feed/. The APP-side
+// persist hook (stableflow.maybePersistStableFlow, 15min throttle) mirrors
+// LIVE rows here via Prisma (doctrine: services never write the DB; Prisma
+// owns writes). BACKFILL daily history (~9y) stays in
+// .data/stable-feed/backfill/*.json as the backtest source of truth.
+// Rows: hourly SNAPSHOT per asset + TOTAL (with regime), MINTBURN events
+// (|Δ24h| ≥ $150M), DEPEG events (|pegDev| ≥ 0.5%), REGIME flips.
+// Consumers: DEPEG-MUTE deploy gate (enforced), STABLE-REGIME shadow gate,
+// shadow-veto family-E telemetry, Persian TG digest line, /api/stableflow.
+model StableFlowEvent {
+  id          String   @id @default(cuid())
+  ts          DateTime
+  source      String   @default("LIVE") // LIVE | BACKFILL
+  kind        String // SNAPSHOT | MINTBURN | DEPEG | REGIME
+  asset       String // USDT | USDC | DAI | USDE | USDS | TOTAL
+  mcapUsd     Float?
+  delta1hUsd  Float?
+  delta24hUsd Float?
+  delta7dUsd  Float?
+  pegDevPct   Float? // % deviation from $1 (positive = above peg)
+  regime      String? // RISK-ON | NEUTRAL | RISK-OFF (TOTAL SNAPSHOT rows)
+  note        String?
+
+  @@index([asset, ts])
+  @@index([kind, ts])
+}
+
+// ── Task 79 GOLDEN-LANE FILL LEDGER (2026-10-05 operator mandate) ──────────
+// Doctrine item ② from the Task-78 missing-data audit: "fill/slippage ledger
+// (intended vs filled + latency) — deflated edge $0.067/trade; unmeasured
+// slippage could eat 15-75% of it. Cheapest: two extra columns on existing
+// records." One row per deployed signal, written at deploy time (engine.ts
+// deploySignal, after the create): intended ref price (chase-gate anchor —
+// the detection instant for radar cards via track.anchorPrice, scan-time tick
+// for scans), the actual entry, signed adverse slippage in bps, and (radar
+// path) detection→create latency. Backfill: radar-linked history only
+// (anchorPrice + track.detectedAt are reconstructable; scanPrice is not).
+model FillLedger {
+  id            String   @id @default(cuid())
+  signalId      String   @unique
+  symbol        String
+  engine        String
+  direction     String
+  refPrice      Float // detection/scan reference the chase gate anchored on
+  entryPrice    Float // actual deploy price
+  slipBps       Float // adverse slippage vs ref, direction-adjusted (positive = paid worse)
+  detectedAt    DateTime? // radar track.detectedAt when known (radar spawn path)
+  latencyMs     Int? // detectedAt → createdAt (radar path only)
+  refSource     String   @default("scan") // radar-anchor | scan | none
+  createdAt     DateTime @default(now())
+
+  @@index([symbol, createdAt])
+  @@index([engine, createdAt])
 }

@@ -21,6 +21,13 @@ export interface GateSettings {
   ttlNearTpPct: number; // 0.3–5, default 1.5 — unlevered % band to next TP that qualifies for extension
   slAtrMult: number; // 0.8–2.5, default 1.5 — v6.3 stop distance = slAtrMult × ATR% (× regime slMult)
   rrScale: number; // 0.75–1.35, default 1.0 — v6.3 scales the dynamic R:R ladder (tp2/tp3 stretch)
+  tp1RMult: number; // 0.3–1, default 0.55 — v12.6 TP1 MFE-SCALE RE-RANK (operator mandate 2026-10-20,
+  // OP-AUDIT-TP-1020 proposal ① approved): TP1 was hard-locked at 1R while the ledger's
+  // realized MFE median sits at 0.37–0.52R — the first bank lived beyond the typical
+  // excursion (only 11% of expired rows ever reached ≥80% of the TP1 path) and the
+  // TP-proven rate collapsed. TP1 = tp1RMult × R (R = SL distance); tp2/tp3/SL geometry
+  // untouched; the decisive-filter/vol-barrier first-decision projections track the
+  // SAME distance (fdMult) so the gates stay coherent with the ladder. 1.0 = legacy 1R.
   regimeGuard: number; // 0–2, default 1 — v6.3 regime-filter hardening (0 soft penalties · 1 chop veto · 2 +BTC-spillover & vol MR veto)
   maxActive: number; // 2–8, default 5 — v6.3 position capacity: max concurrent open signals
   riskPerTrade: number; // 0.5–1.5, default 1.0 — v6.3 margin sizing scale on confidence-sized margin
@@ -52,6 +59,27 @@ export interface GateSettings {
   // Leverage-invariant (the v6.5 levered beTrailPct misses low-leverage spikes
   // between ticks). Audit: 8 winners (MFE ≥ +8% levered) closed negative, ≈$4.73
   // give-back. 0 = off (levered beTrailPct still applies).
+  // v11.2 REPURPOSED as the WIDE-STOP CAP: the structural R-arm (below) owns the
+  // primary trigger; this absolute-price ceiling still catches very wide-stop
+  // trades whose 0.5R distance would exceed it.
+  beArmRMult: number; // 0–1, default 0.5 — v11.2 STRUCTURAL R-ARM (operator mandate 2026-10-07
+  // «هر سه مورد را کامل و مهندسی پیاده کن» — proposal ② approved verbatim): the
+  // mid-ladder breakeven arm now fires on the UNLEVERED PRICE DISTANCE measured
+  // in R of the trade's OWN risk geometry — movePct ≥ beArmRMult × slDistPct —
+  // replacing the fixed +10% NET anchor whose premature, leverage-skewed arms
+  // round-tripped 46% of the day's peak MFE back to breakeven (SENTINEL ledger
+  // forensics 2026-10-07: 36 rows touched +10%, only 12 kept it; ≥15× rows kept
+  // 17% vs 58% for <15×). Same structural distance for every leverage tier.
+  // 0 = off (legacy NET/absolute arms still apply).
+  beBankFrac: number; // 0–0.5, default 0.25 — v11.2 BE-BANK (operator mandate 2026-10-07 —
+  // proposal ①): when the arm fires on an UNBANKED signal (reachedTp=0), a
+  // partial tranche of the position is BANKED at the arm mark (recorded as
+  // beBankedMovePct/beBankedFrac) and only the remainder rides the risk-free
+  // runner. Evidence: 16 BE-class exits settled at −1.2..−1.8% (entry minus
+  // fees) on 2026-10-07 alone — the arm protected capital but harvested zero.
+  // The ladder's remaining weights (tp1/tp2/runner) scale by 1−frac so every
+  // tranche set still sums to exactly 1 (pnlPercent stays margin-relative).
+  // 0 = arm without banking (legacy v6.5 behavior).
   earlyExitGuard: number; // 0–1, default 1 — v8.4 R2/R7 EARLY TIME-EXIT master switch.
   earlyExitFrac: number; // 0.3–0.9, default 0.5 — fraction of TTL after which an unbanked trade
   // becomes eligible for the early time-exit (below).
@@ -147,6 +175,7 @@ const CLAMPS: Record<keyof GateSettings, [number, number, number]> = {
   ttlNearTpPct: [0.3, 5, 1.5],
   slAtrMult: [0.8, 2.5, 1.5],
   rrScale: [0.75, 1.35, 1.0],
+  tp1RMult: [0.3, 1, 0.55],
   regimeGuard: [0, 2, 1],
   maxActive: [2, 8, 5],
   riskPerTrade: [0.5, 1.5, 1.0],
@@ -158,6 +187,8 @@ const CLAMPS: Record<keyof GateSettings, [number, number, number]> = {
   leveredRiskCap: [10, 100, 25],
   shortGuard: [0, 2, 2],
   beArmMovePct: [0, 10, 1.5],
+  beArmRMult: [0, 1, 0.5],
+  beBankFrac: [0, 0.5, 0.25],
   earlyExitGuard: [0, 1, 1],
   earlyExitFrac: [0.3, 0.9, 0.5],
   earlyExitR: [0, 1, 0.45],
@@ -191,6 +222,7 @@ function clampAll(raw: Partial<GateSettings>): GateSettings {
     ttlNearTpPct: Math.min(CLAMPS.ttlNearTpPct[1], Math.max(CLAMPS.ttlNearTpPct[0], raw.ttlNearTpPct ?? CLAMPS.ttlNearTpPct[2])),
     slAtrMult: Math.min(CLAMPS.slAtrMult[1], Math.max(CLAMPS.slAtrMult[0], raw.slAtrMult ?? CLAMPS.slAtrMult[2])),
     rrScale: Math.min(CLAMPS.rrScale[1], Math.max(CLAMPS.rrScale[0], raw.rrScale ?? CLAMPS.rrScale[2])),
+    tp1RMult: Math.min(CLAMPS.tp1RMult[1], Math.max(CLAMPS.tp1RMult[0], raw.tp1RMult ?? CLAMPS.tp1RMult[2])),
     regimeGuard: Math.min(CLAMPS.regimeGuard[1], Math.max(CLAMPS.regimeGuard[0], Math.round(raw.regimeGuard ?? CLAMPS.regimeGuard[2]))),
     maxActive: Math.min(CLAMPS.maxActive[1], Math.max(CLAMPS.maxActive[0], Math.round(raw.maxActive ?? CLAMPS.maxActive[2]))),
     riskPerTrade: Math.min(CLAMPS.riskPerTrade[1], Math.max(CLAMPS.riskPerTrade[0], raw.riskPerTrade ?? CLAMPS.riskPerTrade[2])),
@@ -202,6 +234,8 @@ function clampAll(raw: Partial<GateSettings>): GateSettings {
     leveredRiskCap: Math.min(CLAMPS.leveredRiskCap[1], Math.max(CLAMPS.leveredRiskCap[0], raw.leveredRiskCap ?? CLAMPS.leveredRiskCap[2])),
     shortGuard: Math.min(CLAMPS.shortGuard[1], Math.max(CLAMPS.shortGuard[0], Math.round(raw.shortGuard ?? CLAMPS.shortGuard[2]))),
     beArmMovePct: Math.min(CLAMPS.beArmMovePct[1], Math.max(CLAMPS.beArmMovePct[0], raw.beArmMovePct ?? CLAMPS.beArmMovePct[2])),
+    beArmRMult: Math.min(CLAMPS.beArmRMult[1], Math.max(CLAMPS.beArmRMult[0], raw.beArmRMult ?? CLAMPS.beArmRMult[2])),
+    beBankFrac: Math.min(CLAMPS.beBankFrac[1], Math.max(CLAMPS.beBankFrac[0], raw.beBankFrac ?? CLAMPS.beBankFrac[2])),
     earlyExitGuard: Math.min(CLAMPS.earlyExitGuard[1], Math.max(CLAMPS.earlyExitGuard[0], Math.round(raw.earlyExitGuard ?? CLAMPS.earlyExitGuard[2]))),
     earlyExitFrac: Math.min(CLAMPS.earlyExitFrac[1], Math.max(CLAMPS.earlyExitFrac[0], raw.earlyExitFrac ?? CLAMPS.earlyExitFrac[2])),
     earlyExitR: Math.min(CLAMPS.earlyExitR[1], Math.max(CLAMPS.earlyExitR[0], raw.earlyExitR ?? CLAMPS.earlyExitR[2])),
@@ -247,13 +281,14 @@ export async function putGateSettings(next: Partial<GateSettings>): Promise<Gate
 
 export function describeGate(g: GateSettings): string {
   const ttlGate = g.ttlExtendMax > 0 ? `+${g.ttlExtendMinutes}m ×≤${g.ttlExtendMax} @${g.ttlNearTpPct}%` : "OFF";
-  const beTrail = g.beTrailPct > 0 ? `+${g.beTrailPct}%NET` : "OFF";
+  const beTrail = g.beArmRMult > 0 ? `R×${g.beArmRMult.toFixed(2)}${g.beTrailPct > 0 ? `+${g.beTrailPct}%NET` : ""}+${g.beArmMovePct}%px` : g.beTrailPct > 0 ? `+${g.beTrailPct}%NET` : "OFF";
+  const beBank = g.beBankFrac > 0 ? `BANK ${Math.round(g.beBankFrac * 100)}%` : "NO-BANK";
   const boGuard = g.breakoutGuard === 0 ? "OFF" : g.breakoutGuard === 1 ? "HALF-SIZE" : "VETO";
   const sg = g.shortGuard === 0 ? "OFF" : g.shortGuard === 1 ? "HTF-ALIGN" : "VETO";
   const early = g.earlyExitGuard ? `${Math.round(g.earlyExitFrac * 100)}%TTL@${g.earlyExitR.toFixed(2)}R` : "OFF";
   const dec = g.decisiveFilter === 0 ? "OFF" : g.decisiveFilter === 1 ? "ON×0.85" : "STRICT";
   const vb = g.volBarrier ? `ON×${g.volBarrierMult.toFixed(2)}@≤${g.volBarrierCapMin}m${g.volBarrierAdaptive ? `-ADAPTIVE(→${3 * g.volBarrierCapMin}m@p0)` : ""}` : "OFF";
-  return `MIN_SCORE ${g.minScore}${g.minScorePinned ? " [PINNED]" : ""}(+dynamic thrAdj) · DECISIVE ${dec}@ER≥${g.decisiveErMin.toFixed(2)} · VOL-BARRIER ${vb} · FLOW-SHORTLIST ${g.flowShortlist} · FLOW-VETO ≤−${g.flowVetoScore} · UNIVERSE ${g.universeSize} · TTL-GATE ${ttlGate} · SL ${g.slAtrMult}×ATR · RR×${g.rrScale.toFixed(2)} · REGIME-GUARD L${g.regimeGuard} · CAP ${g.maxActive} · RISK ×${g.riskPerTrade.toFixed(2)} · BE-TRAIL ${beTrail}+${g.beArmMovePct}%px · SHORT-GUARD ${sg} · EARLY-EXIT ${early} · R-SHADOW ${g.researchShadow ? "ON" : "OFF"} · G4-PROBE ${g.probeDeploys ? "ON@2h×0.5" : "OFF"} · SHORT-SIZE ×${g.shortSizeMult.toFixed(2)} · BREAKOUT-GUARD ${boGuard} · ONSET-RETEST ${g.onsetRetestGuard ? "ON@30%" : "OFF"} · CHASE-ADJ +${g.chaseThrAdj} · RISK-CAP ${g.leveredRiskCap}% · DISLOCATION-GATE ${g.dislocationGate ? `ON@${g.dislocationWarnBps}/${g.dislocationSkipBps}bps` : "OFF"}`;
+  return `MIN_SCORE ${g.minScore}${g.minScorePinned ? " [PINNED]" : ""}(+dynamic thrAdj) · DECISIVE ${dec}@ER≥${g.decisiveErMin.toFixed(2)} · VOL-BARRIER ${vb} · FLOW-SHORTLIST ${g.flowShortlist} · FLOW-VETO ≤−${g.flowVetoScore} · UNIVERSE ${g.universeSize} · TTL-GATE ${ttlGate} · SL ${g.slAtrMult}×ATR · RR×${g.rrScale.toFixed(2)} · TP1 ${g.tp1RMult.toFixed(2)}R · REGIME-GUARD L${g.regimeGuard} · CAP ${g.maxActive} · RISK ×${g.riskPerTrade.toFixed(2)} · BE-TRAIL ${beTrail}·${beBank} · SHORT-GUARD ${sg} · EARLY-EXIT ${early} · R-SHADOW ${g.researchShadow ? "ON" : "OFF"} · G4-PROBE ${g.probeDeploys ? "ON@2h×0.5" : "OFF"} · SHORT-SIZE ×${g.shortSizeMult.toFixed(2)} · BREAKOUT-GUARD ${boGuard} · ONSET-RETEST ${g.onsetRetestGuard ? "ON@30%·CHASE+FADE" : "OFF"} · CHASE-ADJ +${g.chaseThrAdj} · RISK-CAP ${g.leveredRiskCap}% · DISLOCATION-GATE ${g.dislocationGate ? `ON@${g.dislocationWarnBps}/${g.dislocationSkipBps}bps` : "OFF"}`;
 }
 
 /** v6.3: the clamp table is part of the governor's grounding — the LLM must

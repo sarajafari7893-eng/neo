@@ -21,6 +21,7 @@
 // zero extra kline fetches on the hot path.
 
 import { gateFetch } from "./fapi-gate";
+import { spotMirrorKlines, bybitKlines } from "./flow-bridge"; // v12.3 TASK-52 — kline ladders
 import { peekOiFund } from "./oi-funding";
 
 export interface LiqCluster {
@@ -66,12 +67,24 @@ function evictOldest(): void {
 
 interface K { openTime: number; open: number; high: number; low: number; close: number; volume: number }
 
-// v10.24 Task 34-a: klines fetch goes through the central fapi-gate
-// (telemetry lane — the heatmap degrades honestly to null when shed).
+// v10.24 Task 34-a: klines fetch went through the central fapi-gate.
+// v12.3 TASK-52: SPOT-MIRROR is rung 1 (separate rate/ban pool — heat mass is
+// volume×price math, venue-agnostic); fapi gate is rung 2; BYBIT linear rung 3.
+// The heatmap still degrades honestly to null when ALL rungs fail.
 async function fetchKlines15m(symbol: string): Promise<K[] | null> {
-  const raw = await gateFetch<(string | number)[][]>(`/fapi/v1/klines?symbol=${symbol}&interval=15m&limit=96`, { priority: "telemetry", timeoutMs: 6500 });
-  if (!raw) return null;
-  return raw.map((k) => ({ openTime: Number(k[0]), open: Number(k[1]), high: Number(k[2]), low: Number(k[3]), close: Number(k[4]), volume: Number(k[5]) }));
+  const spot = await spotMirrorKlines(symbol, "15m", 96).catch(() => null);
+  if (spot && spot.length > 0) {
+    return spot.map((k) => ({ openTime: k.openTime, open: k.open, high: k.high, low: k.low, close: k.close, volume: k.volume }));
+  }
+  const raw = await gateFetch<(string | number)[][]>(`/fapi/v1/klines?symbol=${symbol}&interval=15m&limit=96`, { priority: "telemetry", timeoutMs: 6500 }).catch(() => null);
+  if (raw && raw.length > 0) {
+    return raw.map((k) => ({ openTime: Number(k[0]), open: Number(k[1]), high: Number(k[2]), low: Number(k[3]), close: Number(k[4]), volume: Number(k[5]) }));
+  }
+  const byb = await bybitKlines(symbol, "15m", 96).catch(() => null);
+  if (byb && byb.length > 0) {
+    return byb.map((k) => ({ openTime: k.openTime, open: k.open, high: k.high, low: k.low, close: k.close, volume: k.volume }));
+  }
+  return null;
 }
 
 /** Compute the estimated heatmap for one symbol. Returns null when inputs are missing. */

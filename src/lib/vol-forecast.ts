@@ -22,6 +22,7 @@
 
 import { db } from "@/lib/db";
 import { gateFetch } from "./fapi-gate";
+import { spotMirrorKlines, bybitKlines } from "./flow-bridge"; // v12.3 TASK-52 — kline ladders
 
 export type VolRegime = "LOW" | "NORMAL" | "ELEVATED" | "EXTREME";
 
@@ -90,10 +91,23 @@ export async function getKlines15m(symbol: string): Promise<K15[] | null> {
   const p = (async (): Promise<K15[] | null> => {
     try {
       // v10.24 Task 34-a: klines through the central fapi-gate (telemetry lane
-      // — sheddable; the deploy path's volGeometry(null) is fail-open NORMAL).
-      const raw = await gateFetch<(string | number)[][]>(`/fapi/v1/klines?symbol=${symbol}&interval=15m&limit=97`, { priority: "telemetry", timeoutMs: 6500 });
-      if (!raw) return null;
-      const candles = raw.map((k) => ({ openTime: Number(k[0]), open: Number(k[1]), high: Number(k[2]), low: Number(k[3]), close: Number(k[4]) }));
+      // — the deploy path's volGeometry(null) is fail-open NORMAL).
+      // v12.3 TASK-52: SPOT-MIRROR is rung 1 (separate rate/ban pool — the
+      // vol-geometry is price-path math, venue-agnostic at bps level); fapi
+      // gate is rung 2; BYBIT linear is rung 3.
+      const spot = await spotMirrorKlines(symbol, "15m", 97);
+      let candles: K15[] | null = null;
+      if (spot && spot.length > 0) {
+        candles = spot.map((k) => ({ openTime: k.openTime, open: k.open, high: k.high, low: k.low, close: k.close }));
+      } else {
+        const raw = await gateFetch<(string | number)[][]>(`/fapi/v1/klines?symbol=${symbol}&interval=15m&limit=97`, { priority: "telemetry", timeoutMs: 6500 });
+        candles = raw ? raw.map((k) => ({ openTime: Number(k[0]), open: Number(k[1]), high: Number(k[2]), low: Number(k[3]), close: Number(k[4]) })) : null;
+      }
+      if (!candles || candles.length === 0) {
+        const byb = await bybitKlines(symbol, "15m", 97);
+        candles = byb && byb.length > 0 ? byb.map((k) => ({ openTime: k.openTime, open: k.open, high: k.high, low: k.low, close: k.close })) : null;
+      }
+      if (!candles) return null;
       k15Cache.set(symbol, { at: Date.now(), candles });
       if (k15Cache.size > 64) {
         const oldest = [...k15Cache.entries()].sort((a, b) => a[1].at - b[1].at)[0];

@@ -40,6 +40,20 @@ export const RAWCAL_TARGET = 100; // the R6 calibration-lift bar (calibration.ts
 // loosening honesty rails (open-cap + scan rails unchanged).
 const DEFAULT_SPACING_MIN = 10;
 const DEFAULT_MAX_OPEN = 8;
+// EQ-99 (operator: «ماژول RAW-CAL چرا بطور دستی فعال نمی شود؟» 2026-10-13):
+// a POST-graduation manual re-arm used to be AUTO-LIFTED within 10 ticks —
+// the tick's graduation tripwire (settledN ≥ target + arms complete) has no
+// concept of "the operator deliberately re-armed". Fix: a manual re-arm after
+// graduation is a NEW CAPTURE CAMPAIGN — the book target moves ahead of the
+// settled count by this batch so the tripwire stays dormant until the fresh
+// evidence settles. 300 = the R6 refresh basis (calibration.ts recalibration
+// window); operator-overridable via the API (clamped 50..2000).
+const MANUAL_CAPTURE_BATCH_DEFAULT = 300;
+export function clampManualBatch(v: unknown): number {
+  const n = typeof v === "number" ? Math.floor(v) : NaN;
+  if (!Number.isFinite(n)) return MANUAL_CAPTURE_BATCH_DEFAULT;
+  return Math.min(2000, Math.max(50, n));
+}
 
 export interface RawCalState {
   armed: boolean;
@@ -56,6 +70,7 @@ export interface RawCalState {
   maxOpen: number;
   autoLiftAt: string | null; // set when the mode auto-canceled itself
   retargetNote?: string; // v10.6.1+ — EVID-BUDGET re-arm narrative (E-20260919 pattern); extra JSON field, survives state spread
+  manualCampaign?: boolean; // EQ-99 — this arm-run is an explicit operator re-campaign after graduation
 }
 
 const DEFAULT_STATE: RawCalState = {
@@ -78,7 +93,19 @@ export async function getRawCalState(): Promise<RawCalState> {
   try {
     const row = await db.engineSetting.findUnique({ where: { key: RAWCAL_KEY } });
     if (!row) return { ...DEFAULT_STATE };
-    return { ...DEFAULT_STATE, ...(JSON.parse(row.value) as Partial<RawCalState>) };
+    const raw = { ...DEFAULT_STATE, ...(JSON.parse(row.value) as Partial<RawCalState>) };
+    // TASK-49 NAN-PROOF — a historic write escaped `target: settledN + NaN` into
+    // JSON (NaN serializes to null), which made `settledN >= null` ALWAYS true
+    // and pinned the arms-coupled extension branch on every pass. Sanitize on
+    // read: any non-finite spacing/maxOpen/target heals to a sane value here,
+    // so the loop can never be wedged by one bad write again.
+    const num = (v: unknown, dflt: number): number => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : dflt);
+    return {
+      ...raw,
+      spacingMin: num(raw.spacingMin, DEFAULT_SPACING_MIN),
+      maxOpen: num(raw.maxOpen, DEFAULT_MAX_OPEN),
+      target: num(raw.target, RAWCAL_TARGET),
+    };
   } catch {
     return { ...DEFAULT_STATE };
   }
@@ -118,9 +145,20 @@ export async function epoch2SettledCount(): Promise<number> {
   });
 }
 
-export async function armRawCal(by = "OPERATOR"): Promise<RawCalState> {
+export async function armRawCal(by = "OPERATOR", batch?: number): Promise<RawCalState> {
   const cur = await getRawCalState();
   if (cur.armed) return cur;
+  const settledN = await epoch2SettledCount();
+  // EQ-99 POST-GRADUATION RE-ARM CAMPAIGN — if the graduation tripwire condition
+  // already holds (settledN ≥ target && arms complete), a plain re-arm would be
+  // auto-lifted by the very next tick (line-proven 2026-10-13: settled 2376 ≥
+  // target 2348 → tick calls disarmRawCal(auto) unconditionally). An operator
+  // re-arm AFTER graduation is therefore a NEW CAPTURE CAMPAIGN: the target
+  // moves settledN+batch so the auto-lift fires only when the FRESH batch has
+  // settled — the operator's command sticks and the lift still re-runs the
+  // R6 calibration over the grown book, unchanged.
+  const campaign = settledN >= cur.target;
+  const campaignTarget = campaign ? settledN + clampManualBatch(batch) : cur.target;
   const state: RawCalState = {
     ...cur,
     armed: true,
@@ -130,21 +168,27 @@ export async function armRawCal(by = "OPERATOR"): Promise<RawCalState> {
     disarmedAt: null,
     issued: 0,
     autoLiftAt: null,
+    ...(campaign
+      ? {
+          target: campaignTarget,
+          manualCampaign: true,
+          retargetNote: `EQ-99 OPERATOR RE-ARM CAMPAIGN (${by}): graduation condition already held (${settledN} settled ≥ ${cur.target}) — a plain re-arm would be auto-lifted within 10 ticks. Book target moved +${campaignTarget - settledN} → ${campaignTarget} so this campaign captures FRESH evidence and the organic auto-lift + R6 recalibration fires at the new bar`,
+        }
+      : { manualCampaign: false }),
   };
   await writeState(state);
-  touchRawcalHeartbeat(`ARMED by ${by.slice(0, 70)}`); // v10.20 — transition write (throttle bypassed on state change)
-  const settledN = await epoch2SettledCount();
+  touchRawcalHeartbeat(`ARMED by ${by.slice(0, 70)}${campaign ? ` (re-campaign → target ${campaignTarget})` : ""}`); // v10.20 — transition write (throttle bypassed on state change)
   const { fireEvent } = await import("./engine");
   await fireEvent(
     null,
     null,
     "ENGINE",
     "warn",
-    `RAW-CAL CAPTURE MODE ARMED (${by}) — signal issuance now runs WITHOUT quality filters: every scan's best candidate is issued as a tagged RAW-CAL record (data capture + tracking + journaling only), feeding the engine-memory book toward the AI CALIBRATION bar (${settledN}/${state.target} EPOCH-2 settled). Anti-flood rails: ≥${state.spacingMin}min spacing, ≤${state.maxOpen} open raw records. The mode AUTO-CANCELS at ${state.target} settled and hands back to central-intelligence command with the new calibration.`,
+    `RAW-CAL CAPTURE MODE ARMED (${by}) — signal issuance now runs WITHOUT quality filters: every scan's best candidate is issued as a tagged RAW-CAL record (data capture + tracking + journaling only), feeding the engine-memory book toward the AI CALIBRATION bar (${settledN}/${state.target} EPOCH-2 settled)${campaign ? ` — EQ-99 RE-CAMPAIGN: graduation bar was already met, so this re-arm opens a FRESH capture batch (+${state.target - settledN}); auto-lift + R6 recalibration fires at the new bar` : ""}. Anti-flood rails: ≥${state.spacingMin}min spacing, ≤${state.maxOpen} open raw records. The mode AUTO-CANCELS at ${state.target} settled and hands back to central-intelligence command with the new calibration.`,
   );
   const { sendDirect } = await import("./notify");
   void sendDirect(
-    `🧪 <b>RAW-CAL CAPTURE MODE ARMED</b>\nUnfiltered signal issuance is now ON — every scan's best flow is recorded as a RAW-CAL signal (tracked + journaled, no quality filters).\n📊 Progress: <b>${settledN}/${state.target}</b> EPOCH-2 settled → AI CALIBRATION lift\n🛡 Rails: ≥${state.spacingMin}min spacing · ≤${state.maxOpen} open · auto-cancel at ${state.target}`,
+    `🧪 <b>RAW-CAL CAPTURE MODE ARMED</b>${campaign ? " — RE-CAMPAIGN" : ""}\nUnfiltered signal issuance is now ON — every scan's best flow is recorded as a RAW-CAL signal (tracked + journaled, no quality filters).\n📊 Progress: <b>${settledN}/${state.target}</b> EPOCH-2 settled → AI CALIBRATION lift${campaign ? ` (fresh batch +${state.target - settledN})` : ""}\n🛡 Rails: ≥${state.spacingMin}min spacing · ≤${state.maxOpen} open · auto-cancel at ${state.target}`,
   ).catch(() => undefined);
   void recordRawcalSnapshot("ARMED", true).catch(() => undefined);
   return state;
@@ -214,18 +258,31 @@ export async function maybeRawCalDeploy(): Promise<{ issued: boolean; serial?: n
   if (settledN >= state.target) {
     const sv = await import("./shadow-veto");
     const cfg = await sv.getShadowVetoConfig();
-    const completion = sv.shadowArmsCompletion(cfg.mode);
+    // v11.5 hotfix (tsc-caught latent bug): shadowArmsCompletion is ASYNC —
+    // the missing await made `completion` a Promise whose fields are all
+    // undefined, so `!completion.allComplete` was ALWAYS true: the lift path
+    // could never fire and the target auto-extended forever. Dormant only
+    // because the mode is currently disarmed.
+    const completion = await sv.shadowArmsCompletion(cfg.mode);
     if (!completion.allComplete) {
-      const extension = Math.max(completion.pendingDeficit, 10);
+      // TASK-49 — NaN-proof: a stale compiled module (Turbopack chunk from the
+      // pre-Task-34-2 snapshot) once returned a completion WITHOUT
+      // note/pendingDeficit → Math.max(undefined)=NaN → target NaN → JSON null
+      // → this branch pinned forever (repeating "[raw-cal] slice of undefined").
+      // Guard every unknown now.
+      const deficit = Number.isFinite(completion.pendingDeficit) ? completion.pendingDeficit : 10;
+      const extension = Math.max(deficit, 10);
+      const note = completion.note ?? "arms probe shape mismatch — treated as incomplete";
+      const nextTarget = Number.isFinite(settledN + extension) ? settledN + extension : state.target + extension;
       const next: RawCalState = {
         ...state,
-        target: settledN + extension,
-        retargetNote: `ARMS-COUPLED EXTENSION (operator mandate 2026-09-26 «تا زمان کامل شدن بازوهای Shadow veto فعال باشد»): book target ${state.target} reached but shadow-veto real arms incomplete (${completion.note}) — target auto-extended +${extension} to ${settledN + extension} so the capture keeps feeding evidence; PACE MONITOR tracks arm completion`,
+        target: nextTarget,
+        retargetNote: `ARMS-COUPLED EXTENSION (operator mandate 2026-09-26 «تا زمان کامل شدن بازوهای Shadow veto فعال باشد»): book target ${state.target} reached but shadow-veto real arms incomplete (${note}) — target auto-extended +${extension} to ${nextTarget} so the capture keeps feeding evidence; PACE MONITOR tracks arm completion`,
       };
       await writeState(next);
-      touchRawcalHeartbeat(`ARM-EXTEND target ${state.target}→${next.target} (${completion.note.slice(0, 80)})`);
+      touchRawcalHeartbeat(`ARM-EXTEND target ${state.target}→${next.target} (${note.slice(0, 80)})`);
       const { fireEvent } = await import("./engine");
-      await fireEvent(null, null, "ENGINE", "info", `RAW-CAL: book target reached (${settledN}) but shadow-veto arms incomplete — capture AUTO-EXTENDED +${extension} (target → ${next.target}). Arms: ${completion.arms.map((a) => `${a.id} ${a.n}/${a.target}${a.waived ? " (waived)" : ""}`).join(" · ")}`);
+      await fireEvent(null, null, "ENGINE", "info", `RAW-CAL: book target reached (${settledN}) but shadow-veto arms incomplete — capture AUTO-EXTENDED +${extension} (target → ${next.target}). Arms: ${(completion.arms ?? []).map((a) => `${a.id} ${a.n}/${a.target}${a.waived ? " (waived)" : ""}`).join(" · ")}`);
       return { issued: false, note: `arms-coupled extension → target ${next.target}` };
     }
     await disarmRawCal(`target reached + shadow-veto arms complete — ${settledN} EPOCH-2 settled ≥ ${state.target}`, true);
@@ -295,6 +352,59 @@ export async function maybeRawCalDeploy(): Promise<{ issued: boolean; serial?: n
   return { issued: true, serial: res.signal.serial };
 }
 
+// ── v11.5 CAPTURE-BOOK REGIME GAUGE (operator question 2026-10-12: «آیا
+// رژیم‌سنجی قبل از اعتماد به کتاب کپچر اضافه شده؟») ──
+// Two-part engineering answer, both auditable:
+//   1) AT ISSUE TIME — the LAYER-0 regime ruling (regimeRuling, engine.ts
+//      evaluate()) is NOT bypassed by calCapture: a candidate standing in a
+//      vetoed regime (BREAKOUT/MOMENTUM in chop at guard L1, counter-trend
+//      mean-revert in trends) never becomes a capture row. Every issued row
+//      then carries its REGIME-* tag for life.
+//   2) BEFORE TRUSTING THE BOOK — the settled capture book is split BY REGIME
+//      (n / WR / net $) so the operator and the AI core trust capture-derived
+//      conclusions per regime, not book-wide (a CHOP-heavy book must never be
+//      read as a trend verdict). Surfaced on /api/rawcal + RawCalCard.
+const REGIME_LABELS: Record<string, string> = {
+  "TREND-UP": "TREND ▲",
+  "TREND-DOWN": "TREND ▼",
+  CHOP: "CHOP ∿",
+  VOLATILE: "VOLATILE ⚡",
+  UNKNOWN: "UNKNOWN",
+};
+export interface RawCalRegimeCell {
+  regime: string;
+  label: string;
+  n: number;
+  wins: number;
+  winRatePct: number;
+  netUsd: number;
+}
+export async function captureBookRegimeSplit(): Promise<RawCalRegimeCell[]> {
+  const rows = await db.signal.findMany({
+    where: { tags: { contains: "RAW-CAL" }, status: { in: ["TP1", "TP2", "TP3", "SL", "EXPIRED", "CLOSED"] } },
+    select: { tags: true, status: true, reachedTp: true, marginUsd: true, pnlPercent: true },
+  });
+  const map = new Map<string, { n: number; wins: number; net: number }>();
+  for (const r of rows) {
+    const tag = r.tags?.split(",").find((t) => t.startsWith("REGIME-"))?.replace("REGIME-", "") ?? "UNKNOWN";
+    const cell = map.get(tag) ?? { n: 0, wins: 0, net: 0 };
+    cell.n += 1;
+    if (r.reachedTp >= 1 || r.status === "TP1" || r.status === "TP2" || r.status === "TP3") cell.wins += 1;
+    cell.net += (r.marginUsd * r.pnlPercent) / 100;
+    map.set(tag, cell);
+  }
+  return [...map.entries()]
+    .map(([regime, c]) => ({
+      regime,
+      label: REGIME_LABELS[regime] ?? regime,
+      n: c.n,
+      wins: c.wins,
+      winRatePct: c.n ? Number(((c.wins / c.n) * 100).toFixed(1)) : 0,
+      netUsd: Number(c.net.toFixed(2)),
+    }))
+    .sort((a, b) => b.n - a.n);
+}
+
 /** Compact status for pulse / API / engine-memory injection. */
 export async function rawCalStatus() {
   const state = await getRawCalState();
@@ -311,6 +421,8 @@ export async function rawCalStatus() {
   const armsCompletion = await import("./shadow-veto")
     .then(async (m) => m.shadowArmsCompletion((await m.getShadowVetoConfig()).mode))
     .catch(() => null);
+  // v11.5 capture-book regime gauge (operator question: رژیم‌سنجی قبل از اعتماد)
+  const regimeSplit = await captureBookRegimeSplit().catch(() => []);
   return {
     ...state,
     settledN,
@@ -323,5 +435,6 @@ export async function rawCalStatus() {
     spacingMin: state.spacingMin,
     maxOpen: state.maxOpen,
     armsCompletion,
+    regimeSplit,
   };
 }

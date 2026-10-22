@@ -32,6 +32,7 @@ import { getTape } from "@/lib/trade-flow";
 // fapi-gate (telemetry lane) — same host, same per-IP budget, so they must
 // share the process-wide weight bucket and ban awareness like everyone else.
 import { gateFetch } from "./fapi-gate";
+import { bridgeDepth } from "./flow-bridge"; // v12.3 TASK-52 — depth ladder
 import { db } from "@/lib/db";
 
 /* ── settings (operator tunables, persisted) ─────────────────── */
@@ -287,17 +288,20 @@ interface ObiState {
 const obiState = new Map<string, ObiState>();
 const OBI_TTL_MS = 20_000;
 
+// v12.3 TASK-52 — DepthRow is now numeric (bridgeDepth ladder shape)
 interface DepthRow {
-  bids: Array<[string, string]>;
-  asks: Array<[string, string]>;
+  bids: Array<[number, number]>;
+  asks: Array<[number, number]>;
 }
 
+// v12.3 TASK-52 — the OBI poll rides the depth ladder (fapi w2 → BYBIT linear
+// book → SPOT-MIRROR) instead of dying silently during fapi bans.
 async function depthPoll(symbol: string): Promise<DepthRow | null> {
-  return gateFetch<DepthRow>(`/fapi/v1/depth?symbol=${symbol}&limit=20`, { priority: "telemetry", timeoutMs: 4000, weight: 2 });
+  return bridgeDepth(symbol, 20);
 }
 
-const sideUsd = (rows: Array<[string, string]>, n: number) =>
-  rows.slice(0, n).reduce((a, [p, q]) => a + parseFloat(p) * parseFloat(q), 0);
+const sideUsd = (rows: Array<[number, number]>, n: number) =>
+  rows.slice(0, n).reduce((a, [p, q]) => a + p * q, 0);
 
 /**
  * Order-book imbalance (bid share of top-5 notional), EMA-smoothed over
@@ -332,8 +336,8 @@ export async function obiSmooth(symbol: string): Promise<{ obi: number; guarded:
   const obi2 = bid2 / (bid2 + ask2);
 
   // spoof guard: flip or a mega-level vanishing between samples
-  const maxBid = Math.max(...d1.bids.slice(0, 5).map(([p, q]) => parseFloat(p) * parseFloat(q)), 0);
-  const maxAsk = Math.max(...d1.asks.slice(0, 5).map(([p, q]) => parseFloat(p) * parseFloat(q)), 0);
+  const maxBid = Math.max(...d1.bids.slice(0, 5).map(([p, q]) => p * q), 0);
+  const maxAsk = Math.max(...d1.asks.slice(0, 5).map(([p, q]) => p * q), 0);
   const megaGone =
     (maxBid > (bid1 + ask1) * 0.35 && bid2 < bid1 * 0.55) || (maxAsk > (bid1 + ask1) * 0.35 && ask2 < ask1 * 0.55);
   const flipped = Math.sign(obi1 - 0.5) !== Math.sign(obi2 - 0.5) && Math.abs(obi1 - obi2) > 0.18;

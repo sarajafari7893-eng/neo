@@ -31,6 +31,7 @@ export async function GET() {
       armsLive: s.armsLive, // v10.11 COHORT-FREEZE — unfrozen live view (monitoring-only)
       cohortFreeze: s.cohortFreeze, // v10.11 — decision-grade snapshot pointer
       promotion: s.promotion,
+      patternVeto: s.patternVeto, // v11.0 — the proven-performance filter's live evidence
       recent: s.recent,
       paper: s.paper,
       health: s.health,

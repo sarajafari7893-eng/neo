@@ -1,0 +1,21 @@
+# NEXUS//SIGNALS — layer-2 guardian + p0 watchdog (bare-metal)
+# The bash watchdog.sh --loop (supervisor of the supervisor) plus the L1
+# p0-watchdog service. On a real box this runs FOREVER — no platform recycle
+# can kill it, which is precisely the limitation being escaped.
+
+[Unit]
+Description=NEXUS//SIGNALS — guardian stack (L1 p0-watchdog + L2 loop)
+After=nexus-app.service nexus-minis.service
+Wants=nexus-app.service nexus-minis.service
+
+[Service]
+Type=forking
+WorkingDirectory=/home/z/my-project
+EnvironmentFile=/home/z/my-project/.env
+ExecStart=/bin/bash -c 'bash /home/z/my-project/scripts/watchdog-up.sh; bash /home/z/my-project/scripts/watchdog.sh --loop & echo $! > /home/z/my-project/.data/watchdog/pid; wait'
+Restart=always
+RestartSec=15
+KillMode=control-group
+
+[Install]
+WantedBy=multi-user.target

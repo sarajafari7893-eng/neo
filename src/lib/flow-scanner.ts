@@ -20,6 +20,7 @@
 import { db } from "@/lib/db";
 import { gateFetch } from "./fapi-gate";
 import { fetchFlowMetrics } from "./flow";
+import { bybitKlines, bybitHealth } from "./bybit-feed";
 
 export const SCAN_TFS = ["4h", "1h", "15m", "5m"] as const;
 export type ScanTf = (typeof SCAN_TFS)[number];
@@ -29,7 +30,11 @@ const TF_LIMIT: Record<ScanTf, number> = { "4h": 72, "1h": 96, "15m": 120, "5m":
 const TF_TTL: Record<ScanTf, number> = { "4h": 480_000, "1h": 240_000, "15m": 90_000, "5m": 45_000 };
 const BOARD_KEY = "flowscan.board";
 const BATCH = 6;
-const MIN_INTERVAL_MS = 60_000;
+// DATA-REVIVAL 2026-10-21 — 60s/6 symbols needed ~11min to rotate a 64-symbol
+// board; the operator mandate is flow tracking at HIGH SPEED. 20s/6 → full
+// board ~3.5min. Bybit public plane carries this easily; the fapi-gate
+// telemetry lane is sheddable as before.
+const MIN_INTERVAL_MS = 20_000;
 const NET_BIAS_MIN = 20; // |netScore| needed to call a LONG/SHORT board
 const HTF_FLIP_MIN = { h4: 25, h1: 30 }; // HTF-conflict thresholds for FLOW-SHIFT
 const SHIFT_COOLDOWN_MS = 2 * 3600_000;
@@ -57,6 +62,7 @@ export interface MtfRollup {
   tfs: MtfTfRow[];
   funding8h: number | null;
   oiDelta1h: number | null;
+  venue?: "BINANCE" | "BYBIT" | "MIXED"; // DATA-REVIVAL 2026-10-21 — honest venue tag on the kline plane
 }
 
 interface FlowCandle {
@@ -70,21 +76,96 @@ interface FlowCandle {
 }
 
 // ── kline+flow fetch with per-(symbol,tf) cache and in-flight dedupe ──
-const klineFlowCache = new Map<string, { at: number; candles: FlowCandle[] }>();
-const klineFlowInFlight = new Map<string, Promise<FlowCandle[] | null>>();
+const klineFlowCache = new Map<string, { at: number; candles: FlowCandle[]; venue: "BINANCE" | "BYBIT" }>();
+const klineFlowInFlight = new Map<string, Promise<{ candles: FlowCandle[]; venue: "BINANCE" | "BYBIT" } | null>>();
 
-async function fetchKlinesFlow(symbol: string, tf: ScanTf): Promise<FlowCandle[] | null> {
+// DATA-REVIVAL 2026-10-21 — silent-starvation fix: when the fapi plane fails
+// (IP-ban 418), the failure is COUNTED and rate-limit-logged, and the scan
+// falls back to the Bybit v5 kline plane with an honest venue tag. The old
+// code swallowed every failure → FlowScan froze for 25 days with zero logs.
+const fbStats = (() => {
+  // globalThis dedupe — Turbopack can instantiate per-route bundles; the
+  // engine's tick loop and the /api/flows route MUST share one counter set.
+  const g = globalThis as { __nexusFlowFbStats?: { fapiFail: number; bybitOk: number; bybitFail: number; spotOk: number; lastWarnAt: number } };
+  g.__nexusFlowFbStats ??= { fapiFail: 0, bybitOk: 0, bybitFail: 0, spotOk: 0, lastWarnAt: 0 };
+  return g.__nexusFlowFbStats;
+})();
+
+// third rung — Binance SPOT klines via the data-vision mirror host family
+// (api.binance.com is IP-banned; data-api.binance.vision is NOT — proven live
+// by the feed probe). Spot klines share the exact field layout (takerBuy at
+// index 9) so CVD stays REAL. For niche Binance listings absent from Bybit
+// linear this is the only honest revival path.
+async function spotKlines(symbol: string, tf: ScanTf, limit: number): Promise<FlowCandle[] | null> {
+  for (const host of ["https://data-api.binance.vision", "https://api.binance.com"]) {
+    try {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 6500);
+      const res = await fetch(`${host}/api/v3/klines?symbol=${symbol}&interval=${tf}&limit=${limit}`, { signal: ctrl.signal, cache: "no-store" });
+      clearTimeout(timer);
+      if (!res.ok) continue;
+      const raw = (await res.json()) as (string | number)[][];
+      if (!Array.isArray(raw) || raw.length === 0) continue;
+      return raw.map((k) => ({ openTime: Number(k[0]), open: Number(k[1]), high: Number(k[2]), low: Number(k[3]), close: Number(k[4]), volume: Number(k[5]), takerBuy: Number(k[9]) }));
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+function warnFallback(msg: string) {
+  if (Date.now() - fbStats.lastWarnAt < 60_000) return;
+  fbStats.lastWarnAt = Date.now();
+  console.warn(`[flow-scanner] ${msg}`);
+}
+export function flowScanHealth(): { fapiFail: number; bybitOk: number; bybitFail: number; spotOk: number; bybit: ReturnType<typeof bybitHealth> } {
+  return { fapiFail: fbStats.fapiFail, bybitOk: fbStats.bybitOk, bybitFail: fbStats.bybitFail, spotOk: fbStats.spotOk, bybit: bybitHealth() };
+}
+
+async function fetchKlinesFlow(symbol: string, tf: ScanTf): Promise<{ candles: FlowCandle[]; venue: "BINANCE" | "BYBIT" } | null> {
   const key = `${symbol}|${tf}`;
   const hit = klineFlowCache.get(key);
-  if (hit && Date.now() - hit.at < TF_TTL[tf]) return hit.candles;
+  if (hit && Date.now() - hit.at < TF_TTL[tf]) return hit;
   const existing = klineFlowInFlight.get(key);
   if (existing) return existing;
-  const p = (async (): Promise<FlowCandle[] | null> => {
+  const p = (async (): Promise<{ candles: FlowCandle[]; venue: "BINANCE" | "BYBIT" } | null> => {
     try {
       // v10.24 Task 34-a: klines through the central fapi-gate (telemetry lane
       // — a shedded (symbol,tf) simply re-scans on the next rotation).
-      const raw = await gateFetch<(string | number)[][]>(`/fapi/v1/klines?symbol=${symbol}&interval=${tf}&limit=${TF_LIMIT[tf]}`, { priority: "telemetry", timeoutMs: 6500 });
-      if (!raw) return null;
+      let venue: "BINANCE" | "BYBIT" = "BINANCE";
+      let raw: (string | number)[][] | null = null;
+      try {
+        raw = await gateFetch<(string | number)[][]>(`/fapi/v1/klines?symbol=${symbol}&interval=${tf}&limit=${TF_LIMIT[tf]}`, { priority: "telemetry", timeoutMs: 6500 });
+      } catch {
+        raw = null;
+      }
+      if (!raw || raw.length === 0) {
+        // honest fallback ladder — same-venue SPOT mirror first (keeps CVD REAL
+        // via taker-buy field 9), then Bybit perp (taker split unavailable →
+        // CVD null on those rows)
+        fbStats.fapiFail++;
+        const spot = await spotKlines(symbol, tf, TF_LIMIT[tf]);
+        if (spot && spot.length > 0) {
+          venue = "BINANCE"; // same venue, SPOT instrument class (vision mirror)
+          fbStats.spotOk++;
+          warnFallback(`fapi kline unavailable (${symbol} ${tf}) → BINANCE-SPOT mirror (CVD real, spot tape)`);
+          klineFlowCache.set(key, { at: Date.now(), candles: spot, venue });
+          return { candles: spot, venue };
+        }
+        fbStats.spotOk += 0; // keep the counter shape stable
+        const alt = await bybitKlines(symbol, tf, TF_LIMIT[tf]);
+        if (alt && alt.length > 0) {
+          venue = "BYBIT";
+          fbStats.bybitOk++;
+          warnFallback(`spot+mirror miss (${symbol} ${tf}) → BYBIT perp fallback (CVD null on this row)`);
+          const candles = alt.map((k) => ({ openTime: k.openTime, open: k.open, high: k.high, low: k.low, close: k.close, volume: k.volume, takerBuy: NaN }));
+          klineFlowCache.set(key, { at: Date.now(), candles, venue });
+          return { candles, venue };
+        }
+        fbStats.bybitFail++;
+        warnFallback(`kline starved on ALL planes: ${symbol} ${tf} (fapi + spot + bybit)`);
+        return null;
+      }
       const candles = raw.map((k) => ({
         openTime: Number(k[0]),
         open: Number(k[1]),
@@ -94,8 +175,8 @@ async function fetchKlinesFlow(symbol: string, tf: ScanTf): Promise<FlowCandle[]
         volume: Number(k[5]),
         takerBuy: Number(k[9]),
       }));
-      klineFlowCache.set(key, { at: Date.now(), candles });
-      return candles;
+      klineFlowCache.set(key, { at: Date.now(), candles, venue: "BINANCE" });
+      return { candles, venue: "BINANCE" as const };
     } catch {
       return null;
     } finally {
@@ -156,11 +237,13 @@ function analyzeTf(symbol: string, tf: ScanTf, raw: FlowCandle[], funding8h: num
     }
   }
 
-  // CVD over the last 12 closed bars — direct taker aggression from kline field 9
+  // CVD over the last 12 closed bars — direct taker aggression from kline field 9.
+  // DATA-REVIVAL: Bybit-fallback candles carry takerBuy=NaN → cvdPct stays null
+  // (honest measured gap — never invented from price direction).
   const w12 = candles.slice(-12);
   const vol12 = w12.reduce((a, c) => a + c.volume, 0);
   const buy12 = w12.reduce((a, c) => a + c.takerBuy, 0);
-  const cvdPct = vol12 > 0 ? Number((((2 * buy12 - vol12) / vol12) * 100).toFixed(2)) : null;
+  const cvdPct = vol12 > 0 && Number.isFinite(buy12) ? Number((((2 * buy12 - vol12) / vol12) * 100).toFixed(2)) : null;
 
   // volume ignition z-score (last closed bar vs prior 30)
   const v30 = candles.slice(-31, -1).map((c) => c.volume);
@@ -226,6 +309,8 @@ async function scanSymbol(symbol: string): Promise<MtfRollup | null> {
   const settled = await Promise.allSettled(SCAN_TFS.map((tf) => fetchKlinesFlow(symbol, tf)));
   const raw = settled.map((r) => (r.status === "fulfilled" ? r.value : null));
   if (raw.filter(Boolean).length < 3) return null; // honest: need ≥3 TFs, no invented rows
+  const venues = raw.filter(Boolean).map((r) => r!.venue);
+  const rollupVenue: "BINANCE" | "BYBIT" | "MIXED" = venues.every((v) => v === "BINANCE") ? "BINANCE" : venues.every((v) => v === "BYBIT") ? "BYBIT" : "MIXED";
 
   // derivatives context is TF-agnostic — one shared cached fetch (flow.ts)
   let funding8h: number | null = null;
@@ -242,9 +327,9 @@ async function scanSymbol(symbol: string): Promise<MtfRollup | null> {
 
   const tfs: MtfTfRow[] = [];
   for (let i = 0; i < SCAN_TFS.length; i++) {
-    const candles = raw[i];
-    if (!candles) continue;
-    const row = analyzeTf(symbol, SCAN_TFS[i]!, candles, funding8h, oiDelta1h);
+    const r = raw[i];
+    if (!r) continue;
+    const row = analyzeTf(symbol, SCAN_TFS[i]!, r.candles, funding8h, oiDelta1h);
     if (row) tfs.push(row);
   }
   if (tfs.length < 3) return null;
@@ -252,7 +337,7 @@ async function scanSymbol(symbol: string): Promise<MtfRollup | null> {
   const netScore = Math.round(tfs.reduce((a, t) => a + t.score * TF_WEIGHT[t.tf], 0));
   const netBias: FlowBias = netScore >= NET_BIAS_MIN ? "LONG" : netScore <= -NET_BIAS_MIN ? "SHORT" : "NEUTRAL";
   const alignment = netBias === "NEUTRAL" ? 0 : tfs.filter((t) => t.bias === netBias).length;
-  return { symbol, at: Date.now(), netScore, netBias, alignment, tfs, funding8h, oiDelta1h };
+  return { symbol, at: Date.now(), netScore, netBias, alignment, tfs, funding8h, oiDelta1h, venue: rollupVenue };
 }
 
 /** Rotating scanner — call from the engine tick. Scans BATCH symbols per call. */
@@ -299,6 +384,16 @@ export function peekSymbolFlow(symbol: string): MtfRollup | null {
   const age = Date.now() - r.at;
   if (age > 20 * 60_000) return null; // stale board never gates — 20min TTL
   return r;
+}
+
+/** Task 86: on-demand deploy-time snapshot — radar/event-trigger spawns often
+ *  target a symbol the rotating board has not reached yet; scan it NOW so the
+ *  gate decides on live flow instead of a cold board. */
+export async function ensureSymbolFlow(symbol: string): Promise<MtfRollup | null> {
+  await loadBoard();
+  const peeked = peekSymbolFlow(symbol);
+  if (peeked) return peeked;
+  return scanSymbol(symbol);
 }
 
 /** v8.1 P1/P2: read-only access to the scanner's 15m kline cache — lets the

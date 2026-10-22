@@ -4,6 +4,7 @@ import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import ZAI from "z-ai-web-dev-sdk";
+import { makeLlmClient, providerName } from "./llm-provider";
 import { auditGrounding, findMockMarkers, type GroundingAudit } from "./veracity";
 import { getAiSettings, THOUGHT_CHANNELS } from "./ai-settings";
 
@@ -81,9 +82,13 @@ async function configStamp(): Promise<string> {
 }
 
 async function getZAI(force = false): Promise<Awaited<ReturnType<typeof ZAI.create>>> {
-  const stamp = await configStamp();
+  // SELFHOST-0929: provider switch — LLM_PROVIDER=openai routes EVERY channel
+  // (analyst / signal-brief / governor / probe) through any OpenAI-compatible
+  // backend via the shape-compatible shim; zaidev (default) keeps the platform
+  // SDK. Call sites untouched by design.
+  const stamp = providerName() === "openai" ? "openai" : await configStamp();
   if (!force && zaiInstance && stamp === zaiStamp) return zaiInstance;
-  zaiInstance = await ZAI.create();
+  zaiInstance = (await makeLlmClient()) as unknown as Awaited<ReturnType<typeof ZAI.create>>;
   zaiStamp = stamp;
   return zaiInstance;
 }
@@ -104,7 +109,11 @@ function retriableAuth(err: unknown): boolean {
  * capped (default 90s) so callers fall back to their heuristic paths. */
 const AI_CALL_TIMEOUT_MS = Number(process.env.AI_CALL_TIMEOUT_MS ?? 90_000);
 
-// ── v8.4.1 429 BUDGET SHIELD — root-cause fix for "Neural link degraded" ──
+// v8.4.1 429 BUDGET SHIELD — root-cause fix for "Neural link degraded" —
+// v12.7 SENTINEL-20261020 (operator P2-a mandate): cap raised 10m → 30m. The
+// provider throttle episodes observed 2026-10-20 outlasted the 10m ceiling, so
+// the shield kept re-opening every ~10min and the log printed 118× 429 inside
+// a 2000-line window. Env-overridable for drills; hard floor 60s.
 // The platform rate-limits the LLM API (HTTP 429). Background consumers
 // (shadow-veto adjudication, governor, deep-learn, symbol analysis) were
 // hammering a throttled API 24/7 — 1700+ 429s in one log — which starved the
@@ -116,7 +125,7 @@ const AI_CALL_TIMEOUT_MS = Number(process.env.AI_CALL_TIMEOUT_MS ?? 90_000);
 let llm429Until = 0;
 let llm429Streak = 0;
 let lastLlmOkAt = 0;
-const LLM_COOLDOWN_CAP_MS = 10 * 60_000;
+const LLM_COOLDOWN_CAP_MS = Math.max(60_000, Number(process.env.LLM_COOLDOWN_CAP_MS ?? 30 * 60_000));
 
 // v8.4.1 BG BUDGET — proactive HOURLY cap for background-tier calls. The 429
 // shield is reactive (opens AFTER the provider throttles us); this cap is
@@ -144,7 +153,7 @@ function note429(): void {
     return;
   }
   llm429Streak += 1;
-  const cd = Math.min(30_000 * Math.pow(2, llm429Streak - 1), LLM_COOLDOWN_CAP_MS); // 30s→60s→2m→4m→8m→10m cap
+  const cd = Math.min(30_000 * Math.pow(2, llm429Streak - 1), LLM_COOLDOWN_CAP_MS); // 30s→60s→2m→4m→8m→…→30m cap (v12.7)
   llm429Until = Date.now() + cd;
   console.warn(`[ai] 429 budget shield: cooldown ${Math.round(cd / 1000)}s (streak ${llm429Streak}) — background tier parked, operator tier protected`);
 }
@@ -215,6 +224,13 @@ export async function maybeNeuralAutoProbe(): Promise<{ ok: boolean } | null> {
     const h = llmHealth();
     const idle = !h.lastOkAt || now - h.lastOkAt > AUTO_PROBE_IDLE_MS;
     if (!h.cooling && !idle) return null;
+    // v12.7 SENTINEL-20261020 probe tail-gating: the probe is the only caller
+    // that legitimately punches through an open cooldown — but a mid-window
+    // probe carries zero information (the window is already committed) and
+    // every one of them printed a 429 line. Probe only near the window TAIL
+    // (≤90s remaining) so recovery is still detected promptly while failed
+    // probes drop from ~2/window to ≤1/window.
+    if (h.cooling && h.cooldownRemainsMs > 90_000) return null;
     if (now - lastAutoProbeAt < AUTO_PROBE_SPACING_MS) return null;
     lastAutoProbeAt = now;
     const r = await probeNeuralLink();

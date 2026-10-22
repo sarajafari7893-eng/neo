@@ -11,7 +11,10 @@
 // SCOPE CONTRACT (do NOT duplicate the Next.js side):
 //   · src/lib/daily-scheduler.ts already owns Tehran-day DAILY + SRE reports.
 //   · THIS service owns: 10-min health sweep (+RED Telegram alerts),
-//     6-hour progress report, 12-hour senior-supervisor LLM review.
+//     6-hour progress report, 12-hour senior-supervisor LLM review,
+//     3-hour sandbox snapshot ring (scripts/backup.sh — re-owned in v1.2.0
+//     after the Task-34 rebuild lost the platform-cron backup job; ring was
+//     found stale 2026-09-26: newest 15:10, the 18:10 slot never fired).
 //
 // JOB SCHEDULE (drift-resistant: nextRunAt advances from the SCHEDULED time,
 // never from completion time; single-flight per job — a slow run never stacks):
@@ -23,7 +26,15 @@
 //                                sentinel verdict RED = RED
 //                              → RED ⇒ Telegram alert (bridge :3005 /send),
 //                                rate-limit 1 alert / 30 min per anomaly class
+//   keepwarm · every 5 min   · v1.5.0 Task-56 internal heartbeat: /api/healthz
+//                              (+ pulse fallback) → persisted OK/COLD ledger
+//                              (bootAt · gitSha · coldStreak) on /health;
+//                              NEVER restarts/heals (Job-411262 doctrine) —
+//                              the external tier (operator platform cron)
+//                              remains the only anti-recycle layer
 //   progress · every 6 h     · Persian terminal-style progress report via bridge
+//   backup   · every 3 h     · snapshot ring: zip + wal_checkpoint + AES-256 .enc
+//                              + Telegram off-site tiers (scripts/backup.sh)
 //   review   · every 12 h    · sentinel-deep.sh --quick (10min cap, 6000 chars)
 //                              + compact telemetry JSON → LLM (senior supervisor,
 //                              nexus-sentinel doctrine) → structured JSON review
@@ -36,9 +47,10 @@
 // via globalThis (same lesson as p0-watchdog).
 // ─────────────────────────────────────────────────────────────────────────────
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { Database } from "bun:sqlite";
 import ZAI from "z-ai-web-dev-sdk";
 
-const VER = "supervisor-cron 1.0.0";
+const VER = "supervisor-cron 1.6.0"; // v1.6.0 trace-1a15f7d945d27ead: toobit exec-bridge :3021 joins the senior sweep — health probe + /doctrine violation feed (AMBER paper / crit live)
 const ROOT = "/home/z/my-project";
 const DIR = `${ROOT}/.data/supervisor-cron`;
 const STATE = `${DIR}/state.json`;
@@ -49,22 +61,34 @@ const PORT = 3015;
 const SWEEP_MS = 10 * 60_000;
 const PROGRESS_MS = 6 * 60 * 60_000;
 const REVIEW_MS = 12 * 60 * 60_000;
+const WATCH_MS = 10 * 60_000;
+const WATCH_MAX_RUNS = 3; // 30-minute one-shot mission (3 × 10-min ticks)
+const BACKUP_MS = 3 * 60 * 60_000;      // v1.2.0: snapshot ring cadence (was platform-cron)
+const BACKUP_FIRST_MS = 3 * 60_000;     // first owned snapshot shortly after boot (re-anchor stale ring)
+const BACKUP_TIMEOUT_MS = 12 * 60_000;  // hard cap (zip+encrypt+upload historically ≈2-4min)
 const BOOT_DELAY_MS = 12_000; // first sweep shortly after boot (watchdog grace)
 const FETCH_TIMEOUT_MS = 6_000;
 const DEEP_TIMEOUT_MS = 10 * 60_000;
 const DEEP_TRUNCATE = 6_000;
 const LLM_TIMEOUT_MS = 180_000;
 const ALERT_GAP_MS = 30 * 60_000; // per anomaly class
+const DATA_STALE_MIN = 15;        // RECOVERY-0929: SignalEvent age cap (operator's 15-min freshness review order)
+const WS_CRIT_STREAK = 2;         // ws down for N consecutive sweeps (20 min) ⇒ crit (else warn)
 const HISTORY_MAX = 50;
+const DIGEST_MS = 2 * 60 * 60_000; // TASK-48 (IRAN-VPS-0929): Persian signal digest every 2h — the operator's phone IS the terminal (VPS unaffordable)
+const DIGEST_MAX_NEW = 6;         // max new-signal lines per digest (compact)
+const KEEPWARM_MS = 5 * 60_000;   // TASK-56: internal heartbeat every 5 min (Job-411262 cadence) — healthz lineage evidence + cold-streak accounting
 
-type JobId = "sweep" | "progress" | "review";
+// Task 56 JOB ROSTER: keepwarm is the 7th job.
+type JobId = "sweep" | "progress" | "review" | "watch" | "backup" | "digest" | "keepwarm";
 
 // ── env (lazy, mtime-cached — same stale-env lesson as bridge v1.2.1) ────────
 const ENV_PATH = `${ROOT}/.env`;
 let dotenvCache: { mtimeMs: number; values: Map<string, string> } | null = null;
 function envGet(key: string): string {
-  const fromProc = process.env[key];
-  if (fromProc && fromProc.length > 0) return fromProc;
+  // Task 36: .env FILE first (live source of truth, mtime-cached) — the boot
+  // process.env is frozen and inherited stale by heal-spawn chains (proven:
+  // old key kept validating after rotation). process.env is fallback only.
   try {
     const st = statSafe(ENV_PATH);
     if (st && (!dotenvCache || dotenvCache.mtimeMs !== st.mtimeMs)) {
@@ -76,7 +100,10 @@ function envGet(key: string): string {
       dotenvCache = { mtimeMs: st.mtimeMs, values };
     }
   } catch { dotenvCache = null; }
-  return dotenvCache?.values.get(key) ?? "";
+  const fromFile = dotenvCache?.values.get(key);
+  if (fromFile && fromFile.length > 0) return fromFile;
+  const fromProc = process.env[key];
+  return fromProc && fromProc.length > 0 ? fromProc : "";
 }
 function statSafe(p: string) { try { return statSync(p); } catch { return null; } }
 
@@ -121,12 +148,24 @@ const state = {
     sweep: freshJob(BOOT + BOOT_DELAY_MS),
     progress: freshJob(BOOT + BOOT_DELAY_MS + PROGRESS_MS),
     review: freshJob(BOOT + BOOT_DELAY_MS + REVIEW_MS),
+    watch: freshJob(BOOT + BOOT_DELAY_MS + WATCH_MS),
+    backup: freshJob(BOOT + BOOT_DELAY_MS + BACKUP_FIRST_MS),
+    digest: freshJob(BOOT + BOOT_DELAY_MS + 2 * 60_000), // first digest 2min after boot — post-recycle recovery proof lands on the operator's phone fast
+    keepwarm: freshJob(BOOT + 60_000), // Task 56: first heartbeat 60s after boot — instant lineage evidence on every generation
   } as Record<JobId, JobState>,
-  lastSweep: null as null | { at: string; verdict: string; reason: string; services: Record<string, { up: boolean; status: number | null; ms: number }>; anomalies: Array<{ class: string; sev: string; msg: string }> },
+  lastSweep: null as null | { at: string; verdict: string; reason: string; services: Record<string, { up: boolean; status: number | null; ms: number }>; anomalies: Array<{ class: string; sev: string; msg: string }>; data?: { lastEventAgeMin: number | null }; streaks?: { wsDown: number; stale: number } },
   lastReview: null as null | { at: string; status: string; verdict: string | null },
   lastProgress: null as null | { at: string; ok: boolean },
+  lastDigest: null as null | { at: string; ok: boolean; newN: number },
+  // Task 56 keepwarm: persisted heartbeat evidence (Job-411262 semantics)
+  lastKeepwarm: null as null | { at: string; ok: boolean; ms: number | null; bootAt: string | null; gitSha: string | null; coldStreak: number },
+  coldStreak: 0,
   alertLedger: {} as Record<string, number>,
+  wsDownStreak: 0,
+  staleStreak: 0,
   history: [] as HistoryEntry[],
+  watchRuns: [] as Array<Record<string, unknown>>,
+  lastWatch: null as null | { at: string; run: number; done: boolean; summary: string },
 };
 function freshJob(nextRunAt: number): JobState {
   return { lastRunAt: null, nextRunAt, lastStatus: null, lastDurationMs: null, lastError: null, runs: 0, failures: 0 };
@@ -143,7 +182,7 @@ function loadState() {
     if (!existsSync(STATE)) return;
     const prev = JSON.parse(readFileSync(STATE, "utf8")) as typeof state;
     // keep persisted schedule when fresh enough; else reschedule from boot
-    for (const id of ["sweep", "progress", "review"] as JobId[]) {
+    for (const id of ["sweep", "progress", "review", "watch", "backup", "keepwarm"] as JobId[]) {
       const p = prev.jobs?.[id];
       if (p) {
         state.jobs[id] = { ...freshJob(state.jobs[id].nextRunAt ?? 0), ...p };
@@ -153,10 +192,21 @@ function loadState() {
       }
     }
     if (Array.isArray(prev.history)) state.history = prev.history.slice(-HISTORY_MAX);
+    if (Array.isArray((prev as unknown as { watchRuns?: unknown[] }).watchRuns)) state.watchRuns = (prev as unknown as { watchRuns: Array<Record<string, unknown>> }).watchRuns.slice(0, 12);
+    const prevWatch = (prev as unknown as { lastWatch?: typeof state.lastWatch }).lastWatch;
+    if (prevWatch) state.lastWatch = prevWatch;
     if (prev.alertLedger) state.alertLedger = prev.alertLedger;
+    const prevStreaks = prev as unknown as { wsDownStreak?: number; staleStreak?: number };
+    if (typeof prevStreaks.wsDownStreak === "number") state.wsDownStreak = prevStreaks.wsDownStreak;
+    if (typeof prevStreaks.staleStreak === "number") state.staleStreak = prevStreaks.staleStreak;
     if (prev.lastSweep) state.lastSweep = prev.lastSweep;
     if (prev.lastReview) state.lastReview = prev.lastReview;
     if (prev.lastProgress) state.lastProgress = prev.lastProgress;
+    if (prev.lastDigest) state.lastDigest = prev.lastDigest;
+    const prevKw = (prev as unknown as { lastKeepwarm?: typeof state.lastKeepwarm }).lastKeepwarm;
+    if (prevKw) state.lastKeepwarm = prevKw;
+    const prevCold = (prev as unknown as { coldStreak?: number }).coldStreak;
+    if (typeof prevCold === "number") state.coldStreak = prevCold;
     log("info", "state-restored", { jobs: Object.keys(prev.jobs ?? {}).length, history: state.history.length });
   } catch (e) { log("warn", "state-restore-failed", { err: String(e).slice(0, 120) }); }
 }
@@ -213,6 +263,25 @@ async function probe(label: string, url: string, expect: (s: number) => boolean)
   }
 }
 
+// ── RECOVERY-0929: data-freshness probe (the 20-hour silent stall guard) ─────
+// History: on 2026-09-27 ~16:36Z the pipeline died (price-ws crash + undeclared
+// socket.io dependency made every heal futile) while every service probe stayed
+// green — the ledger froze ~20h until the next recycle. Probe the LEDGER itself
+// (readonly, one aggregate query per sweep — Prisma owns all writes).
+function eventFreshness(): { ageMin: number | null; lastAt: string | null; err?: string } {
+  try {
+    const db = new Database(`${ROOT}/db/custom.db`, { readonly: true });
+    db.exec("PRAGMA busy_timeout=2500");
+    const row = db.query("SELECT MAX(createdAt) mx, COUNT(*) n FROM SignalEvent").get() as { mx: number | string | null; n: number } | null;
+    db.close();
+    const mx = row?.mx != null ? Number(row.mx) : null;
+    if (!mx || !Number.isFinite(mx)) return { ageMin: null, lastAt: null, err: "no-rows" };
+    return { ageMin: Math.round((Date.now() - mx) / 60_000), lastAt: new Date(mx).toISOString() };
+  } catch (e) {
+    return { ageMin: null, lastAt: null, err: String(e).slice(0, 100) };
+  }
+}
+
 async function jobSweep(): Promise<{ verdict: string; reason: string; anomalies: Array<{ class: string; sev: string; msg: string }> }> {
   const probes: SweepProbe[] = [];
   // app :3000 — /api/healthz first (exists, verified 34-c); /api/pulse as
@@ -229,6 +298,14 @@ async function jobSweep(): Promise<{ verdict: string; reason: string; anomalies:
   probes.push(await probe("armor :3016", "http://127.0.0.1:3016/health", (s) => s === 200));
   probes.push(await probe("watchdog :3020", "http://127.0.0.1:3020/health", (s) => s === 200));
   probes.push(await probe("sentinel :3030", "http://127.0.0.1:3030/health", (s) => s === 200));
+  // RECOVERY-0929: ws/bridge were invisible to the sweep — the 2026-09-27 stall
+  // (ws down, feed frozen ~20h) never raised an alert because :3003 was never probed.
+  probes.push(await probe("ws :3003", "http://127.0.0.1:3003/", (s) => s === 400 || s === 200)); // socket.io answers 400 on plain GET = ALIVE
+  probes.push(await probe("bridge :3005", "http://127.0.0.1:3005/health", (s) => s === 200));
+  // v1.3.0 DOCTRINE SUPERVISOR (trace 1a15f7d945d27ead): toobit exec-bridge :3021
+  // joins the senior sweep — health probe + /doctrine violation feed below.
+  const tbtProbe = await probe("tbt :3021", "http://127.0.0.1:3021/health", (s) => s === 200);
+  probes.push(tbtProbe);
 
   // sentinel verdict field
   let verdict = "UNKNOWN";
@@ -252,11 +329,63 @@ async function jobSweep(): Promise<{ verdict: string; reason: string; anomalies:
   if (verdict === "RED") anomalies.push({ class: "sentinel-red", sev: "crit", msg: `sentinel :3030 verdict RED` });
   else if (verdict === "AMBER") anomalies.push({ class: "sentinel-amber", sev: "warn", msg: `sentinel :3030 verdict AMBER` });
 
+  // ── v1.3.0: TOOBIT EXEC-BRIDGE doctrine feed (پیگیری و دکترین) ─────────
+  // Only consulted when the bridge is up (svc-down already covers the other
+  // case). Violations are AMBER in PAPER, crit in LIVE (real money at risk).
+  if (tbtProbe.up) {
+    const tbtDoc = await fetchJson("http://127.0.0.1:3021/doctrine", 6_000);
+    if (!tbtDoc.ok || !tbtDoc.data || typeof tbtDoc.data !== "object") {
+      anomalies.push({ class: "tbt-doctrine-unreachable", sev: "warn", msg: "toobit-bridge :3021 /doctrine unreachable while health is up — doctrine supervisor degraded" });
+      log("warn", "tbt-doctrine-unreachable", { err: tbtDoc.err });
+    } else {
+      const dd = tbtDoc.data as { mode?: string; doctrine?: { violationsN?: number; lastViolation?: { kind?: string; detail?: string } | null; skipBy?: Record<string, number> } | null };
+      const vn = Number(dd.doctrine?.violationsN ?? 0);
+      if (vn > 0) {
+        const last = dd.doctrine?.lastViolation;
+        anomalies.push({
+          class: "tbt-doctrine-violation",
+          sev: dd.mode === "LIVE" ? "crit" : "warn",
+          msg: `toobit-bridge doctrine: ${vn} violation(s) — last=${last?.kind ?? "?"}: ${String(last?.detail ?? "").slice(0, 140)}`,
+        });
+        log("warn", "tbt-doctrine-violations", { n: vn, last: last?.kind });
+      }
+    }
+  }
+
+  // ── RECOVERY-0929: data freshness + streak escalation + heal nudge ─────────
+  const wsProbe = probes.find((p) => p.key === "ws");
+  const fresh = eventFreshness();
+  state.wsDownStreak = wsProbe && !wsProbe.up ? state.wsDownStreak + 1 : 0;
+  const stale = fresh.ageMin == null || fresh.ageMin > DATA_STALE_MIN;
+  state.staleStreak = stale ? state.staleStreak + 1 : 0;
+  if (stale) {
+    anomalies.push({
+      class: "data-stale",
+      sev: "crit", // the ledger itself is frozen — always RED-worthy
+      msg: `data-stale: newest SignalEvent ${fresh.ageMin == null ? "UNREADABLE" : `${fresh.ageMin}min`} old (cap ${DATA_STALE_MIN}min)${fresh.err ? ` · ${fresh.err}` : ""}${fresh.lastAt ? ` · last=${fresh.lastAt}` : ""}`,
+    });
+  }
+  if (wsProbe && !wsProbe.up) {
+    anomalies.push({
+      class: "ws-down",
+      sev: state.wsDownStreak >= WS_CRIT_STREAK ? "crit" : "warn",
+      msg: `ws :3003 DOWN ×${state.wsDownStreak} sweeps (feed dead ⇒ pipeline starves)`,
+    });
+  }
+  // heal nudge: wake the layer-1 prober immediately (its own cooldown still applies)
+  if ((wsProbe && !wsProbe.up) || stale) {
+    try {
+      await fetch("http://127.0.0.1:3020/probe-now", { method: "POST", signal: AbortSignal.timeout(4_000), headers: { "user-agent": "supervisor-cron/1.3" } });
+      log("info", "heal-nudge-sent", { wsDown: !!(wsProbe && !wsProbe.up), stale });
+    } catch (e) { log("warn", "heal-nudge-failed", { err: String(e).slice(0, 80) }); }
+  }
+
   // classification rules (own, per 34-c contract)
   let myVerdict = "GREEN";
   let reason = "all services up · sentinel not RED";
   if (anomalies.some((a) => a.class === "app-down")) { myVerdict = "RED"; reason = "app :3000 down"; }
   else if (anomalies.some((a) => a.class === "sentinel-red")) { myVerdict = "RED"; reason = "sentinel verdict RED"; }
+  else if (anomalies.some((a) => a.class === "data-stale")) { myVerdict = "RED"; reason = "signal ledger stale — pipeline frozen"; }
   else if (anomalies.length > 0) { myVerdict = "AMBER"; reason = anomalies.map((a) => a.msg).join(" · ").slice(0, 300); }
 
   state.lastSweep = {
@@ -265,6 +394,8 @@ async function jobSweep(): Promise<{ verdict: string; reason: string; anomalies:
     reason,
     services: Object.fromEntries(probes.map((p) => [p.key, { up: p.up, status: p.status, ms: p.ms }])),
     anomalies,
+    data: { lastEventAgeMin: fresh.ageMin },
+    streaks: { wsDown: state.wsDownStreak, stale: state.staleStreak },
   };
 
   // RED ⇒ short Telegram alert, rate-limited 1/30min per anomaly class
@@ -290,7 +421,11 @@ function windowsFromSignals(signals: Array<Record<string, unknown>>): { h24: Win
   for (const s of signals) {
     const closedAt = Date.parse(String(s.closedAt ?? ""));
     if (!Number.isFinite(closedAt)) continue;
-    if (s.status !== "SETTLED") continue;
+    // Task 86 FIX: Signal.status is TP1/TP2/TP3/SL/EXPIRED/CLOSED (never the
+    // literal "SETTLED") — the old filter matched nothing, so the 6h report's
+    // 24h/7d windows were permanently 0% (n=0) while the book was settling.
+    const st = String(s.status ?? "");
+    if (!["TP1", "TP2", "TP3", "SL", "EXPIRED", "CLOSED"].includes(st)) continue;
     // pnlUsd = pnlPercent × marginUsd / 100 (same accounting as the dashboard ledger);
     // win = pnlPercent > 0 (same as stats.ts wins/losses)
     const pnlPct = Number(s.pnlPercent ?? 0);
@@ -451,7 +586,32 @@ async function callLlmReview(telemetryJson: string): Promise<{ status: "ok" | "l
 
 async function llmOnce(telemetryJson: string): Promise<{ status: "ok" | "llm_unavailable" | "llm_bad_output"; review: unknown; raw: string; err?: string }> {
   try {
-    const zai = await ZAI.create();
+    // SELFHOST-0929: open-source decoupling — LLM_PROVIDER=openai routes the
+    // senior-supervisor review through any OpenAI-compatible backend (Ollama,
+    // vLLM, OpenRouter, ...); default keeps the sandbox platform SDK.
+    const zai = await (async () => {
+      if ((process.env.LLM_PROVIDER ?? "") === "openai") {
+        const baseUrl = (process.env.LLM_BASE_URL ?? "").replace(/\/+$/, "");
+        if (!baseUrl) throw new Error("LLM_PROVIDER=openai requires LLM_BASE_URL");
+        const apiKey = process.env.LLM_API_KEY ?? "";
+        const model = process.env.LLM_MODEL ?? "llama3.1";
+        return {
+          chat: { completions: { async create(opts: { messages: Array<{ role: string; content: string }>; thinking?: { type: string } }) {
+            const body: Record<string, unknown> = { model, messages: opts.messages };
+            if (opts.thinking?.type === "enabled") body.reasoning_effort = "medium";
+            const res = await fetch(`${baseUrl}/chat/completions`, {
+              method: "POST",
+              headers: { "content-type": "application/json", ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}) },
+              body: JSON.stringify(body),
+              signal: AbortSignal.timeout(LLM_TIMEOUT_MS + 30_000),
+            });
+            if (!res.ok) throw new Error(`llm ${res.status}: ${(await res.text()).slice(0, 200)}`);
+            return (await res.json()) as { choices?: Array<{ message?: { content?: string } }> };
+          } } },
+        };
+      }
+      return ZAI.create();
+    })();
     const completion = (await Promise.race([
       zai.chat.completions.create({
         messages: [
@@ -490,11 +650,12 @@ async function jobReview(): Promise<{ status: string }> {
   log("info", "deep-script-done", { chars: deep.length });
 
   // (b) compact telemetry assembly — every field honestly sourced
-  const [pulse, rawcal, futures, trade] = await Promise.all([
+  const [pulse, rawcal, futures, trade, oos] = await Promise.all([
     fetchJson("http://127.0.0.1:3000/api/pulse", 15_000),
     fetchJson("http://127.0.0.1:3000/api/rawcal", 8_000),
     fetchJson("http://127.0.0.1:3000/api/futures", 8_000),
     fetchJson("http://127.0.0.1:3011/health", 6_000),
+    fetchJson("http://127.0.0.1:3000/api/oos-tracker", 8_000), // v11.6 EQ-97 — live OOS progress replaces the static FAIL line
   ]);
   const sent = await fetchJson("http://127.0.0.1:3030/report", 8_000);
   const shadow = readJsonFile(`${ROOT}/.data/shadow-veto-latest.json`) as Record<string, unknown> | null;
@@ -536,10 +697,20 @@ async function jobReview(): Promise<{ status: string }> {
       }
     : { error: "unavailable" };
 
+  // v11.6 EQ-97 — the validation line is now MEASURED, not static: live OOS
+  // numbers from /api/oos-tracker (protocol §2/§9 bars), honest fallback if
+  // the app is briefly down.
+  const oosT = (oos.ok && oos.data && typeof oos.data === "object" ? oos.data : null) as
+    | { totalOosN?: number; totalTarget?: number; totalFillPct?: number; weakStrategies?: string[]; etaDaysToBar?: number | null; verdict?: string; settlePacePerDay14d?: number }
+    | null;
+  const strategyValidationStatus = oosT && typeof oosT.totalOosN === "number"
+    ? `PROMOTE gate = ${oosT.verdict ?? "FAIL-OPEN-GAPS"} — OOS ${oosT.totalOosN}/${oosT.totalTarget ?? 300} (${oosT.totalFillPct ?? 0}%) · weak per-strategy (<60): ${oosT.weakStrategies?.length ? oosT.weakStrategies.join(",") : "none"} · pace ${oosT.settlePacePerDay14d ?? "?"}/day · ETA ${oosT.etaDaysToBar != null ? `${oosT.etaDaysToBar}d` : "n/a"} (protocol STRATEGY-VALIDATION-PROTOCOL.md; sample-size leg only) — recommend only evidence-respecting actions`
+    : "PROMOTE gate = FAIL (insufficient OOS n; re-validation protocol in STRATEGY-VALIDATION-PROTOCOL.md) — recommend only evidence-respecting actions";
+
   const telemetry = {
     generatedAt: new Date().toISOString(),
     liveExecution: "DISABLED (paper/research-only; SUPPRESSED engine path — honesty contract)",
-    strategyValidationStatus: "PROMOTE gate = FAIL (insufficient OOS n; re-validation protocol in STRATEGY-VALIDATION-PROTOCOL.md) — recommend only evidence-respecting actions",
+    strategyValidationStatus,
     sentinel: sentinelCompact,
     deepSweepQuick: deep,
     pulseStats,
@@ -585,10 +756,110 @@ async function jobReview(): Promise<{ status: string }> {
     log(r.ok ? "info" : "warn", r.ok ? "review-sent" : "review-send-failed", { status: llm.status, http: r.status ?? r.err });
   } else {
     log("warn", "review-llm-unavailable", { status: llm.status, err: llm.err });
-    // honest operator note — sweep data still persisted (telemetrySnapshot above)
-    await bridgeSend(`⚠️ <b>NEXUS · بازبینی مهندس ارشد</b>\nLLM در دسترس نبود (status: <code>${llm.status}</code>) — تلمتری sweep ذخیره شد؛ بازبینی بعدی ۱۲س دیگر.\n${llm.err ? `<code>${String(llm.err).slice(0, 100)}</code>` : ""}`);
+    // honest operator note — sweep data still persisted (telemetrySnapshot above).
+    // v1.2.1 (Task 41): rate-limited to one note per 12h — during the LLM-429
+    // storm every catch-up review fired this note into Telegram (~every 3min).
+    const LEDGER_GAP = 12 * 3600_000;
+    const lastNote = state.alertLedger["review-llm-unavailable"] ?? 0;
+    if (Date.now() - lastNote >= LEDGER_GAP) {
+      state.alertLedger["review-llm-unavailable"] = Date.now();
+      persistState();
+      await bridgeSend(`⚠️ <b>NEXUS · بازبینی مهندس ارشد</b>\nLLM در دسترس نبود (status: <code>${llm.status}</code>) — تلمتری sweep ذخیره شد؛ بازبینی بعدی ۱۲س دیگر.\n${llm.err ? `<code>${String(llm.err).slice(0, 100)}</code>` : ""}`);
+    } else {
+      log("info", "review-note-rate-limited", { sinceMs: Date.now() - lastNote });
+    }
   }
   return { status: llm.status };
+}
+
+// ═══════════════ JOB: watch (Task 36 · one-shot mission) ═══════════════
+// Operator order 2026-09-26: «پیشنهاد ماموریت بعدی با چرخش کلید کنترل را کامل و
+// مهندسی انجام بده» — the sentinel-proposed 30-minute engineered watch:
+//   · FUTURES TAXONOMY sampler keeps landing LIVE rows on the tri-exchange
+//     fuel (fapi → Bybit → spot) — freshness window 35 min per tick
+//   · shadow-veto arms fill toward the 30-sample veto threshold (honest n,
+//     no invented data)
+//   · app/ws/sentinel health each tick
+// 3 ticks = 30 min → final Persian summary persisted to watch-report.json and
+// pushed to Telegram ONCE. Manual POST /run {job:"watch"} re-arms a fresh
+// mission after completion. Read-only on the DB (bun:sqlite readonly).
+const DB_PATH = `${ROOT}/db/custom.db`;
+interface WatchRow { symbol: string; ts: number; source: string; price: number | null }
+function readTaxonomyRows(): { latest: WatchRow[]; fresh35m: number; err?: string } {
+  try {
+    const db = new Database(DB_PATH, { readonly: true });
+    db.exec("PRAGMA busy_timeout=2500");
+    const rows = db.query(`SELECT "symbol","ts","source","price" FROM "FuturesSnapshot" ORDER BY "ts" DESC LIMIT 6`).all() as Array<Record<string, unknown>>;
+    const cutoff = Date.now() - 35 * 60_000;
+    const cnt = db.query(`SELECT COUNT(*) AS n FROM "FuturesSnapshot" WHERE "ts" >= ?`).get(cutoff) as { n: number | bigint } | undefined;
+    db.close();
+    const latest = rows.map((r) => ({ symbol: String(r.symbol), ts: Number(r.ts), source: String(r.source), price: r.price == null ? null : Number(r.price) }));
+    return { latest, fresh35m: Number(cnt?.n ?? 0) };
+  } catch (e) {
+    return { latest: [], fresh35m: 0, err: String(e).slice(0, 120) };
+  }
+}
+
+async function jobWatch(): Promise<{ ok: boolean; detail: string }> {
+  const run = state.watchRuns.length + 1;
+  const tax = readTaxonomyRows();
+  const shadow = readJsonFile(`${ROOT}/.data/shadow-veto-latest.json`) as { arms?: Array<Record<string, unknown>> } | null;
+  const arms = (shadow?.arms ?? []).map((a, i) => ({
+    id: String(a.id ?? i),
+    label: String(a.label ?? a.id ?? i),
+    n: Number(a.n ?? 0),
+    target: Number(a.target ?? 0),
+    fillPct: Number(a.fillPct ?? 0),
+    starved: Boolean(a.starved),
+  }));
+  const appHz = await probe("app :3000", "http://127.0.0.1:3000/api/healthz", (s) => s === 200);
+  const wsProbe = await probe("ws :3003", "http://127.0.0.1:3003/", (s) => s === 400 || s === 200); // socket.io answers 400 on plain GET = ALIVE
+  const rep = await fetchJson("http://127.0.0.1:3030/report", 8_000);
+  const verdict = rep.ok && rep.data && typeof rep.data === "object" ? String((rep.data as Record<string, unknown>).verdict ?? "UNKNOWN") : "UNKNOWN";
+
+  const latestAgeMin = tax.latest.length ? Math.round((Date.now() - Math.max(...tax.latest.map((r) => r.ts))) / 60_000) : null;
+  const record = {
+    run,
+    at: new Date().toISOString(),
+    tehran: tehran(),
+    taxonomy: { fresh35m: tax.fresh35m, latestAgeMin, err: tax.err ?? null, latest: tax.latest.slice(0, 3) },
+    arms,
+    services: { app: appHz.up, ws: wsProbe.up, sentinelVerdict: verdict },
+  };
+  state.watchRuns.push(record);
+
+  const done = run >= WATCH_MAX_RUNS;
+  let summary = `run ${run}/${WATCH_MAX_RUNS}: taxonomy fresh35m=${tax.fresh35m} latestAge=${latestAgeMin ?? "null"}min · arms ${arms.map((a) => `${a.id} ${a.n}/${a.target}`).join(", ")} · app=${appHz.up} ws=${wsProbe.up} verdict=${verdict}`;
+
+  if (done) {
+    const first = state.watchRuns[0] as typeof record;
+    const last = record;
+    const armsDelta = arms.map((a) => {
+      const before = (first.arms as typeof arms).find((x) => x.id === a.id);
+      return `${a.id}: ${before?.n ?? 0}→${a.n}/${a.target}`;
+    }).join(" · ");
+    const freshTotal = Math.max(...state.watchRuns.map((r) => Number((r as typeof record).taxonomy.fresh35m)));
+    summary = `mission complete · taxonomy rows/35min ${first.taxonomy.fresh35m}→${last.taxonomy.fresh35m} (max ${freshTotal}) · arms Δ ${armsDelta} · verdict ${String(first.services.sentinelVerdict)}→${last.services.sentinelVerdict}`;
+    state.lastWatch = { at: new Date().toISOString(), run, done: true, summary };
+    const doc = { at: state.lastWatch.at, tehran: tehran(), mission: "30-minute live-fuel & arms watch (Task 36)", runs: state.watchRuns, summary };
+    try {
+      writeFileSync(`${DIR}/watch-report.json.tmp`, JSON.stringify(doc, null, 1));
+      renameSync(`${DIR}/watch-report.json.tmp`, `${DIR}/watch-report.json`);
+    } catch (e) { log("warn", "watch-write-failed", { err: String(e).slice(0, 120) }); }
+    const lines = [
+      `📡 <b>NEXUS · گزارش ماموریت رصد ۳۰دقیقه‌ای</b>`,
+      `<code>${tehran()} IRST</code>`,
+      `▸ TAXONOMY: ردیف زنده در پنجره ۳۵دقیقه‌ای: <b>${last.taxonomy.fresh35m}</b> · کهنه‌ترین ردیف ${last.taxonomy.latestAgeMin ?? "—"} دقیقه پیش`,
+      `▸ بازوهای shadow-veto: <code>${armsDelta}</code>`,
+      `▸ سرویس‌ها: app=${last.services.app ? "OK" : "DOWN"} · ws=${last.services.ws ? "OK" : "DOWN"} · sentinel=${last.services.sentinelVerdict}`,
+      `▸ جزئیات کامل: GET :3015/status و .data/supervisor-cron/watch-report.json`,
+    ];
+    const r = await bridgeSend(lines.join("\n"));
+    log(r.ok ? "info" : "warn", r.ok ? "watch-report-sent" : "watch-report-send-failed", { http: r.status ?? r.err });
+  } else {
+    state.lastWatch = { at: new Date().toISOString(), run, done: false, summary };
+  }
+  return { ok: true, detail: summary.slice(0, 200) };
 }
 
 // ═════════════════════════════ RUNNER (single-flight + drift-resistant) ══════
@@ -610,6 +881,22 @@ async function runJob(id: JobId, trigger: "schedule" | "manual"): Promise<{ ok: 
     } else if (id === "progress") {
       const r = await jobProgress();
       status = r.ok ? "ok" : "error";
+      detail = r.detail;
+    } else if (id === "watch") {
+      const r = await jobWatch();
+      status = r.ok ? "ok" : "error";
+      detail = r.detail;
+    } else if (id === "backup") {
+      const r = await jobBackup();
+      status = r.ok ? "ok" : "error";
+      detail = r.detail;
+    } else if (id === "digest") {
+      const r = await jobDigest();
+      status = r.ok ? "ok" : "error";
+      detail = r.detail;
+    } else if (id === "keepwarm") {
+      const r = await jobKeepwarm();
+      status = r.ok ? "ok" : "error"; // cold heartbeat = honest failure telemetry
       detail = r.detail;
     } else {
       const r = await jobReview();
@@ -641,14 +928,37 @@ async function runJob(id: JobId, trigger: "schedule" | "manual"): Promise<{ ok: 
 // Catch-up: sweep skips missed slots (10-min cadence self-heals); an overdue
 // progress/review report runs shortly (catch-up semantics like daily-scheduler)
 // instead of silently waiting another full interval.
+function intervalFor(id: JobId): number {
+  return id === "sweep" ? SWEEP_MS : id === "progress" ? PROGRESS_MS : id === "watch" ? WATCH_MS : id === "backup" ? BACKUP_MS : id === "digest" ? DIGEST_MS : id === "keepwarm" ? KEEPWARM_MS : REVIEW_MS;
+}
 function scheduleNext(id: JobId) {
-  const interval = id === "sweep" ? SWEEP_MS : id === "progress" ? PROGRESS_MS : REVIEW_MS;
+  // one-shot mission finished → do not reschedule (manual /run re-arms)
+  if (id === "watch" && state.watchRuns.length >= WATCH_MAX_RUNS) return;
+  const interval = intervalFor(id);
   const js = state.jobs[id];
   const now = Date.now();
   let next = js.nextRunAt ?? now + interval;
   if (next <= now) {
-    if (id === "sweep") { while (next <= now) next += interval; }
-    else next = now + 90_000; // overdue 6h/12h report → catch-up run
+    if (id === "sweep" || id === "keepwarm") { while (next <= now) next += interval; } // 5-10min cadences self-heal missed slots
+    else if (js.lastRunAt && js.lastRunAt >= next) {
+      // v1.2.0 BUGFIX (operator report «هر ۱ دقیقه به تلگرام پیام می‌فرستد»):
+      // the catch-up run already happened (lastRunAt at-or-after the stale
+      // slot — timer fires exactly AT the slot, so equality is the common
+      // case) → anchor the next slot at lastRun+interval instead of re-
+      // catching-up every 90s. The old code never advanced the anchor, so one
+      // missed slot degenerated into a 90-second send-loop for 6h reports.
+      next = js.lastRunAt + interval;
+      while (next <= now) next += interval;
+    } else if (now - next > interval / 2) {
+      // v1.2.1 (Task 41): stale missed slot — the report's window is long gone,
+      // and after a long downtime this branch used to fire a "catch-up" send
+      // on every restart. Re-anchor silently instead: a 5h-overdue 6h report
+      // carries no news; the next one comes on schedule.
+      log("info", "catch-up-skipped-stale", { job: id, overdueMs: now - next });
+      next = now + interval;
+    } else {
+      next = now + 90_000; // first catch-up for a genuinely missed report → run shortly
+    }
   }
   js.nextRunAt = next;
   const delay = Math.max(0, next - now);
@@ -661,11 +971,168 @@ function scheduleNext(id: JobId) {
   g.__scTimers.set(id, t);
 }
 
+// ═════════════════════════ JOB: backup (v1.2.0) ═══════════════════════════
+// Restores the 3-hourly sandbox snapshot under OUR ownership: the old
+// platform-cron job died with a platform reset and the Task-34 rebuild of
+// this service never re-owned it → ring went stale (found 2026-09-26).
+// scripts/backup.sh is battle-tested (zip + wal_checkpoint + AES-256 .enc +
+// Telegram off-site tiers + RECOVERY-INDEX) and reads its own .env secrets.
+async function jobBackup(): Promise<{ ok: boolean; detail: string }> {
+  const t0 = Date.now();
+  const proc = Bun.spawn(["bash", `${ROOT}/scripts/backup.sh`], {
+    cwd: ROOT,
+    stdout: "pipe",
+    stderr: "pipe",
+    env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+  });
+  let timedOut = false;
+  const timer = setTimeout(() => { timedOut = true; try { proc.kill(9); } catch { /* */ } }, BACKUP_TIMEOUT_MS);
+  const [out, err, code] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
+  clearTimeout(timer);
+  const tail = `${out}\n${err}`.trim().split("\n").slice(-6).join(" | ").slice(0, 280);
+  if (timedOut) return { ok: false, detail: `timeout after ${BACKUP_TIMEOUT_MS / 60000}min: ${tail}` };
+  if (code !== 0) return { ok: false, detail: `exit ${code}: ${tail}` };
+  return { ok: true, detail: `snapshot ok in ${Math.round((Date.now() - t0) / 1000)}s: ${tail}` };
+}
+
+// ═══════════════════════ JOB: digest (v1.4.0 · TASK-48) ═══════════════════
+// Operator order 2026-09-29: «هزینه‌های VPS خیلی بالاست… کمکم کن همینجا ازش
+// استفاده کنم» — the sandbox stays free, so the operator's TELEGRAM becomes
+// the terminal: every 2h a compact Persian digest built ONLY from real ledger
+// rows (readonly sqlite — Prisma owns writes; honest nulls, never invented).
+// First digest fires 2min after every boot = post-recycle recovery proof.
+function fmtPrice(v: number): string {
+  const a = Math.abs(v);
+  return a >= 1000 ? v.toFixed(1) : a >= 100 ? v.toFixed(2) : a >= 1 ? v.toFixed(4) : v.toFixed(6);
+}
+async function jobDigest(): Promise<{ ok: boolean; detail: string }> {
+  const since = Date.now() - DIGEST_MS;
+  let db: Database | null = null;
+  try {
+    db = new Database(`${ROOT}/db/custom.db`, { readonly: true });
+    db.exec("PRAGMA busy_timeout=2500");
+    const newCount = (db.query("SELECT COUNT(*) n FROM Signal WHERE createdAt >= ?").get(since) as { n: number }).n;
+    const newSignals = db
+      .query("SELECT serial, symbol, direction, entryPrice, tp1, stopLoss, confidence FROM Signal WHERE createdAt >= ? ORDER BY createdAt DESC LIMIT ?")
+      .all(since, DIGEST_MAX_NEW) as Array<{ serial: number; symbol: string; direction: string; entryPrice: number; tp1: number; stopLoss: number; confidence: number }>;
+    const settled = db
+      .query("SELECT status, COUNT(*) n, ROUND(AVG(pnlPercent),2) avgPnl FROM Signal WHERE qualityFlag IS NULL AND closedAt >= ? GROUP BY status")
+      .all(since) as Array<{ status: string; n: number; avgPnl: number }>;
+    const week = db
+      .query("SELECT COUNT(*) n, ROUND(AVG(pnlPercent),2) meanPnl, SUM(CASE WHEN pnlPercent > 0 THEN 1 ELSE 0 END) wins FROM Signal WHERE qualityFlag IS NULL AND closedAt >= ?")
+      .get(Date.now() - 7 * 864e5) as { n: number; meanPnl: number | null; wins: number | null };
+    const active = (db.query("SELECT COUNT(*) n FROM Signal WHERE status = 'ACTIVE'").get() as { n: number }).n;
+    db.close();
+    db = null;
+
+    const L: string[] = [];
+    L.push("📊 <b>NEXUS · گزیدهٔ سیگنال‌ها</b>");
+    L.push(`<i>${tehran()} IRST · پنجرهٔ ۲ ساعت</i>`);
+    L.push("");
+    L.push(`🆕 سیگنال جدید: <b>${newCount}</b> · فعال الان: <b>${active}</b>`);
+    for (const s of newSignals) {
+      const arrow = s.direction === "LONG" ? "🟢" : "🔴";
+      L.push(`• <b>NX-${String(s.serial).padStart(4, "0")}</b> ${s.symbol} ${arrow}${s.direction} · ورود <code>${fmtPrice(s.entryPrice)}</code> · TP1 <code>${fmtPrice(s.tp1)}</code> · SL <code>${fmtPrice(s.stopLoss)}</code> · اطمینان ${s.confidence}%`);
+    }
+    if (newCount > DIGEST_MAX_NEW) L.push(`• … و ${newCount - DIGEST_MAX_NEW} سیگنال دیگر`);
+    L.push("");
+    if (settled.length > 0) {
+      const order = ["TP3", "TP2", "TP1", "SL", "EXPIRED"];
+      const parts = order
+        .filter((k) => settled.some((r) => r.status === k))
+        .map((k) => {
+          const r = settled.find((x) => x.status === k)!;
+          return `${k}×${r.n} (${r.avgPnl >= 0 ? "+" : ""}${r.avgPnl}%)`;
+        });
+      L.push(`🏁 ستل ۲ ساعت: ${parts.join(" · ")}`);
+    } else {
+      L.push("🏁 ستل ۲ ساعت: موردی بسته نشد");
+    }
+    if (week && week.n > 0 && week.meanPnl != null) {
+      const wr = week.wins != null ? Math.round((week.wins / week.n) * 100) : null;
+      L.push(`📈 هفتهٔ اخیر: ${week.n} ستل‌شده · میانگین ${week.meanPnl >= 0 ? "+" : ""}${week.meanPnl}٪${wr != null ? ` · برد ${wr}٪` : ""}`);
+    }
+    const sv = state.lastSweep;
+    if (sv) L.push(`${sv.verdict === "GREEN" ? "🟢" : sv.verdict === "AMBER" ? "🟡" : "🔴"} سیستم: ${sv.verdict} · آخرین داده ${sv.data?.lastEventAgeMin ?? "—"} دقیقه پیش`);
+    // v11.0 STABLEFLOW (operator mandate 2026-09-30: «تمام فازها را کامل و
+    // مهندسی اجرا کن»): Persian stablecoin-regime line straight from the
+    // stable-feed board file. Honest skip when absent or stale (>40min) —
+    // the digest never invents data.
+    try {
+      const b = JSON.parse(readFileSync(`${ROOT}/.data/stable-feed/board.json`, "utf8")) as {
+        at: number; totalMcapUsd: number | null; totalDelta24hPct: number | null; regime: string; regimeReason: string; maxPegDevPct: number | null;
+      };
+      if (b.at && Date.now() - b.at < 40 * 60_000 && b.totalMcapUsd) {
+        const fa = b.regime === "RISK-ON" ? "ریسک‌پذیر 🟢" : b.regime === "RISK-OFF" ? "ریسک‌گریز 🔴" : "خنثی ⚪";
+        const d24 = b.totalDelta24hPct === null ? "—" : `${b.totalDelta24hPct >= 0 ? "+" : ""}${b.totalDelta24hPct.toFixed(2)}٪`;
+        const peg = b.maxPegDevPct === null ? "" : ` · پیگ ${Math.abs(b.maxPegDevPct) < 0.5 ? "سالم ✅" : `⚠️ ${b.maxPegDevPct.toFixed(2)}٪`}`;
+        L.push(`🌊 استیبل‌کوین‌ها: کل <b>${(b.totalMcapUsd / 1e9).toFixed(1)}B$</b> · ۲۴ساعته ${d24} · رژیم نقدینگی: ${fa}${peg}`);
+      }
+    } catch { /* no board yet — honest skip */ }
+    L.push("");
+    L.push("⚠️ سیگنال مشاوره است نه تضمین — فقط با سرمایه‌ای که از دست دادنش زندگی‌ات را نمی‌شکند.");
+    const r = await bridgeSend(L.join("\n"));
+    state.lastDigest = { at: new Date().toISOString(), ok: r.ok, newN: newCount };
+    return { ok: r.ok, detail: `digest new=${newCount} settled=${settled.length} bridge=${r.ok ? "ok" : String(r.err ?? r.status)}` };
+  } catch (e) {
+    return { ok: false, detail: String(e).slice(0, 160) };
+  } finally {
+    try { db?.close(); } catch { /* never */ }
+  }
+}
+
+// ═══════════════════════ JOB: keepwarm (v1.5.0 · TASK-56) ═══════════════
+// Operator order: «کرون‌جاب keep-warm و … را کامل و مهندسی انجام بده».
+// Two-tier keep-warm doctrine (SANDBOX-COLD-0930 post-mortem):
+//   · TIER-1 INTERNAL (this job, every 5 min): self-ping /api/healthz (+
+//     /api/pulse fallback) and PERSIST the lineage evidence (bootAt · gitSha ·
+//     coldStreak). warm-loop :3012 already drives the engine via 5s pulses —
+//     this job adds what it lacks: Job-411262 heartbeat semantics with an
+//     auditable OK/COLD ledger in state.json, visible on /health.
+//   · TIER-2 EXTERNAL (operator-registered platform cron, Job 411262 model):
+//     an OUTSIDE heartbeat every 5 min against the public /api/healthz — the
+//     ONLY tier that prevents platform idle-recycle (internal traffic never
+//     counts; proven: warm-loop pulsed every 5s and the box still recycled).
+//     Kit: scripts/keep-warm.sh + the exact spec in the Task-56 reply.
+// HARD RULES (Job-411262 doctrine): the heartbeat NEVER restarts, NEVER
+// heals, NEVER mutates — it hits one endpoint and writes one honest line.
+// A cold app belongs to p0-watchdog; keepwarm only counts the streak.
+async function jobKeepwarm(): Promise<{ ok: boolean; detail: string }> {
+  const t0 = Date.now();
+  const hit = await fetchJson("http://127.0.0.1:3000/api/healthz", 8_000);
+  const ms = Date.now() - t0;
+  let ok = false;
+  let bootAt: string | null = null;
+  let gitSha: string | null = null;
+  const d = (hit.data ?? null) as { bootAt?: string; gitSha?: string } | null;
+  if (hit.ok && d && typeof d.bootAt === "string") {
+    ok = true;
+    bootAt = d.bootAt;
+    gitSha = typeof d.gitSha === "string" ? d.gitSha.slice(0, 7) : null;
+  } else {
+    // fallback lane: pulse touches the DB — only tried when healthz failed
+    const p = await fetchJson("http://127.0.0.1:3000/api/pulse", 12_000);
+    if (p.ok) ok = true;
+  }
+  state.coldStreak = ok ? 0 : state.coldStreak + 1;
+  state.lastKeepwarm = { at: new Date().toISOString(), ok, ms, bootAt, gitSha, coldStreak: state.coldStreak };
+  if (!ok) {
+    log("warn", "keepwarm-cold", { ms, coldStreak: state.coldStreak });
+    if (state.coldStreak === 3) log("crit", "keepwarm-cold-streak", { note: "app cold ≥15min — p0-watchdog owns healing; keepwarm never restarts (Job-411262 doctrine)" });
+    return { ok: false, detail: `HEARTBEAT COLD app:3000 ${ms}ms streak=${state.coldStreak}` };
+  }
+  return { ok: true, detail: `HEARTBEAT OK ${ms}ms boot=${(bootAt ?? "?").slice(11, 19)}Z sha=${gitSha ?? "?"}` };
+}
+
 // ── HTTP surface ─────────────────────────────────────────────────────────────
 function jobSummary(): Array<Record<string, unknown>> {
-  return (["sweep", "progress", "review"] as JobId[]).map((id) => {
+  return (["keepwarm", "sweep", "progress", "review", "watch", "backup", "digest"] as JobId[]).map((id) => {
     const js = state.jobs[id];
-    return { id, lastRunAt: js.lastRunAt, nextRunAt: js.nextRunAt, lastStatus: js.lastStatus, lastDurationMs: js.lastDurationMs, intervalMin: id === "sweep" ? 10 : id === "progress" ? 360 : 720, runs: js.runs, failures: js.failures };
+    return { id, lastRunAt: js.lastRunAt, nextRunAt: js.nextRunAt, lastStatus: js.lastStatus, lastDurationMs: js.lastDurationMs, intervalMin: id === "keepwarm" ? 5 : id === "sweep" || id === "watch" ? 10 : id === "backup" ? 180 : id === "digest" ? 120 : id === "progress" ? 360 : 720, runs: js.runs, failures: js.failures };
   });
 }
 async function handle(req: Request): Promise<Response> {
@@ -678,6 +1145,7 @@ async function handle(req: Request): Promise<Response> {
       jobs: jobSummary(),
       lastReviewAt: state.lastReview?.at ?? null,
       lastSweepVerdict: state.lastSweep?.verdict ?? null,
+      lastKeepwarm: state.lastKeepwarm,
     }, { headers: { "cache-control": "no-store" } });
   }
   if (p === "/status") {
@@ -686,6 +1154,8 @@ async function handle(req: Request): Promise<Response> {
       uptimeSec: Math.floor((Date.now() - BOOT) / 1000), tehran: tehran(),
       jobs: jobSummary(),
       lastSweep: state.lastSweep,
+      lastWatch: state.lastWatch,
+      watchRuns: state.watchRuns.slice(-6),
       lastReview: state.lastReview ? (() => { try { const d = JSON.parse(readFileSync(REVIEW, "utf8")) as Record<string, unknown>; return { at: d.at, status: d.status, err: d.err, review: d.review }; } catch { return { ...state.lastReview, review: null, note: "review-file-unreadable" }; } })() : null,
       lastProgress: state.lastProgress,
       alertLedger: state.alertLedger,
@@ -697,13 +1167,20 @@ async function handle(req: Request): Promise<Response> {
     if (!controlOk(req)) return Response.json({ ok: false, error: "unauthorized: mutating API requires x-nexus-key header" }, { status: 401, headers: { "cache-control": "no-store" } });
     const body = (await req.json().catch(() => ({}))) as { job?: string };
     const job = body.job as JobId | undefined;
-    if (job !== "sweep" && job !== "progress" && job !== "review") {
-      return Response.json({ ok: false, error: 'body {job: "sweep"|"progress"|"review"} required' }, { status: 400, headers: { "cache-control": "no-store" } });
+    if (job !== "sweep" && job !== "progress" && job !== "review" && job !== "watch" && job !== "backup" && job !== "digest" && job !== "keepwarm") {
+      return Response.json({ ok: false, error: 'body {job: "sweep"|"progress"|"review"|"watch"|"backup"|"keepwarm"} required' }, { status: 400, headers: { "cache-control": "no-store" } });
+    }
+    // watch mission re-arm: a manual run after completion starts a fresh mission
+    if (job === "watch" && state.watchRuns.length >= WATCH_MAX_RUNS) {
+      state.watchRuns = [];
+      state.lastWatch = null;
+      log("info", "watch-rearmed", { by: "manual" });
     }
     const r = await runJob(job, "manual");
     if (r.ok) {
       // a successful manual run re-anchors the schedule from now (operator override)
-      state.jobs[job].nextRunAt = Date.now() + (job === "sweep" ? SWEEP_MS : job === "progress" ? PROGRESS_MS : REVIEW_MS);
+      const ms = intervalFor(job);
+      state.jobs[job].nextRunAt = Date.now() + ms;
       scheduleNext(job);
       persistState();
     }
@@ -735,8 +1212,8 @@ try {
 loadState();
 persistState();
 log("info", "boot", { ver: VER, pid: process.pid, port: PORT });
-console.log(`[${tehran()}] ${VER} armed on :${PORT} — sweep 10m · progress 6h · review 12h (DAILY/SRE owned by Next daily-scheduler, not duplicated)`);
-for (const id of ["sweep", "progress", "review"] as JobId[]) scheduleNext(id);
+console.log(`[${tehran()}] ${VER} armed on :${PORT} — keepwarm 5m · sweep 10m · progress 6h · review 12h · watch 10m×3 · backup 3h · digest 2h (DAILY/SRE owned by Next daily-scheduler, not duplicated)`);
+for (const id of ["keepwarm", "sweep", "progress", "review", "watch", "backup", "digest"] as JobId[]) scheduleNext(id);
 
 process.on("SIGTERM", () => { log("info", "shutdown", { sig: "SIGTERM" }); try { writeFileSync(LOCK, JSON.stringify({ pid: null, releasedAt: new Date().toISOString() })); } catch { /* */ } process.exit(0); });
 process.on("SIGINT", () => { log("info", "shutdown", { sig: "SIGINT" }); process.exit(0); });

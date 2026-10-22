@@ -86,20 +86,110 @@
 
 - `2026-09-26T13:12:37.180Z` ENV-GUARD: .env auto-restored from local snapshot ring (nexus-snapshot-20260926-115237.zip) — 5/5 keys, bridge re-arm issued. Erasure forensics: .env-erased/erased-1790428356999.txt
 
-- `2026-09-27T15:50:30.726Z` ENV-GUARD: .env auto-restored from local snapshot ring (nexus-snapshot-20260927-133613.zip) — 5/5 keys, bridge re-arm issued. Erasure forensics: .env-erased/erased-1790524229929.txt
+- `2026-09-27T09:25:54.427Z` ENV-GUARD: .env auto-restored from local snapshot ring (nexus-snapshot-20260927-003824.zip) — 5/5 keys, bridge re-arm issued. Erasure forensics: .env-erased/erased-1790501153647.txt
 
-- `2026-09-27T15:50:37.961Z` DAILY-SCHEDULER: daily performance report auto-sent for Tehran day 2026-09-27 (self-driving, no platform cron)
+- `2026-09-27T09:25:59.715Z` DAILY-SCHEDULER: SRE engineering daily auto-sent for Tehran day 2026-09-27 (self-driving)
 
-- `2026-09-27T15:50:39.021Z` DAILY-SCHEDULER: SRE engineering daily auto-sent for Tehran day 2026-09-27 (self-driving)
+- `2026-09-28T11:10:58.235Z` DAILY-SCHEDULER: daily performance report auto-sent for Tehran day 2026-09-28 (self-driving, no platform cron)
 
-- `2026-10-15T07:53:37.310Z` ENV-GUARD: .env auto-restored from local snapshot ring (nexus-snapshot-20261015-045657.zip) — 5/5 keys, bridge re-arm issued. Erasure forensics: .env-erased/erased-1792050817157.txt
+- `2026-09-28T11:10:58.863Z` DAILY-SCHEDULER: SRE engineering daily auto-sent for Tehran day 2026-09-28 (self-driving)
 
-- `2026-10-15T07:54:07.278Z` DAILY-SCHEDULER: daily performance report auto-sent for Tehran day 2026-10-15 (self-driving, no platform cron)
+- `2026-09-29T09:36:57.878Z` DAILY-SCHEDULER: daily performance report auto-sent for Tehran day 2026-09-29 (self-driving, no platform cron)
 
-- `2026-10-15T07:54:09.142Z` DAILY-SCHEDULER: SRE engineering daily auto-sent for Tehran day 2026-10-15 (self-driving)
+- `2026-09-29T09:36:58.497Z` DAILY-SCHEDULER: SRE engineering daily auto-sent for Tehran day 2026-09-29 (self-driving)
 
-- `2026-10-22T22:26:23.695Z` ENV-GUARD: .env auto-restored from local snapshot ring (nexus-snapshot-20261022-201935.zip) — 5/5 keys, bridge re-arm issued. Erasure forensics: .env-erased/erased-1792707982733.txt
+- `2026-09-29T21:09:57.321Z` DAILY-SCHEDULER: daily performance report auto-sent for Tehran day 2026-09-30 (self-driving, no platform cron)
 
-- `2026-10-22T22:26:51.096Z` DAILY-SCHEDULER: daily performance report auto-sent for Tehran day 2026-10-23 (self-driving, no platform cron)
+- `2026-09-29T21:10:05.410Z` DAILY-SCHEDULER: SRE engineering daily auto-sent for Tehran day 2026-09-30 (self-driving)
 
-- `2026-10-22T22:26:51.908Z` DAILY-SCHEDULER: SRE engineering daily auto-sent for Tehran day 2026-10-23 (self-driving)
+- `2026-09-30T20:33:02.385Z` DAILY-SCHEDULER: daily performance report auto-sent for Tehran day 2026-10-01 (self-driving, no platform cron)
+
+- `2026-09-30T21:36:39.513Z` DAILY-SCHEDULER: SRE engineering daily auto-sent for Tehran day 2026-10-01 (self-driving)
+
+- `2026-10-01T21:43:07.192Z` DAILY-SCHEDULER: daily performance report auto-sent for Tehran day 2026-10-02 (self-driving, no platform cron)
+
+- `2026-10-01T21:43:09.328Z` DAILY-SCHEDULER: SRE engineering daily auto-sent for Tehran day 2026-10-02 (self-driving)
+
+- `2026-10-02T21:10:48.194Z` DAILY-SCHEDULER: daily performance report auto-sent for Tehran day 2026-10-03 (self-driving, no platform cron)
+
+- `2026-10-02T21:10:53.295Z` DAILY-SCHEDULER: SRE engineering daily auto-sent for Tehran day 2026-10-03 (self-driving)
+
+- `2026-10-02T22:11:03.607Z` DAILY-SCHEDULER: weekly performance report auto-sent for Iranian week containing 2026-10-03 (self-driving)
+
+- `2026-10-03T20:33:46.025Z` DAILY-SCHEDULER: daily performance report auto-sent for Tehran day 2026-10-04 (self-driving, no platform cron)
+
+- `2026-10-03T21:04:59.959Z` DAILY-SCHEDULER: SRE engineering daily auto-sent for Tehran day 2026-10-04 (self-driving)
+
+- `2026-10-04T20:31:09.424Z` DAILY-SCHEDULER: daily performance report auto-sent for Tehran day 2026-10-05 (self-driving, no platform cron)
+
+- `2026-10-04T21:00:52.196Z` DAILY-SCHEDULER: SRE engineering daily auto-sent for Tehran day 2026-10-05 (self-driving)
+
+- `2026-10-05T20:32:25.500Z` DAILY-SCHEDULER: daily performance report auto-sent for Tehran day 2026-10-06 (self-driving, no platform cron)
+
+- `2026-10-05T21:02:30.856Z` DAILY-SCHEDULER: SRE engineering daily auto-sent for Tehran day 2026-10-06 (self-driving)
+
+- `2026-10-06T20:32:22.130Z` DAILY-SCHEDULER: daily performance report auto-sent for Tehran day 2026-10-07 (self-driving, no platform cron)
+
+- `2026-10-06T21:02:21.030Z` DAILY-SCHEDULER: SRE engineering daily auto-sent for Tehran day 2026-10-07 (self-driving)
+
+- `2026-10-07T21:00:11.851Z` DAILY-SCHEDULER: SRE engineering daily auto-sent for Tehran day 2026-10-08 (self-driving)
+
+- `2026-10-08T20:31:21.900Z` DAILY-SCHEDULER: daily performance report auto-sent for Tehran day 2026-10-09 (self-driving, no platform cron)
+
+- `2026-10-08T21:02:28.176Z` DAILY-SCHEDULER: SRE engineering daily auto-sent for Tehran day 2026-10-09 (self-driving)
+
+- `2026-10-09T20:32:13.694Z` DAILY-SCHEDULER: daily performance report auto-sent for Tehran day 2026-10-10 (self-driving, no platform cron)
+
+- `2026-10-09T20:32:15.208Z` DAILY-SCHEDULER: weekly performance report auto-sent for Iranian week containing 2026-10-10 (self-driving)
+
+- `2026-10-09T21:02:12.983Z` DAILY-SCHEDULER: SRE engineering daily auto-sent for Tehran day 2026-10-10 (self-driving)
+
+- `2026-10-10T20:30:23.336Z` DAILY-SCHEDULER: daily performance report auto-sent for Tehran day 2026-10-11 (self-driving, no platform cron)
+
+- `2026-10-10T21:04:13.695Z` DAILY-SCHEDULER: SRE engineering daily auto-sent for Tehran day 2026-10-11 (self-driving)
+
+- `2026-10-11T20:32:15.294Z` DAILY-SCHEDULER: daily performance report auto-sent for Tehran day 2026-10-12 (self-driving, no platform cron)
+
+- `2026-10-11T21:00:08.468Z` DAILY-SCHEDULER: SRE engineering daily auto-sent for Tehran day 2026-10-12 (self-driving)
+
+- `2026-10-12T20:32:26.557Z` DAILY-SCHEDULER: daily performance report auto-sent for Tehran day 2026-10-13 (self-driving, no platform cron)
+
+- `2026-10-12T21:02:16.169Z` DAILY-SCHEDULER: SRE engineering daily auto-sent for Tehran day 2026-10-13 (self-driving)
+
+- `2026-10-13T20:31:32.223Z` DAILY-SCHEDULER: daily performance report auto-sent for Tehran day 2026-10-14 (self-driving, no platform cron)
+
+- `2026-10-13T21:04:15.787Z` DAILY-SCHEDULER: SRE engineering daily auto-sent for Tehran day 2026-10-14 (self-driving)
+
+- `2026-10-14T20:34:21.746Z` DAILY-SCHEDULER: daily performance report auto-sent for Tehran day 2026-10-15 (self-driving, no platform cron)
+
+- `2026-10-14T21:01:34.295Z` DAILY-SCHEDULER: SRE engineering daily auto-sent for Tehran day 2026-10-15 (self-driving)
+
+- `2026-10-15T20:31:52.349Z` DAILY-SCHEDULER: daily performance report auto-sent for Tehran day 2026-10-16 (self-driving, no platform cron)
+
+- `2026-10-15T21:04:32.454Z` DAILY-SCHEDULER: SRE engineering daily auto-sent for Tehran day 2026-10-16 (self-driving)
+
+- `2026-10-16T20:34:17.649Z` DAILY-SCHEDULER: daily performance report auto-sent for Tehran day 2026-10-17 (self-driving, no platform cron)
+
+- `2026-10-16T20:34:19.062Z` DAILY-SCHEDULER: weekly performance report auto-sent for Iranian week containing 2026-10-17 (self-driving)
+
+- `2026-10-16T21:04:46.975Z` DAILY-SCHEDULER: SRE engineering daily auto-sent for Tehran day 2026-10-17 (self-driving)
+
+- `2026-10-17T20:30:12.505Z` DAILY-SCHEDULER: daily performance report auto-sent for Tehran day 2026-10-18 (self-driving, no platform cron)
+
+- `2026-10-17T21:04:34.101Z` DAILY-SCHEDULER: SRE engineering daily auto-sent for Tehran day 2026-10-18 (self-driving)
+
+- `2026-10-18T20:31:03.433Z` DAILY-SCHEDULER: daily performance report auto-sent for Tehran day 2026-10-19 (self-driving, no platform cron)
+
+- `2026-10-18T21:02:10.177Z` DAILY-SCHEDULER: SRE engineering daily auto-sent for Tehran day 2026-10-19 (self-driving)
+
+- `2026-10-19T22:25:26.384Z` DAILY-SCHEDULER: daily performance report auto-sent for Tehran day 2026-10-20 (self-driving, no platform cron)
+
+- `2026-10-19T22:25:28.779Z` DAILY-SCHEDULER: SRE engineering daily auto-sent for Tehran day 2026-10-20 (self-driving)
+
+- `2026-10-20T20:30:34.678Z` DAILY-SCHEDULER: daily performance report auto-sent for Tehran day 2026-10-21 (self-driving, no platform cron)
+
+- `2026-10-20T21:00:13.802Z` DAILY-SCHEDULER: SRE engineering daily auto-sent for Tehran day 2026-10-21 (self-driving)
+
+- `2026-10-21T20:31:51.792Z` DAILY-SCHEDULER: daily performance report auto-sent for Tehran day 2026-10-22 (self-driving, no platform cron)
+
+- `2026-10-21T21:03:13.277Z` DAILY-SCHEDULER: SRE engineering daily auto-sent for Tehran day 2026-10-22 (self-driving)

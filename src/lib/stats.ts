@@ -4,6 +4,12 @@ import type { PlatformStats, SignalDTO, AfterlifeStats, LifecycleStats, FlowDTO,
 import type { Signal } from "@prisma/client";
 import { ACCOUNT_START_USD, feeBreakdown } from "@/lib/accounting";
 import { getTtlTelemetry } from "@/lib/ttl-gate";
+// Task 65 SIZING-MODES — live margin sizing control state (pulse-cheap, 15s memo)
+import { getSizingConfig, getConsecutiveSlCount } from "@/lib/sizing";
+import { getCloseAllState } from "@/lib/close-all"; // v11.5 global open-pnl close-all breaker
+// v12.0 Task-45 Q2 — open-pnl SINGLE SOURCE OF TRUTH: the ACCOUNT bar reads the
+// same tranche-aware settlement-safe number the close-all breaker reads.
+import { openBookNet } from "@/lib/open-pnl";
 
 const WIN_STATUSES = new Set(["TP1", "TP2", "TP3"]);
 const LOSS_STATUSES = new Set(["SL"]);
@@ -53,6 +59,16 @@ function ledgerBucketOf(status: string): LedgerBucket {
   return "tp"; // TP1 | TP2 | TP3
 }
 
+// ── v11.1 TASK-56 LEDGER-AUDIT (operator: «NET EST PNL LEDGER را بررسی و
+// راستی‌آزمایی کن») — settlement-status WHITELIST + clean-ledger filter.
+// Forensic evidence: ledgerBucketOf("VOID") fell through to "tp", so the two
+// PHANTOM-FEED-0930 VOID rows (NX-0884/0887, +99.8% phantom full-TPs) sat in
+// the TP bucket and flipped the all-time ledger from the TRUE −163.6% EST /
+// −$9.38 to a FAKE +36.0% EST / −$8.87. The ledger now excludes qualityFlag
+// rows (v10.18 clean-ledger doctrine) and any non-settlement status, and the
+// paper ACCOUNT keeps full history (balance continuity) — the split is
+// surfaced via totals.excludedN + dataQuality counters.
+
 function isoWeekKey(d: Date): string {
   const t = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
   const dayNum = (t.getUTCDay() + 6) % 7; // Mon=0 … Sun=6
@@ -62,6 +78,8 @@ function isoWeekKey(d: Date): string {
   const week = 1 + Math.round(((t.getTime() - jan4.getTime()) / 86_400_000 - 3 + ((jan4.getUTCDay() + 6) % 7)) / 7);
   return `${isoYear}-W${String(week).padStart(2, "0")}`;
 }
+
+const LEDGER_SETTLEMENT_STATUSES = new Set(["TP1", "TP2", "TP3", "SL", "EXPIRED", "CLOSED"]);
 
 interface LedgerAccum {
   expiredUsd: number; tpUsd: number; stopUsd: number; otherUsd: number;
@@ -102,6 +120,7 @@ function toRow(key: string, label: string, acc: LedgerAccum): PnlLedgerRow {
 
 function buildLedger(closedAll: Signal[]): PnlLedger {
   const now = Date.now();
+  let excludedN = 0; // Task 56 audit: qualityFlag / non-settlement rows kept OUT of every bucket
   // v6.2: keys are ASIA/TEHRAN local calendar units (UTC+03:30 fixed) — the
   // daily boundary matches the operator's wall clock, per the architecture review.
   const windows: Array<{ range: "daily" | "weekly" | "monthly"; since: number | null; keyFn: (d: Date) => string; labelFn: (key: string) => string; cap: number }> = [
@@ -117,10 +136,16 @@ function buildLedger(closedAll: Signal[]): PnlLedger {
     daily: [],
     weekly: [],
     monthly: [],
-    totals: { expiredUsd: 0, tpUsd: 0, stopUsd: 0, otherUsd: 0, netUsd: 0, expiredN: 0, tpN: 0, stopN: 0, otherN: 0, estPnlPct: 0, avgPct: 0, ttlExtended: 0, extCapturedUsd: 0 },
+    totals: { expiredUsd: 0, tpUsd: 0, stopUsd: 0, otherUsd: 0, netUsd: 0, expiredN: 0, tpN: 0, stopN: 0, otherN: 0, estPnlPct: 0, avgPct: 0, ttlExtended: 0, extCapturedUsd: 0, excludedN: 0 },
   };
 
   for (const s of closedAll) {
+    // Task 56: clean-ledger + settlement whitelist — a VOID/integrity-flagged
+    // row must never reach any bucket (the old fall-through made VOID a "tp")
+    if (s.qualityFlag !== null || !LEDGER_SETTLEMENT_STATUSES.has(s.status)) {
+      excludedN++;
+      continue;
+    }
     accumulate(totalsAcc, s);
     if (s.ttlExtensions > 0) ttlExtended++;
   }
@@ -136,9 +161,10 @@ function buildLedger(closedAll: Signal[]): PnlLedger {
     stopN: totalsAcc.stopN,
     otherN: totalsAcc.otherN,
     estPnlPct: Number(totalsAcc.estPct.toFixed(1)),
-    avgPct: closedAll.length ? Number((totalsAcc.estPct / closedAll.length).toFixed(1)) : 0,
+    avgPct: closedAll.length ? Number((totalsAcc.estPct / Math.max(1, closedAll.length - excludedN)).toFixed(1)) : 0,
     ttlExtended,
     extCapturedUsd: 0,
+    excludedN,
   };
 
   for (const w of windows) {
@@ -147,6 +173,8 @@ function buildLedger(closedAll: Signal[]): PnlLedger {
       const t = s.closedAt ? new Date(s.closedAt) : null;
       if (!t) continue;
       if (w.since !== null && t.getTime() < w.since) continue;
+      // Task 56: same clean-ledger guard on every daily/weekly/monthly bucket
+      if (s.qualityFlag !== null || !LEDGER_SETTLEMENT_STATUSES.has(s.status)) continue;
       const key = w.keyFn(t);
       const acc = maps.get(key) ?? emptyAccum();
       accumulate(acc, s);
@@ -207,11 +235,20 @@ export async function buildStats(): Promise<PlatformStats> {
     }
   }
 
-  // equity curve by day
+  // ── equity curve by day ─────────────────────────────────────────────
+  // v11.5 DAY-BOUNDARY ALIGNMENT (operator mandate 2026-10-12: «ساعت و تاریخ
+  // روزهای جدید با ساعت سیستم یکی باشد»). Truth-audit finding: this curve
+  // keyed rows by the RAW UTC day (toISOString) while the NET EST PNL LEDGER
+  // buckets by ASIA/TEHRAN local days (the operator's device system clock —
+  // V641 dashboard-clock doctrine). A row closed at 20:30Z+ was therefore
+  // shown on the PREVIOUS day label in EQUITY CURVE while DAILY PNL already
+  // called it the new day — the exact "new day hour/date ≠ system clock"
+  // mismatch the operator reported. Both modules now share ONE boundary:
+  // the operator's local (Asia/Tehran, fixed UTC+03:30) calendar day.
   const byDay = new Map<string, number>();
   for (const s of closed) {
     if (!s.closedAt) continue;
-    const key = s.closedAt.toISOString().slice(0, 10);
+    const key = tzLocal(s.closedAt).toISOString().slice(0, 10);
     byDay.set(key, (byDay.get(key) ?? 0) + pnlUsd(s));
   }
   const days = [...byDay.keys()].sort();
@@ -325,28 +362,36 @@ export async function buildStats(): Promise<PlatformStats> {
   const START_BALANCE = ACCOUNT_START_USD;
   const [openSignals, assets, ttlTel] = await Promise.all([
     db.signal.findMany({ where: { status: { in: ["ACTIVE", "TP1", "TP2"] } } }),
-    db.marketAsset.findMany({ select: { symbol: true, price: true } }),
+    db.marketAsset.findMany({ select: { symbol: true, price: true, source: true, updatedAt: true } }),
     getTtlTelemetry(),
   ]);
+  // NOTE (Task 56): NO qualityFlag filter here — the paper ACCOUNT keeps full
+  // history (v10.18 doctrine); buildLedger applies its own clean-ledger guard.
   const allTimeClosed = await db.signal.findMany({
     where: { closedAt: { not: null } },
-    select: { marginUsd: true, pnlPercent: true, feeUsd: true, swapUsd: true, entryPrice: true, direction: true, leverage: true, createdAt: true, closedAt: true, status: true, stopLoss: true, reachedTp: true, ttlExtensions: true },
+    select: { marginUsd: true, pnlPercent: true, feeUsd: true, swapUsd: true, entryPrice: true, direction: true, leverage: true, createdAt: true, closedAt: true, status: true, stopLoss: true, reachedTp: true, ttlExtensions: true, qualityFlag: true },
   });
   const realizedAllTime = allTimeClosed.reduce((acc, s) => acc + (s.marginUsd * s.pnlPercent) / 100, 0);
   const feesPaidAllTime = allTimeClosed.reduce((acc, s) => acc + s.feeUsd + s.swapUsd, 0);
-  const priceMap = new Map(assets.map((a) => [a.symbol, a.price]));
 
-  let unrealized = 0;
+  // v12.0 — ONE open-pnl formula for the bar and the breaker (open-pnl.ts):
+  // unrealizedPnl = bankable NET (tranche-aware mark, settlement-safe rows only
+  // — mirror of the engine's settlementUnsafe: live-sourced & ≤120s fresh).
+  // unrealizedPnlAllRows keeps the legacy full-margin current-price sum (every
+  // priced row, unsafe included) so the historical overstatement stays visible.
+  const assetMap = new Map(assets.map((a) => [a.symbol, a]));
+  const book = openBookNet(
+    openSignals.flatMap((s) => {
+      const a = assetMap.get(s.symbol);
+      if (!a) return [];
+      return [{ signal: s, price: a.price, safe: a.source === "live" && Date.now() - a.updatedAt.getTime() <= 120_000 }];
+    }),
+    Date.now(),
+  );
+  const unrealized = book.bankableUsd;
+  const unrealizedAllRows = book.allRowsUsd;
   let exposureUsd = 0;
-  for (const s of openSignals) {
-    const price = priceMap.get(s.symbol);
-    if (!price) continue;
-    const move = ((price - s.entryPrice) / s.entryPrice) * (s.direction === "LONG" ? 1 : -1) * 100; // UNLEVERED move %
-    const heldMin = Math.max(0, (Date.now() - s.createdAt.getTime()) / 60_000);
-    const fb = feeBreakdown(s.marginUsd, s.leverage, move, heldMin); // unrealized NET (accrued funding)
-    unrealized += fb.netUsd;
-    exposureUsd += s.marginUsd;
-  }
+  for (const s of openSignals) exposureUsd += s.marginUsd;
 
   const balance = Number((START_BALANCE + realizedAllTime).toFixed(2));
   const equity = Number((balance + unrealized).toFixed(2));
@@ -355,11 +400,24 @@ export async function buildStats(): Promise<PlatformStats> {
     balance,
     equity,
     unrealizedPnl: Number(unrealized.toFixed(2)),
+    // v12.0 — legacy full-margin current-price sum over ALL priced rows (incl.
+    // banked-tranche re-pricing + settlement-unsafe rows). Kept visible so the
+    // gap vs the bankable number the breaker reads is auditable at a glance.
+    unrealizedPnlAllRows: Number(unrealizedAllRows.toFixed(2)),
+    unsafeOpenRows: book.skipped.length,
     exposureUsd: Number(exposureUsd.toFixed(2)),
     freeMargin: Number((equity - exposureUsd).toFixed(2)),
     marginUsedPct: equity > 0 ? Number(((exposureUsd / equity) * 100).toFixed(1)) : 0,
     openPositions: openSignals.length,
     feesPaid: Number(feesPaidAllTime.toFixed(3)),
+    // v11.5 — the operator's book-level profit-lock (close-all at Σ open NET
+    // pnl ≥ target) — the AccountBar badge reads enabled/target/trigger count.
+    closeAll: await getCloseAllState().then((c) => ({
+      enabled: c.enabled,
+      targetUsd: c.targetUsd,
+      lastTriggeredAt: c.lastTriggeredAt,
+      triggerCount: c.triggerCount,
+    })).catch(() => null),
   };
 
   // ── EXPIRED afterlife stats (Bug 5 — شفافیت چرخه عمر) ──
@@ -385,7 +443,10 @@ export async function buildStats(): Promise<PlatformStats> {
 
   // ── v6.1 NET EST PNL LEDGER — all-time bucketed EXPIRED/TP/STOP realized NET usd
   const pnlLedger = buildLedger(allTimeClosed as Signal[]);
-  pnlLedger.totals.extCapturedUsd = Number(ttlTel.capturedUsd.toFixed(2));
+  // Task 56 hardening: lifecycle.ttlCapturedUsd is DB-exact math (extWinners
+  // reduce) and survives restarts — the runtime telemetry resets to 0 on every
+  // recycle, which used to zero the ledger's extension capture after reboot.
+  pnlLedger.totals.extCapturedUsd = Number((lifecycle.ttlCapturedUsd || ttlTel.capturedUsd).toFixed(2));
   // EPOCH-2 hardening (operator bug report «Session Stats داده های اشتباهی دارد»):
   // ttlTelemetry is a MONOTONIC global counter that can outlive signal resets —
   // with the ledger empty it previously injected phantom TTL_EXT grants (58 vs 00
@@ -403,6 +464,30 @@ export async function buildStats(): Promise<PlatformStats> {
     degenStop: flagCount("DEGEN_STOP"),
     invertedStop: flagCount("INVERTED_STOP"),
     restoreCatchup: flagCount("RESTORE_CATCHUP"),
+    phantomFeed: flagCount("PHANTOM-FEED-0930"), // Task 56: voided phantom full-TPs
+  };
+
+  // ── TASK-40 ALL-TIME SPLIT (2026-09-27, operator bug «WIN/LOSS SPLIT هم
+  // داده از دست میدهد») ──────────────────────────────────────────────
+  // The headline counters above are a ROLLING 7-DAY window (createdAt >=
+  // weekAgo): rows age out hourly, so wins/losses/expired/winRate DECREASE on
+  // their own even with zero data loss — the operator read the shrinkage as
+  // reset/corruption. This block applies the SAME TP-proven win semantics
+  // (reachedTp ≥ 1 or a TP-status) and the SAME clean-ledger discipline
+  // (qualityFlag null) over the FULL table: monotonic, restart-proof,
+  // time-proof. Four indexed counts — pulse-safe.
+  const [atWins, atPureLosses, atExpired, atSettled] = await Promise.all([
+    db.signal.count({ where: { qualityFlag: null, OR: [{ reachedTp: { gte: 1 } }, { status: { in: ["TP1", "TP2", "TP3"] } }] } }),
+    db.signal.count({ where: { qualityFlag: null, status: "SL", reachedTp: 0 } }),
+    db.signal.count({ where: { qualityFlag: null, status: "EXPIRED" } }),
+    db.signal.count({ where: { qualityFlag: null, OR: [{ closedAt: { not: null } }, { reachedTp: { gte: 1 } }] } }),
+  ]);
+  const allTimeSplit = {
+    wins: atWins,
+    losses: atPureLosses,
+    expired: atExpired,
+    settled: atSettled,
+    winRate: atSettled ? Math.round((atWins / atSettled) * 100) : 0,
   };
 
   return {
@@ -431,15 +516,40 @@ export async function buildStats(): Promise<PlatformStats> {
     account,
     afterlife,
     dataQuality,
+    allTimeSplit,
     lifecycle,
     tpFunnel,
     pnlLedger,
+    sizing: await sizingStats().then(({ cfg, consecSl }) => ({
+      mode: cfg.mode,
+      flatBase: cfg.flatBase,
+      antiBase: cfg.antiBase,
+      decay: cfg.decay,
+      floor: cfg.floor,
+      consecCap: cfg.consecCap,
+      consecSl,
+    })),
   };
 }
 
 // ── v9.0 LIFECYCLE AUDIT builder (30s memo — pulse-safe) ──────────────
 let lcMemo: { at: number; v: LifecycleStats } | null = null;
 const LC_MEMO_MS = 30_000;
+
+// Task 65: sizing read memo — 1 PK read + 1 take-60 walk per 15s, not per pulse
+let szMemo: { at: number; v: Awaited<ReturnType<typeof readSizing>> } | null = null;
+const SZ_MEMO_MS = 15_000;
+async function readSizing() {
+  const cfg = await getSizingConfig();
+  const consecSl = cfg.mode === "ANTI_MARTINGALE" ? await getConsecutiveSlCount(cfg) : 0;
+  return { cfg, consecSl };
+}
+async function sizingStats() {
+  if (szMemo && Date.now() - szMemo.at < SZ_MEMO_MS) return szMemo.v;
+  const v = await readSizing();
+  szMemo = { at: Date.now(), v };
+  return v;
+}
 
 async function buildLifecycleStats(): Promise<LifecycleStats> {
   if (lcMemo && Date.now() - lcMemo.at < LC_MEMO_MS) return lcMemo.v;
@@ -522,8 +632,8 @@ export function toSignalDTO(s: Signal): SignalDTO {
   let flow: SignalDTO["flow"] = null;
   if (s.flowJson) {
     try {
-      const raw = JSON.parse(s.flowJson) as { verdict: string; score: number; reasons: string[]; oiWeight?: number; metrics: Record<string, unknown> };
-      flow = { verdict: raw.verdict as FlowDTO["verdict"], score: raw.score, reasons: raw.reasons ?? [], oiWeight: raw.oiWeight ?? 1, metrics: { oiDelta10m: (raw.metrics.oiDelta10m as number | null) ?? null, oiDelta1h: (raw.metrics.oiDelta1h as number | null) ?? null, oiValueUsd: (raw.metrics.oiValueUsd as number | null) ?? null, cvdNetPctOfVol: (raw.metrics.cvdNetPctOfVol as number | null) ?? null, takerRatio: (raw.metrics.takerRatio as number | null) ?? null, takerMean: (raw.metrics.takerMean as number | null) ?? null, crowdLongShort: (raw.metrics.crowdLongShort as number | null) ?? null, crowdLongPct: (raw.metrics.crowdLongPct as number | null) ?? null, funding8h: (raw.metrics.funding8h as number | null) ?? null } };
+      const raw = JSON.parse(s.flowJson) as { verdict: string; score: number; reasons: string[]; oiWeight?: number; coverage?: number; blind?: boolean; metrics: Record<string, unknown> };
+      flow = { verdict: raw.verdict as FlowDTO["verdict"], score: raw.score, reasons: raw.reasons ?? [], oiWeight: raw.oiWeight ?? 1, coverage: raw.coverage, blind: raw.blind, metrics: { oiDelta10m: (raw.metrics.oiDelta10m as number | null) ?? null, oiDelta1h: (raw.metrics.oiDelta1h as number | null) ?? null, oiValueUsd: (raw.metrics.oiValueUsd as number | null) ?? null, cvdNetPctOfVol: (raw.metrics.cvdNetPctOfVol as number | null) ?? null, takerRatio: (raw.metrics.takerRatio as number | null) ?? null, takerMean: (raw.metrics.takerMean as number | null) ?? null, crowdLongShort: (raw.metrics.crowdLongShort as number | null) ?? null, crowdLongPct: (raw.metrics.crowdLongPct as number | null) ?? null, funding8h: (raw.metrics.funding8h as number | null) ?? null } };
     } catch {
       flow = null;
     }

@@ -1,0 +1,48 @@
+{
+  "recovery_drill": {
+    "status": "PASS",
+    "note": "watchdog heal drill ×2: price-ws (:3003) killed by real PID — auto-healed ≤85s both times; second heal carried the new loopback-only bind (0100007F:0BBB verified in /proc/net/tcp6) and socket.io handshake OK"
+  },
+  "duplicate_worker_guard": {
+    "status": "PASS",
+    "note": "second sentinel-service instance started manually — detected 'port 3030 busy' and exited cleanly (exit 0); watchdog + sentinel both carry duplicate-instance guards"
+  },
+  "degraded_feed_honesty": {
+    "status": "PASS",
+    "note": "trade-service live probe: {connected:true, dataStalled:true, source:'REST', restErrors:17} — degraded feed is LABELED honestly (honesty contract), never invented; engine feed-fresh guard blocks deploys on stale data"
+  },
+  "backup_snapshot": {
+    "status": "PASS",
+    "note": "POST /api/backup (auth'd): nexus-snapshot-20260925-233000.zip 38M — wal:VACUUM-COPY-CONSISTENT+CHECKPOINTED, cal:OK, enc:ENCRYPTED, off-site: UPLOADED (2 parts, full, kit, index), retention 12"
+  },
+  "backup_restore": {
+    "status": "UNKNOWN",
+    "note": "restore-from-zip NOT executed against the live DB mid-session (risk containment); MANIFEST carries gitHead + liveDbSha256 for a verified restore; restore procedure documented in RECOVERY-RUNBOOK.md"
+  },
+  "db_integrity": {
+    "status": "PASS",
+    "note": "PRAGMA integrity_check=ok; fk_violations=0; dup_serials=0; unknown_status=0; reconcilePaperOpen over 43 open rows: 0 QUARANTINE (harness .zscripts/hardening-verify.ts)"
+  },
+  "services_loopback": {
+    "status": "PASS",
+    "note": "all 7 mini-services rebound to 127.0.0.1 after kill+heal cycle (3003,3005,3010,3011,3012,3016,3030 verified in /proc/net/tcp{,6}); reachable solely via platform gateway"
+  },
+  "dev_server_restart": {
+    "status": "NOT_TESTED",
+    "note": "deliberately not restarted mid-session to preserve operator preview continuity; dev.sh carries PID-reuse hardening + NODE_OPTIONS OOM guard for next restart"
+  },
+  "fresh_machine_recovery": {
+    "status": "DEGRADED",
+    "note": "external git armor still 403 (fine-grained token lacks Contents:write on sarajafari7893-eng/neo — operator action pending); COMPENSATING CONTROL: off-site encrypted backup chain UPLOADED (snapshot + kit + index)"
+  },
+  "recovery_sequence": {
+    "status": "PASS",
+    "note": "documented deterministic order: restore → verify_hash (MANIFEST sha256) → verify_database_integrity (PRAGMA + reconcile) → verify_configuration → start_disarmed (kill-switch engaged) → reconcile_external_state → canary checks → explicit operator mandate to re-arm (LIVE-READINESS.md + RECOVERY-RUNBOOK.md)"
+  },
+  "_meta": {
+    "ranAt": "2026-09-26T03:00:00+03:30",
+    "spec": "NEXUS-LIVE-HARDENING-MASTER-v1.0 phase 11",
+    "drills_run": 6,
+    "drills_not_run": 2
+  }
+}

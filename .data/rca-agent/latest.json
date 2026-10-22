@@ -1,0 +1,116 @@
+{
+ "at": 1791291762081,
+ "dayIdx": 20732,
+ "dayKey": "2026-10-06",
+ "durationMs": 116,
+ "verdict": "WATCH",
+ "headline": "تحت نظر — یافتهٔ P1 راستی‌آزمایی‌شده",
+ "missions": {
+  "pnl": {
+   "settledToday": 97,
+   "byStatus": {
+    "EXPIRED": 59,
+    "SL": 33,
+    "TP3": 5
+   },
+   "rawNet": -1.54,
+   "basisNet": -57.72,
+   "feesUsd": 0.67,
+   "feeDragPct": 13,
+   "tp1Below1": {
+    "count": 34,
+    "rawNet": -0.81
+   },
+   "expiredWaste": {
+    "count": 15,
+    "avgMfePct": 4.8
+   },
+   "worstHour": {
+    "hour": 2,
+    "rawNet": -0.42
+   },
+   "postGate": {
+    "gateLiveAt": 1791232784401,
+    "deploys": 104,
+    "basisNet": -60.87,
+    "note": "70 دیپلوی پس از گیت خارج فیلتر (کوهورت bypass عمدی)"
+   }
+  },
+  "gate": {
+   "enabled": true,
+   "state": "ARMED",
+   "vetoToday": 1082,
+   "lastVeto": "UNIUSDT/HOUR_MASK"
+  },
+  "rails": {
+   "state": "ARMED",
+   "dailyUsedPct": 100,
+   "weeklyUsedPct": 58,
+   "k1UsedPct": 10,
+   "kSuite": {
+    "k1Tripped": false,
+    "k2Hits": 1,
+    "k2Locked": false,
+    "k3Locked": false,
+    "k4Invalid": false,
+    "engineVersion": "NEXUS-LIVE v10.18",
+    "locked": false,
+    "lockCode": null
+   },
+   "weeklyBreaches": 1
+  },
+  "pipe": {
+   "tickFiles6h": 7,
+   "latestTickAgeMin": 0,
+   "fillsToday": 104,
+   "avgSlipBps": 0
+  },
+  "system": {
+   "verdict": "GREEN",
+   "servicesDown": 0,
+   "reachable": true
+  }
+ },
+ "findings": [
+  {
+   "id": "PNL-TP1-NEG-ZONE",
+   "mission": "PNL-FORENSICS",
+   "sev": "P1",
+   "title": "زون اثبات‌شدهٔ منفی tp1<1٪ امروز فعال بوده (34 ردیف)",
+   "evidence": "rawNet zone=$-0.81 — فیلتر PROVEN از ساعت گیت این زون را وتو می‌کند؛ ردیف‌های باقی‌مانده bypass (کپچر عمدی) هستند",
+   "status": "VERIFIED",
+   "fix": {
+    "kind": "RECOMMENDED",
+    "action": "بررسی برچسب bypass این ردیف‌ها (کپچر داده باید نصف‌مارجین و ثبت‌شده باشد)",
+    "applied": false
+   }
+  },
+  {
+   "id": "PNL-EXPIRED-WASTE",
+   "mission": "PNL-FORENSICS",
+   "sev": "P2",
+   "title": "15 قرارداد منقضی با MFE ≥ +5٪ (پول روی میز)",
+   "evidence": "EXPIRED=59 · avg MFE expired=4.8٪ — کاندید R-EXIT/BE زودتر، نیازمند شواهد OOS قبل از هر تغییر",
+   "status": "VERIFIED",
+   "fix": {
+    "kind": "RECOMMENDED",
+    "action": "مطالعهٔ کانترفکتوال R-EXIT روی آرشیو (بدون lookahead) — ورود به کد فقط با اثبات",
+    "applied": false
+   }
+  },
+  {
+   "id": "RAILS-DISABLED",
+   "mission": "RAILS-AUDIT",
+   "sev": "P2",
+   "title": "ریل‌های روزانه/هفتگی غیرفعال‌اند (BR-2.1 — فرمان اپراتور «حد ضرر روزانه و هفتگی را غیر فعال کن»)",
+   "evidence": "bankroll BR-2.1: DAILY/WEEKLY فقط تلمتری (درصد مصرف + ژورنال برخورد would-have-fired) · پوشش دُم بر عهدهٔ K1 rolling-20 + K3 ruin + K4 — این تصمیم ثبت‌شدهٔ اپراتور است، نه حادثه",
+   "status": "VERIFIED",
+   "fix": {
+    "kind": "RECOMMENDED",
+    "action": "باز-فعال‌سازی بدون دیپلوی: touch .data/bankroll-rails-on",
+    "applied": false
+   }
+  }
+ ],
+ "fixes": []
+}

@@ -8,6 +8,7 @@
 
 import { gateFetch } from "./fapi-gate";
 import { liquidationPressure } from "./liquidations";
+import { bridgeOiHist, bridgeTape, bybitTickerRow, type FlowSource } from "./flow-bridge";
 
 const TIMEOUT_MS = 6500;
 const CACHE_TTL = 150_000; // 2.5min
@@ -44,17 +45,48 @@ export interface FlowMetrics {
 }
 
 export interface FlowAssessment {
-  verdict: "CONFIRMS" | "CONFLICTS" | "NEUTRAL" | "UNAVAILABLE";
+  verdict: "CONFIRMS" | "CONFLICTS" | "NEUTRAL" | "UNAVAILABLE" | "NO-DATA";
   score: number; // -25..+25 along candidate direction
   reasons: string[];
   metrics: FlowMetrics;
   oiWeight: number;
   calibrated: boolean;
+  // v12.1 Task-48 ② — honest blindness telemetry: "NO-DATA" ≠ "NEUTRAL".
+  // 48h audit (Task-47): 70% of deploys were flow-blind yet labelled NEUTRAL
+  // as if the book said "neutral" — data absence is not a neutral read.
+  coverage: number; // non-null count of the decision-relevant metrics
+  blind: boolean; // coverage === 0
+  /** v12.2 TASK-52 — venue that actually fed this bundle (BINANCE | SPOT-MIRROR | BYBIT | MIXED) when fapi starved. */
+  source?: FlowSource | "MIXED";
 }
+
+/** Decision-relevant metric keys — cvdNetBase is structurally null in the
+ *  current pipeline and excluded from coverage on purpose. */
+const COVERAGE_KEYS: Array<keyof FlowMetrics> = [
+  "oiDelta10m", "oiDelta1h", "oiValueUsd", "cvdNetPctOfVol", "takerRatio", "takerMean",
+  "crowdLongShort", "topLongShort", "funding8h", "cvdUsd60s",
+];
+
+export function flowCoverageOf(m: FlowMetrics): number {
+  return COVERAGE_KEYS.reduce((a, k) => a + (m[k] != null ? 1 : 0), 0);
+}
+
+const BLIND_CACHE_TTL = 20_000; // v12.1: all-null metrics are a STARVATION state,
+// not a sample — 20s TTL instead of 2.5min so flow recovers within seconds of
+// the fapi-gate ban window lifting (Task-47: blindness rode 516 ban-drops/48h).
 
 interface FlowCacheEntry {
   at: number;
   metrics: FlowMetrics;
+  blind?: boolean; // all-null starvation sample — short TTL
+}
+
+// v12.2 TASK-52 — venue that fed the last metrics bundle per symbol
+const flowSrcMap = new Map<string, FlowSource | "MIXED">();
+
+/** Honest sourcing readout — which market the current flow numbers came from. */
+export function getFlowSource(symbol: string): FlowSource | "MIXED" | null {
+  return flowSrcMap.get(symbol) ?? null;
 }
 
 interface AggTrade {
@@ -92,7 +124,8 @@ async function fapi<T>(path: string): Promise<T> {
 
 export async function fetchFlowMetrics(symbol: string): Promise<FlowMetrics | null> {
   const cached = flowCache.get(symbol);
-  if (cached && Date.now() - cached.at < CACHE_TTL) return cached.metrics;
+  const cachedTtl = cached?.blind ? BLIND_CACHE_TTL : CACHE_TTL;
+  if (cached && Date.now() - cached.at < cachedTtl) return cached.metrics;
   if (cached && Date.now() - cached.at < STALE_GRACE && flowInFlight.has(symbol)) return cached.metrics;
 
   const existing = flowInFlight.get(symbol);
@@ -110,10 +143,45 @@ export async function fetchFlowMetrics(symbol: string): Promise<FlowMetrics | nu
         fapi<Array<{ symbol: string; longShortRatio: string; timestamp: number }>>(`/futures/data/topLongShortPositionRatio?symbol=${symbol}&period=5m&limit=2`),
       ]);
 
-      const oi = oiHist.status === "fulfilled" ? oiHist.value : [];
+      // v12.2 TASK-52 — FLOW BRIDGE: when a fapi lane starves (ban/pool silence),
+      // recover the recoverable lanes over the bridge instead of sliding into
+      // blindness. Honest sourcing: the bundle records the venue that fed it.
+      let flowSrc: FlowSource | "MIXED" = "BINANCE";
+      const srcNote = (s: FlowSource): void => {
+        if (flowSrc === "BINANCE") flowSrc = s;
+        else if (flowSrc !== s) flowSrc = "MIXED";
+      };
+
+      let oi = oiHist.status === "fulfilled" ? oiHist.value : [];
+      if (oi.length === 0) {
+        const b = await bridgeOiHist(symbol, "5m", 13).catch(() => null);
+        if (b && b.rows.length > 0) {
+          oi = b.rows.map((r) => ({ symbol, sumOpenInterest: String(r.sumOpenInterest), sumOpenInterestValue: String(r.sumOpenInterestValue ?? 0), timestamp: r.timestamp }));
+          srcNote(b.source);
+          if (b.source === "BYBIT") {
+            // bybit OI history is base-denominated only — notional from the
+            // batched tickers call (measured, not invented)
+            const t = await bybitTickerRow(symbol).catch(() => null);
+            const lastOi = Number(oi[oi.length - 1]!.sumOpenInterest);
+            const notional = t?.openInterestValue ?? (t && lastOi > 0 ? t.lastPrice * lastOi : 0);
+            if (notional > 0) oi[oi.length - 1]!.sumOpenInterestValue = String(Math.round(notional));
+          }
+        }
+      }
+
       const taker = takerLS.status === "fulfilled" ? takerLS.value : [];
       const crowdArr = crowd.status === "fulfilled" ? crowd.value : [];
-      const prem = premium.status === "fulfilled" ? premium.value : null;
+      // crowd/top-trader L/S ratios have NO public equivalent on any other
+      // venue — during a fapi starvation they stay null (honest absence).
+
+      let prem = premium.status === "fulfilled" ? premium.value : null;
+      if (!prem) {
+        const t = await bybitTickerRow(symbol).catch(() => null);
+        if (t && t.fundingRate !== null) {
+          prem = { lastFundingRate: String(t.fundingRate), markPrice: String(t.markPrice ?? t.lastPrice) };
+          srcNote("BYBIT");
+        }
+      }
 
       let oiDelta10m: number | null = null;
       let oiDelta1h: number | null = null;
@@ -135,7 +203,6 @@ export async function fetchFlowMetrics(symbol: string): Promise<FlowMetrics | nu
         takerRatio = ratios[ratios.length - 1]!;
         takerMean = ratios.reduce((a, b) => a + b, 0) / ratios.length;
       }
-      const cvdNetPctOfVol = takerMean !== null ? (takerMean - 1) * 100 : null; // % of taker volume net buys
 
       const crowdLongShort = crowdArr.length > 0 ? Number(crowdArr[crowdArr.length - 1]!.longShortRatio) : null;
       const crowdLongPct = crowdArr.length > 0 ? Number(crowdArr[crowdArr.length - 1]!.longAccount) * 100 : null;
@@ -145,7 +212,16 @@ export async function fetchFlowMetrics(symbol: string): Promise<FlowMetrics | nu
 
       // v6.7: real USD taker flow + whale prints from the same aggTrades pull
       // (trades ≤1000 ≈ last minutes on liquid symbols; windows clipped by T).
-      const agg = aggTrades.status === "fulfilled" ? aggTrades.value : [];
+      // v12.2 TASK-52: tape ladder — fapi aggTrades → BYBIT recent-trade →
+      // SPOT-MIRROR trades (spot = last resort: spot flow ≠ perp flow).
+      let agg = aggTrades.status === "fulfilled" ? aggTrades.value : [];
+      if (agg.length === 0) {
+        const b = await bridgeTape(symbol).catch(() => null);
+        if (b && b.trades.length > 0) {
+          agg = b.trades.map((t) => ({ p: t.price, q: t.qty, T: t.time, m: t.isBuyerMaker }));
+          srcNote(b.source);
+        }
+      }
       const t60 = Date.now() - 60_000;
       const t300 = Date.now() - 300_000;
       let buy60 = 0;
@@ -168,6 +244,21 @@ export async function fetchFlowMetrics(symbol: string): Promise<FlowMetrics | nu
       const cvdUsd60s = agg.length > 0 ? Math.round(buy60 - sell60) : null;
       const whalePrint5m: WhalePrint5m | null = wp.count > 0 ? { count: wp.count, totalUsd: Math.round(wp.totalUsd), maxUsd: Math.round(wp.maxUsd), buyUsd: Math.round(wp.buyUsd), sellUsd: Math.round(wp.sellUsd) } : null;
 
+      // v12.2 TASK-52: when the fapi taker-ratio series is absent but a REAL
+      // tape exists (bridge), the net-buy % of volume is measured from that
+      // same tape — window-capped at 10min (a 1000-trade slice spanning hours
+      // on an illiquid symbol is a stale read, not a flow read).
+      const winStart = agg.length > 0 ? agg[0]!.T : 0;
+      let buyWin = 0;
+      let sellWin = 0;
+      for (const t of agg) {
+        const usd = t.p * t.q;
+        if (t.m) sellWin += usd;
+        else buyWin += usd;
+      }
+      const cvdFromTape = agg.length > 0 && buyWin + sellWin > 0 && winStart > 0 && Date.now() - winStart <= 600_000 ? ((buyWin - sellWin) / (buyWin + sellWin)) * 100 : null;
+      const cvdNetPctOfVol = takerMean !== null ? (takerMean - 1) * 100 : cvdFromTape; // % of taker volume net buys
+
       const metrics: FlowMetrics = {
         oiDelta10m: oiDelta10m === null ? null : Number(oiDelta10m.toFixed(3)),
         oiDelta1h: oiDelta1h === null ? null : Number(oiDelta1h.toFixed(3)),
@@ -183,7 +274,9 @@ export async function fetchFlowMetrics(symbol: string): Promise<FlowMetrics | nu
         cvdUsd60s,
         whalePrint5m,
       };
-      flowCache.set(symbol, { at: Date.now(), metrics });
+      const blind = flowCoverageOf(metrics) === 0;
+      flowCache.set(symbol, { at: Date.now(), metrics, blind });
+      flowSrcMap.set(symbol, flowSrc);
 
       // history ring (fresh samples only)
       if (metrics.oiDelta1h !== null) {
@@ -261,10 +354,28 @@ function supportive_(detail: string, ok: boolean): string {
 export async function scoreFlow(symbol: string, direction: "LONG" | "SHORT", price1hAgoPct: number | null): Promise<FlowAssessment> {
   const m = await fetchFlowMetrics(symbol);
   if (!m) {
-    return { verdict: "UNAVAILABLE", score: 0, reasons: ["flow metrics unavailable — no numbers invented"], metrics: { oiDelta10m: null, oiDelta1h: null, oiValueUsd: null, cvdNetBase: null, cvdNetPctOfVol: null, takerRatio: null, takerMean: null, crowdLongShort: null, crowdLongPct: null, topLongShort: null, funding8h: null, cvdUsd60s: null, whalePrint5m: null }, oiWeight: 1, calibrated: false };
+    return { verdict: "UNAVAILABLE", score: 0, reasons: ["flow metrics unavailable — no numbers invented"], metrics: { oiDelta10m: null, oiDelta1h: null, oiValueUsd: null, cvdNetBase: null, cvdNetPctOfVol: null, takerRatio: null, takerMean: null, crowdLongShort: null, crowdLongPct: null, topLongShort: null, funding8h: null, cvdUsd60s: null, whalePrint5m: null }, oiWeight: 1, calibrated: false, coverage: 0, blind: true };
   }
+  const coverage = flowCoverageOf(m);
   const dir = direction === "LONG" ? 1 : -1;
   const reasons: string[] = [];
+  // v12.1 Task-48 ② — HONEST NO-DATA: a fetch that completed with every
+  // decision metric null (fapi ban window / budget shed) is BLINDNESS, not a
+  // neutral book. The 48h census showed 70% of deploys rode this state while
+  // the card read "FLOW-NEUTRAL". Blind flow never votes (score 0) but now
+  // carries the NO-DATA verdict so cards, journals and gates can tell the
+  // difference. (Gate on blindness = EngineSetting "flow-gate", default
+  // tag-only: 10d ledger blind +$204.20 WR 57.1% vs sighted +$7.11 WR 52.8% —
+  // blocking the blind cohort would have CUT +$204 of net.)
+  if (coverage === 0) {
+    return { verdict: "NO-DATA", score: 0, reasons: ["flow-blind — every decision metric null (fapi-gate starvation/ban window); no numbers invented, no neutral read claimed"], metrics: m, oiWeight: 1, calibrated: true, coverage: 0, blind: true };
+  }
+  // v12.2 TASK-52 — honest sourcing: when the bundle rode the bridge, say so
+  // on the card/journal instead of silently mixing venues.
+  const bridgeSrc = getFlowSource(symbol);
+  if (bridgeSrc && bridgeSrc !== "BINANCE") {
+    reasons.push(`flow source: ${bridgeSrc} bridge (fapi starved — flow numbers measured on the bridge venue, not Binance)`);
+  }
   let raw = 0;
 
   // 1. CVD imbalance ±9
@@ -386,5 +497,5 @@ export async function scoreFlow(symbol: string, direction: "LONG" | "SHORT", pri
   if (Math.abs(oiWeight - 1) >= 0.15) reasons.push(`flow weighted ×${oiWeight.toFixed(2)} by OI notional ${fmtUsdShort(m.oiValueUsd ?? 0)} — deep-book flow trusted`);
 
   const verdict = score >= 8 ? "CONFIRMS" : score <= -8 ? "CONFLICTS" : "NEUTRAL";
-  return { verdict, score, reasons, metrics: m, oiWeight: Number(oiWeight.toFixed(2)), calibrated: true };
+  return { verdict, score, reasons, metrics: m, oiWeight: Number(oiWeight.toFixed(2)), calibrated: true, coverage, blind: false, source: bridgeSrc ?? undefined };
 }

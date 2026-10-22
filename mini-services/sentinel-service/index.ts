@@ -22,15 +22,42 @@
 //   • backup duty: ring's newest .enc older than 3h10m → spawn scripts/backup.sh
 //     (pid-liveness lock, Telegram alert on failure — never two at once)
 //   • verdict edge → Telegram (rate-limited 1/30min), fully fail-silent
-//   • GET /health (liveness, open) · GET /report · GET /history?n=
-//     POST /run-now + POST /backup-now → require x-nexus-key (fail-closed, P0-1)
-//   • the service NEVER heals, NEVER kills, NEVER writes to the trading domain —
-//     observe, judge, alert, and schedule backups. Nothing else.
+//   • GET /health (liveness, open) · GET /report · GET /history?n= · GET /perf (24h perf ring)
+//     POST /run-now + POST /backup-now + POST /cure-now → require x-nexus-key (fail-closed, P0-1)
+//   • v1.3.0 CONTRACT AMENDMENT (Task 69, operator order «توصیه‌ها را مهارندسی و کامل
+//     اجرا کن» 2026-10-03): the sentinel now owns ONE scoped remediation — the
+//     TURBOPACK CACHE CURE. The dev.log panic «Failed to restore task data» breaks
+//     the COMPILE pipeline while already-compiled routes keep answering 200, so the
+//     watchdog probes never see it and the cure waited for a human (measured
+//     2026-10-02: panic recurred 75 log lines after a fresh boot with 0×500 served).
+//     The cure executes the documented P1 doctrine: pause watchdog → kill
+//     next-server → rm -rf .next → dev-up.sh. Guarded (45min cooldown, ≤3/24h,
+//     backup-lock check, watchdog-pause check, failure-streak disarm) and
+//     Telegram-reported. The trading domain (signals/ledger/sizing/settings) is
+//     NEVER written by the cure — observability remains read-only everywhere else.
 // ─────────────────────────────────────────────────────────────────────────────
 import { Database } from "bun:sqlite";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, statfsSync, unlinkSync, writeFileSync } from "node:fs";
+import net from "node:net";
 
-const VER = "nexus-sentinel 1.1.1";
+const VER = "nexus-sentinel 1.3.2";
+// v1.2.0 PERF-HISTORY (M1 24h mission, operator order «توصیه‌های باقیمانده را کامل
+// و مهندسی انجام بده» 2026-09-30): the 24h performance plateau was UNMEASURABLE —
+// telemetry.jsonl kept only {at,verdict,up} for ~6.7h (400-line rotate). Now every
+// tick also records {rssMB, heapUsedMB, pulseMs, memAvailableMb} into a dedicated
+// 24h ring (.data/sentinel/perf-history.jsonl, ~1600 lines ≈ 26h) and GET /perf
+// analyzes it: pulse p50/p95/p99/max + RSS plateau + MemAvailable floor over
+// 1h/6h/24h windows, and evaluates the M1 acceptance automatically:
+// p95(pulse) < 1000ms · rssMax ≤ 2300MB · coverage ≥ 24h. Observer-only: two extra
+// lightweight probes per tick (pulse ~200ms p50, healthz ~16ms) — no heals, no
+// trading-domain writes. Same fail-silent contract as everything else here.
+// v1.1.3 (SENTINEL-RED-0929): HTTP probe timeout ≠ service down. Live-fire
+// 21:52-21:57Z: dev-mode Turbopack cold-compile under memory pressure ran
+// 15-29s/route while the probe cap was 4s → a HEALTHY app was paged RED
+// («service down / probe failed»). Fixes: (a) per-service probe timeout — app
+// gets 12s (dev compile tolerance), lightweight bun services keep 4s; (b) on
+// app timeout, a quick TCP check to :3000 distinguishes warming (port open →
+// warn, AMBER) from truly down (port refused → crit, RED).
 const ROOT = "/home/z/my-project";
 const DIR = `${ROOT}/.data/sentinel`;
 const RING = "/tmp/my-project/backups"; // backup.sh v3.4 canonical ring (PolarFS)
@@ -52,21 +79,32 @@ const tehran = (d: number | Date = nowMs()) =>
 const BOOT = nowMs();
 
 // ── service probes ───────────────────────────────────────────────────────────
-const SERVICES: { key: string; label: string; url: string; expect: (s: number) => boolean }[] = [
-  { key: "app", label: "app :3000", url: "http://127.0.0.1:3000/api/healthz", expect: (s) => s === 200 },
+const SERVICES: { key: string; label: string; url: string; timeoutMs?: number; expect: (s: number) => boolean }[] = [
+  { key: "app", label: "app :3000", url: "http://127.0.0.1:3000/api/healthz", timeoutMs: 12_000, expect: (s) => s === 200 }, // v1.1.3: dev compile tolerance
   { key: "ws", label: "price-ws :3003", url: "http://127.0.0.1:3003/", expect: (s) => s < 500 },
   { key: "bridge", label: "telegram-bridge :3005", url: "http://127.0.0.1:3005/health", expect: (s) => s === 200 },
   { key: "liq", label: "liq :3010", url: "http://127.0.0.1:3010/health", expect: (s) => s === 200 },
   { key: "trade", label: "trade :3011", url: "http://127.0.0.1:3011/health", expect: (s) => s === 200 },
   { key: "watchdog", label: "p0-watchdog :3020", url: "http://127.0.0.1:3020/health", expect: (s) => s === 200 },
 ];
+// v1.1.3: TCP liveness — distinguishes "warming (compile storm)" from "dead".
+function tcpAlive(port: number): Promise<boolean> {
+  return new Promise((res) => {
+    const sock = net.connect({ host: "127.0.0.1", port });
+    const done = (ok: boolean) => { try { sock.destroy(); } catch { /* never */ } res(ok); };
+    const timer = setTimeout(() => done(false), 1_200);
+    sock.once("connect", () => { clearTimeout(timer); done(true); });
+    sock.once("error", () => { clearTimeout(timer); done(false); });
+  });
+}
 async function probeSvc(s: (typeof SERVICES)[number]) {
   const t0 = nowMs();
   try {
-    const r = await fetch(s.url, { signal: AbortSignal.timeout(4000), headers: { "user-agent": "nexus-sentinel/1.0" } });
+    const r = await fetch(s.url, { signal: AbortSignal.timeout(s.timeoutMs ?? 4_000), headers: { "user-agent": "nexus-sentinel/1.0" } });
     return { key: s.key, label: s.label, up: s.expect(r.status), status: r.status, ms: nowMs() - t0 };
   } catch {
-    return { key: s.key, label: s.label, up: false, status: null as number | null, ms: nowMs() - t0 };
+    const tcpOpen = s.key === "app" ? await tcpAlive(3000) : false;
+    return { key: s.key, label: s.label, up: false, status: null as number | null, ms: nowMs() - t0, tcpOpen };
   }
 }
 
@@ -262,18 +300,41 @@ async function rawcalState() {
 
 // ── dev.log forensics ────────────────────────────────────────────────────────
 async function logForensics() {
+  // v1.1.2 (2026-09-27, Task 41, operator report «sentinel چند هشدار فرستاد»):
+  // next-dev error overlays dump SOURCE CODE into dev.log — a code-frame line
+  // (`  243 |   // … OOM-proximity …`) matched the old bare /OOM/i regex and
+  // fabricated up to 14 phantom "OOM markers", pinning the verdict RED for
+  // hours (verdict-edge TG + RED-persist pages + supervisor sweep alerts).
+  // Three corrections:
+  //   (a) code-frame lines (`  243 |  …` / `      ^  …`) are dropped before
+  //       counting — source comments can no longer forge forensics;
+  //   (b) the OOM pattern matches REAL OOM events only (JS heap fatal, kernel
+  //       kill line, V8 heap-limit fatal) — the bare acronym is never counted;
+  //   (c) counting starts AFTER the last «✓ Ready in» boot banner, so markers
+  //       from previous sessions age out on every restart instead of haunting
+  //       a 256KB tail window forever.
   const tail = await tailFile(`${ROOT}/dev.log`, 262_144);
-  const lines = tail ? tail.split("\n") : [];
-  const count = (re: RegExp) => lines.filter((l) => re.test(l)).length;
+  const all = tail ? tail.split("\n") : [];
+  const lines = all.filter((l) => !/^\s*\d+\s*\|/.test(l) && !/^\s*\^/.test(l));
+  let lastBoot = -1;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (/✓?\s*Ready in /.test(lines[i])) { lastBoot = i; break; }
+  }
+  const windowed = lastBoot >= 0 ? lines.slice(lastBoot + 1) : lines;
+  const count = (re: RegExp) => windowed.filter((l) => re.test(l)).length;
   return {
-    windowLines: lines.length,
+    windowLines: windowed.length,
     errors: count(/\berror\b/i),
     http500: count(/\s500\s/),
-    oom: count(/OOM|heap out of memory/i),
+    oom: count(/JavaScript heap out of memory|Out of memory: Killed process|FATAL ERROR: Reached heap limit/i),
     enospc: count(/ENOSPC/i),
     hydration: count(/hydrat/i),
     unhandled: count(/unhandledRejection|uncaughtException/i),
     settlementStalled: count(/SETTLEMENT[ _]STALLED/i),
+    // v1.3.0 (Task 69) — the «Failed to restore» class: breaks NEW compiles only,
+    // warm routes keep serving 200 → watchdog probes blind to it. Counted within
+    // the current-boot window; the auto-cure engine consumes this signal.
+    turbopackPanic: count(/Failed to restore task data|FATAL: An unexpected Turbopack error|TurbopackInternalError/i),
   };
 }
 
@@ -299,7 +360,7 @@ function watchdogState() {
 
 // ── verdict engine ───────────────────────────────────────────────────────────
 function judge(input: {
-  services: { key: string; up: boolean }[];
+  services: { key: string; up: boolean; tcpOpen?: boolean }[];
   memAvailableMb: number | null;
   diskRootGb: number | null; diskTmpGb: number | null;
   db: Record<string, unknown>;
@@ -309,10 +370,20 @@ function judge(input: {
 }): { verdict: Verdict; anomalies: Anomaly[] } {
   const A: Anomaly[] = [];
   const down = input.services.filter((s) => !s.up);
-  for (const d of down) A.push({ sev: "crit", area: d.key, msg: "service down / probe failed" });
+  for (const d of down) {
+    // v1.1.3: timeout with TCP open = warming (dev compile storm) → warn, not RED.
+    if (d.tcpOpen) A.push({ sev: "warn", area: d.key, msg: "HTTP probe timeout but TCP port open — warming (dev compile storm), NOT down" });
+    else A.push({ sev: "crit", area: d.key, msg: "service down / probe failed" });
+  }
 
+  // v1.3.1 (Task 73, SENTINEL-20261003-0020 rec P3): pre-emptive memory tier.
+  // 2026-10-03 log: MemAvailable hit 293→158MB BEFORE the app died of turbopack
+  // SST write failures — the watchdog acts at 350/250, but the VERDICT (what the
+  // operator sees) stayed silent until service death. A 4GB no-swap box needs
+  // lead time: warn at <400MB so the dashboard/Telegram edge fires early.
   if (input.memAvailableMb !== null && input.memAvailableMb < 250) A.push({ sev: "crit", area: "memory", msg: `MemAvailable ${input.memAvailableMb}MB < 250MB crit floor` });
   else if (input.memAvailableMb !== null && input.memAvailableMb < 350) A.push({ sev: "warn", area: "memory", msg: `MemAvailable ${input.memAvailableMb}MB < 350MB warn floor` });
+  else if (input.memAvailableMb !== null && input.memAvailableMb < 400) A.push({ sev: "warn", area: "memory", msg: `MemAvailable ${input.memAvailableMb}MB < 400MB — pre-emptive OOM-proximity watch (4GB no-swap box)` });
 
   if (input.diskRootGb !== null && input.diskRootGb < 0.5) A.push({ sev: "crit", area: "disk-root", msg: `rootfs ${input.diskRootGb.toFixed(2)}GB free < 0.5GB` });
   else if (input.diskRootGb !== null && input.diskRootGb < 1.2) A.push({ sev: "warn", area: "disk-root", msg: `rootfs ${input.diskRootGb.toFixed(2)}GB free — tightening` });
@@ -342,6 +413,8 @@ function judge(input: {
   if (lg.oom > 0) A.push({ sev: "crit", area: "dev.log", msg: `${lg.oom} OOM markers in recent log window` });
   if (lg.errors >= 20) A.push({ sev: "warn", area: "dev.log", msg: `${lg.errors} error lines in recent log window` });
   if (lg.settlementStalled > 0) A.push({ sev: "warn", area: "settlement", msg: `${lg.settlementStalled} SETTLEMENT STALLED markers (veto active — verify feed)` });
+  // v1.3.0 — Turbopack panic radar (Task 69)
+  if (lg.turbopackPanic > 0) A.push({ sev: "warn", area: "turbopack", msg: `${lg.turbopackPanic} Turbopack panic marker(s) in current boot window — compile pipeline fragile (auto-cure armed)` });
 
   const verdict: Verdict = A.some((a) => a.sev === "crit") ? "RED" : A.length ? "AMBER" : "GREEN";
   return { verdict, anomalies: A };
@@ -389,6 +462,7 @@ async function collect(deep: boolean) {
     mem: { availableMb: memAvailableMb },
     disk: { rootFreeGb: diskRootGb, tmpFreeGb: diskTmpGb },
     db, backup, watchdog: wd, log, shadow, rawcal,
+    cures: cureState(), // v1.3.0 — turbopack cache-cure state
     uptimeSec: Math.floor((nowMs() - BOOT) / 1000),
     ver: VER,
   };
@@ -426,6 +500,16 @@ async function collect(deep: boolean) {
       const txt = readFileSync(`${DIR}/telemetry.jsonl`, "utf8").trim().split("\n");
       writeFileSync(`${DIR}/telemetry.jsonl`, txt.slice(-400).join("\n") + "\n");
     }
+    // v1.2.0 — perf-history ring (24h): RSS/heap from healthz body + pulse latency KPI
+    try {
+      const perf = await perfSample();
+      appendFileSync(PERF_FILE, JSON.stringify({ at: snap.at, verdict, ...perf, memAvailableMb }) + "\n");
+      const psz = statSync(PERF_FILE).size;
+      if (psz > PERF_ROTATE_BYTES) {
+        const ptxt = readFileSync(PERF_FILE, "utf8").trim().split("\n");
+        writeFileSync(PERF_FILE, ptxt.slice(-PERF_KEEP_LINES).join("\n") + "\n");
+      }
+    } catch { /* perf ring is best-effort — never break telemetry */ }
     if (deep) {
       mkdirSync(`${DIR}/reports`, { recursive: true });
       writeFileSync(`${DIR}/reports/report-${new Date().toISOString().replace(/[:.]/g, "-")}.json`, JSON.stringify(snap, null, 1));
@@ -477,6 +561,174 @@ function scheduleBackup(reason: string) {
   } catch (e) { logLine("warn", "backup-spawn-error", { err: String(e).slice(0, 120) }); }
 }
 
+// ── v1.3.2 RESTORE-DRILL SCHEDULER (operator mandate 2026-10-07
+// «هر سه مورد را کامل و مهندسی پیاده کن + یک درل بازیابی برنامه‌ریزی شود») ──
+// A backup ring that is never RESTORED is a hope, not a capability. Once a day
+// the newest .enc is decrypted, unpacked, fingerprint-verified against the
+// manifest, integrity-checked (PRAGMA) and env-chain-audited by
+// scripts/restore-drill.sh — entirely in a /tmp staging dir, ZERO live-file
+// contact. Result journaled to .data/restore-drill.log + state file below;
+// a FAIL pages Telegram (same contract as backup-fail).
+const DRILL_EVERY_MS = 24 * 3600_000;
+const DRILL_STATE = `${DIR}/restore-drill.json`;
+function drillDue(): { due: boolean; reason: string } {
+  try {
+    const st = JSON.parse(readFileSync(DRILL_STATE, "utf8")) as { lastDrillAt?: number; lastOk?: number };
+    if (!st.lastDrillAt) return { due: true, reason: "no drill on record" };
+    const age = nowMs() - st.lastDrillAt;
+    if (age > DRILL_EVERY_MS) return { due: true, reason: `last drill ${humanAge(age)} ago` };
+    if (st.lastOk !== 0) return { due: true, reason: "last drill FAILED — immediate re-probe" };
+    return { due: false, reason: "recent" };
+  } catch { return { due: true, reason: "drill state absent" }; }
+}
+function scheduleDrill(reason: string) {
+  if (backupLockHeld()) { logLine("info", "drill-skipped", { reason, why: "backup lock held" }); return; }
+  try {
+    logLine("info", "drill-spawn", { reason });
+    const proc = Bun.spawn(["bash", "-c", `cd ${ROOT} && bash scripts/restore-drill.sh >> ${ROOT}/logs/restore-drill.log 2>&1`], {
+      stdin: "ignore", stdout: "ignore", stderr: "ignore",
+    });
+    void proc.exited.then((code) => {
+      if (code === 0) logLine("info", "drill-ok", { reason });
+      else {
+        logLine("crit", "drill-failed", { reason, exit: code });
+        void tgSend("drill-fail", `🔴 <b>NEXUS-SENTINEL · RESTORE DRILL FAILED</b>\nexit ${code} — reason: ${reason}\nlogs/restore-drill.log · .data/restore-drill.log\n<code>${tehran()}</code> IRST`);
+      }
+    });
+  } catch (e) { logLine("warn", "drill-spawn-error", { err: String(e).slice(0, 120) }); }
+}
+
+// ── v1.3.0 TURBOPACK CACHE CURE (Task 69 — the ONE scoped remediation) ──────
+// Root cause: the Turbopack dev panic «Failed to restore task data» corrupts the
+// COMPILE pipeline while warm routes keep serving — watchdog probes can't see it
+// (no 500s, /healthz pre-compiled) — so the documented P1 cache cure waited for a
+// human every time. This engine automates exactly that doctrine:
+//   pause watchdog → kill next-server (both cmdlines) → rm -rf .next → dev-up.sh
+// Guards: 45min cooldown · ≤3 cures/24h · backup-lock check (purge would corrupt
+// a running snapshot) · watchdog-pause check (another actor owns the box) ·
+// failure-streak disarm (panic within 35min after a cure = cure didn't hold;
+// 2 strikes → auto-cure stops + crit page — needs POST /cure-now to re-arm).
+const CURE_COOLDOWN_MS = 45 * 60_000;
+const CURE_MAX_24H = 3;
+const CURE_FAIL_STREAK_LIMIT = 2;
+const CURE_FILE = `${DIR}/cures.jsonl`;
+interface CureState { armed: boolean; baselineMark: number; lastCureAt: number; lastCureOutcome: string | null; failStreak: number; cures: number[]; curing: boolean }
+const cure: CureState = { armed: true, baselineMark: 0, lastCureAt: 0, lastCureOutcome: null, failStreak: 0, cures: [], curing: false };
+// boot-survivable state rebuild from the journal
+try {
+  const rows = readFileSync(CURE_FILE, "utf8").trim().split("\n").filter(Boolean)
+    .map((l) => { try { return JSON.parse(l) as { at?: string; kind?: string; outcome?: string }; } catch { return null; } })
+    .filter((r): r is { at: string; kind: string; outcome?: string } => !!r?.at && !!r.kind);
+  const cutoff = nowMs() - 24 * 3600_000;
+  cure.cures = rows.filter((r) => r.kind === "cure").map((r) => Date.parse(r.at)).filter((t) => Number.isFinite(t) && t > cutoff);
+  const lastCure = rows.filter((r) => r.kind === "cure").pop();
+  if (lastCure) {
+    cure.lastCureAt = Date.parse(lastCure.at);
+    cure.lastCureOutcome = lastCure.outcome ?? null;
+  }
+  const recentDisarm = rows.some((r) => r.kind === "disarm" && Date.parse(r.at) > nowMs() - 6 * 3600_000);
+  if (recentDisarm) { cure.armed = false; cure.failStreak = CURE_FAIL_STREAK_LIMIT; }
+} catch { /* journal absent — fresh state */ }
+
+function cureState(): Record<string, unknown> {
+  return { armed: cure.armed, curing: cure.curing, cures24h: cure.cures.length, lastCureAt: cure.lastCureAt ? new Date(cure.lastCureAt).toISOString() : null, lastCureOutcome: cure.lastCureOutcome, failStreak: cure.failStreak, baselineMark: cure.baselineMark };
+}
+
+async function executeCure(reason: string): Promise<{ ok: boolean; detail: string }> {
+  if (cure.curing) return { ok: false, detail: "cure already in progress" };
+  cure.curing = true;
+  try {
+    logLine("warn", "cure-start", { reason });
+    try { appendFileSync(CURE_FILE, JSON.stringify({ at: new Date().toISOString(), kind: "cure-start", reason }) + "\n"); } catch { /* noop */ }
+    // (1) pause + kill-safe + wipe + restart now ride the CANONICAL guarded
+    //     purge (scripts/dev-cache-purge.sh --full — Task 73): flock-serialized
+    //     against the other dancers (watchdog heal, backup repair, hygiene),
+    //     graceful kill WITH process-exit wait, port-close wait, full .next
+    //     purge under the verifiably dead server, dev-up restart. The old
+    //     inline dance raced the layer-1 heal-spawns (2026-10-03 14:21Z
+    //     multi-dancer crash-loop) — one contract, one lock now.
+    // (2) verify — POLL through the cold-rebuild window (90s→270s, 4 attempts):
+    // a single 90s check measured "still compiling" on a healthy cure (Task-69
+    // live-fire) — the journal must record the SETTLED outcome, not the race.
+    const script = [
+      `cd ${ROOT}`,
+      `nohup bash scripts/dev-cache-purge.sh --full >> logs/sentinel-cure.log 2>&1 &`,
+    ].join(" && ");
+    const proc = Bun.spawn(["bash", "-c", script], { stdin: "ignore", stdout: "ignore", stderr: "ignore", cwd: ROOT });
+    await proc.exited; // the script backgrounds dev-up and returns immediately
+    cure.cures = [...cure.cures.filter((t) => t > nowMs() - 24 * 3600_000), nowMs()];
+    cure.lastCureAt = nowMs();
+    cure.baselineMark = Number.MAX_SAFE_INTEGER; // fresh boot proves itself below
+    // (5) verify — POLL through the cold-rebuild window (90s→270s, 4 attempts):
+    // a single 90s check measured "still compiling" on a healthy cure (Task-69
+    // live-fire) — the journal must record the SETTLED outcome, not the race.
+    const verifyOnce = async (): Promise<string> => {
+      try {
+        const r = await fetch("http://127.0.0.1:3000/api/healthz", { signal: AbortSignal.timeout(15_000) });
+        return r.ok ? "app-200-post-cure" : `app-${r.status}-post-cure`;
+      } catch { return "app-still-compiling-post-cure"; }
+    };
+    void (async () => {
+      let outcome = "verify-failed";
+      for (let attempt = 1; attempt <= 4; attempt++) {
+        await new Promise((res) => setTimeout(res, attempt === 1 ? 90_000 : 60_000));
+        outcome = await verifyOnce();
+        if (outcome === "app-200-post-cure") break;
+      }
+      cure.lastCureOutcome = outcome;
+      try { appendFileSync(CURE_FILE, JSON.stringify({ at: new Date().toISOString(), kind: "cure", reason, outcome }) + "\n"); } catch { /* noop */ }
+      logLine("info", "cure-done", { reason, outcome });
+      void tgSend("turbopack-cure", `🛠 <b>NEXUS-SENTINEL · TURBOPACK CACHE CURE</b>\n${reason}\noutcome: ${outcome}\n<code>${tehran()}</code> IRST`);
+      cure.curing = false;
+    })();
+    return { ok: true, detail: "cure sequence spawned — verify in ~90s" };
+  } catch (e) {
+    cure.curing = false;
+    logLine("crit", "cure-error", { err: String(e).slice(0, 160) });
+    return { ok: false, detail: String(e).slice(0, 160) };
+  }
+}
+
+async function cureCheck(auto: boolean): Promise<{ triggered: boolean; why: string }> {
+  if (!auto) { cure.armed = true; cure.failStreak = 0; } // operator /cure-now re-arms
+  if (!cure.armed) return { triggered: false, why: "auto-cure disarmed (panic recurred post-cure) — POST /cure-now re-arms" };
+  if (cure.curing) return { triggered: false, why: "cure in progress" };
+  if (backupLockHeld()) return { triggered: false, why: "backup running — purge would corrupt the snapshot" };
+  if (auto) {
+    // watchdog paused = another actor owns the box (operator dev-up / manual work)
+    try {
+      const pu = Number(readFileSync(`${ROOT}/.data/p0-watchdog/pause-until`, "utf8").trim());
+      if (Number.isFinite(pu) && pu * 1000 > nowMs()) return { triggered: false, why: "watchdog paused — another actor owns the box" };
+    } catch { /* no pause file — fine */ }
+    if (cure.lastCureAt && nowMs() - cure.lastCureAt < CURE_COOLDOWN_MS) return { triggered: false, why: "cooldown" };
+    if (cure.cures.filter((t) => t > nowMs() - 24 * 3600_000).length >= CURE_MAX_24H) return { triggered: false, why: "24h cure budget exhausted — operator review needed" };
+  }
+  const f = await logForensics();
+  const count = f.turbopackPanic;
+  // fresh-boot window reset: after a cure restarts the server, the boot marker
+  // moves and the count drops below the baseline → re-baseline automatically
+  if (count < cure.baselineMark) cure.baselineMark = count;
+  if (count <= cure.baselineMark) return { triggered: false, why: `no fresh panic beyond baseline (count=${count})` };
+  // failure-streak bookkeeping: a trigger within 35min of the last cure = it did not hold
+  if (auto && cure.lastCureAt && nowMs() - cure.lastCureAt < 35 * 60_000) {
+    cure.failStreak += 1;
+    if (cure.failStreak >= CURE_FAIL_STREAK_LIMIT) {
+      cure.armed = false;
+      try { appendFileSync(CURE_FILE, JSON.stringify({ at: new Date().toISOString(), kind: "disarm", why: "panic recurred post-cure — operator intervention required" }) + "\n"); } catch { /* noop */ }
+      logLine("crit", "cure-disarmed", { failStreak: cure.failStreak });
+      void tgSend("turbopack-cure-exhausted", `🔴 <b>NEXUS-SENTINEL · AUTO-CURE DISARMED</b>\nTurbopack panic recurred after cure — operator review required (POST /cure-now re-arms)\n<code>${tehran()}</code> IRST`);
+      return { triggered: false, why: "failure streak — disarmed + paged" };
+    }
+  }
+  const reason = auto ? `auto: ${count} panic marker(s) beyond baseline ${cure.baselineMark === Number.MAX_SAFE_INTEGER ? 0 : cure.baselineMark}` : "operator /cure-now";
+  const r = await executeCure(reason);
+  if (r.ok) {
+    cure.baselineMark = count; // consume the signal this cure addresses
+    logLine("warn", "cure-triggered", { reason, panicCount: count });
+  }
+  return { triggered: r.ok, why: r.detail };
+}
+
 // ── logging ──────────────────────────────────────────────────────────────────
 const ACTIONS = `${DIR}/actions.jsonl`;
 function logLine(lvl: "info" | "warn" | "crit", ev: string, det: Record<string, unknown> = {}) {
@@ -498,7 +750,10 @@ function logLine(lvl: "info" | "warn" | "crit", ev: string, det: Record<string, 
 // same root cause as the bridge-relay BRIDGE(HTTP 401)). envFromDotenv() already
 // re-reads per call, so the gate now self-heals after any .env restore.
 function controlOk(req: Request): boolean {
-  const CONTROL_KEY = process.env.NEXUS_CONTROL_KEY ?? envFromDotenv("NEXUS_CONTROL_KEY") ?? "";
+  // Task 36: .env FILE first (envFromDotenv re-reads per call) — the boot env
+  // is frozen and heal-spawn chains inherit it stale; file-first keeps the
+  // gate on the live source of truth after any rotation.
+  const CONTROL_KEY = envFromDotenv("NEXUS_CONTROL_KEY") ?? process.env.NEXUS_CONTROL_KEY ?? "";
   if (!CONTROL_KEY) return false; // fail-closed
   const provided = req.headers.get("x-nexus-key") ?? "";
   if (provided.length !== CONTROL_KEY.length) return false;
@@ -507,6 +762,75 @@ function controlOk(req: Request): boolean {
   return diff === 0;
 }
 const CONTROL_401 = () => Response.json({ ok: false, error: "unauthorized: mutating API requires x-nexus-key header" }, { status: 401, headers: { "cache-control": "no-store" } });
+
+// ── v1.2.0 PERF-HISTORY (M1 24h mission instrument) ──────────────────────────
+const PERF_FILE = `${DIR}/perf-history.jsonl`;
+const PERF_KEEP_LINES = 1600;              // ≈26.7h of samples at 60s ticks
+const PERF_ROTATE_BYTES = 1_200_000;
+const M1_P95_MS = 1000;                    // acceptance: pulse p95 < 1000ms
+const M1_RSS_MB = 2300;                    // acceptance: rssMax ≤ 2300MB (dev-up.sh v8.2 envelope top)
+
+async function perfSample(): Promise<{ rssMB: number | null; heapUsedMB: number | null; pulseMs: number | null }> {
+  const out: { rssMB: number | null; heapUsedMB: number | null; pulseMs: number | null } = { rssMB: null, heapUsedMB: null, pulseMs: null };
+  try {
+    const t0 = nowMs();
+    const r = await fetch("http://127.0.0.1:3000/api/pulse", { signal: AbortSignal.timeout(12_000) });
+    await r.arrayBuffer().catch(() => null); // drain so the socket frees
+    out.pulseMs = nowMs() - t0;
+  } catch { /* app down/warming — pulseMs stays null (honest gap) */ }
+  try {
+    const r = await fetch("http://127.0.0.1:3000/api/healthz", { signal: AbortSignal.timeout(8_000) });
+    if (r.ok) {
+      const j = (await r.json().catch(() => null)) as { rssMB?: number; heapUsedMB?: number } | null;
+      if (j) { out.rssMB = typeof j.rssMB === "number" ? j.rssMB : null; out.heapUsedMB = typeof j.heapUsedMB === "number" ? j.heapUsedMB : null; }
+    }
+  } catch { /* noop */ }
+  return out;
+}
+
+function pct(sorted: number[], p: number): number | null {
+  if (!sorted.length) return null;
+  const idx = Math.min(sorted.length - 1, Math.max(0, Math.ceil((p / 100) * sorted.length) - 1));
+  return sorted[idx];
+}
+
+function perfReport(): Record<string, unknown> {
+  const WINDOWS: Array<[string, number]> = [["1h", 3600_000], ["6h", 6 * 3600_000], ["24h", 24 * 3600_000]];
+  let samples: Array<Record<string, unknown>> = [];
+  try {
+    samples = readFileSync(PERF_FILE, "utf8").trim().split("\n").filter(Boolean).slice(-PERF_KEEP_LINES)
+      .map((l) => { try { return JSON.parse(l) as Record<string, unknown>; } catch { return null; } })
+      .filter((s): s is Record<string, unknown> => !!s);
+  } catch { /* ring not created yet */ }
+  const now = nowMs();
+  const windows: Record<string, unknown> = {};
+  for (const [name, span] of WINDOWS) {
+    const rows = samples.filter((s) => { const t = Date.parse(String(s.at)); return Number.isFinite(t) && now - t <= span; });
+    const pulse = rows.map((r) => r.pulseMs).filter((v): v is number => typeof v === "number").sort((a, b) => a - b);
+    const rss = rows.map((r) => r.rssMB).filter((v): v is number => typeof v === "number").sort((a, b) => a - b);
+    const mem = rows.map((r) => r.memAvailableMb).filter((v): v is number => typeof v === "number");
+    windows[name] = {
+      n: rows.length,
+      pulseMs: { p50: pct(pulse, 50), p95: pct(pulse, 95), p99: pct(pulse, 99), max: pulse.length ? pulse[pulse.length - 1] : null },
+      rssMB: { median: pct(rss, 50), max: rss.length ? rss[rss.length - 1] : null },
+      memAvailableMinMb: mem.length ? Math.min(...mem) : null,
+    };
+  }
+  const w24 = windows["24h"] as { pulseMs?: { p95?: number | null }; rssMB?: { max?: number | null } };
+  const coverageMin = samples.length ? Math.round((now - Date.parse(String(samples[0].at))) / 60_000) : 0;
+  const acceptance = {
+    p95_lt_1000ms: w24?.pulseMs?.p95 != null ? w24.pulseMs.p95 < M1_P95_MS : null,
+    rss_max_le_2300mb: w24?.rssMB?.max != null ? w24.rssMB.max <= M1_RSS_MB : null,
+    sufficient_24h_coverage: coverageMin >= 1440,
+  };
+  return {
+    ok: true, ver: VER, at: new Date().toISOString(),
+    samples: samples.length, coverageMin,
+    sufficient: acceptance.sufficient_24h_coverage,
+    windows, acceptance,
+    note: acceptance.sufficient_24h_coverage ? "full 24h coverage — acceptance authoritative" : `instrument filling — ${coverageMin}min of 1440min; treat windows as provisional`,
+  };
+}
 
 // ── HTTP surface ─────────────────────────────────────────────────────────────
 async function handle(req: Request): Promise<Response> {
@@ -517,6 +841,7 @@ async function handle(req: Request): Promise<Response> {
       uptimeSec: Math.floor((nowMs() - BOOT) / 1000), tehran: tehran(),
       verdict: lastSnapshot?.verdict ?? null, lastTickAt: lastSnapshot?.at ?? null,
       deepEveryMin: DEEP_EVERY_MS / 60_000, backupEveryH: BACKUP_EVERY_MS / 3600_000,
+      cures24h: cure.cures.length, cureArmed: cure.armed, // v1.3.0
     }, { headers: { "cache-control": "no-store" } });
   }
   if (url.pathname === "/report") {
@@ -533,6 +858,9 @@ async function handle(req: Request): Promise<Response> {
       return Response.json({ ok: true, items: lines.map((l) => { try { return JSON.parse(l); } catch { return l; } }) }, { headers: { "cache-control": "no-store" } });
     } catch { return Response.json({ ok: true, items: [] }); }
   }
+  if (url.pathname === "/perf") {
+    return Response.json(perfReport(), { headers: { "cache-control": "no-store" } });
+  }
   if (url.pathname === "/run-now" && req.method === "POST") {
     if (!controlOk(req)) return CONTROL_401();
     const snap = await collect(true);
@@ -545,6 +873,12 @@ async function handle(req: Request): Promise<Response> {
     scheduleBackup("operator /backup-now");
     return Response.json({ ok: true, spawned: true });
   }
+  // v1.3.0 — operator-forced Turbopack cache cure (re-arms auto-cure on success path)
+  if (url.pathname === "/cure-now" && req.method === "POST") {
+    if (!controlOk(req)) return CONTROL_401();
+    const r = await cureCheck(false);
+    return Response.json({ ok: r.triggered, why: r.why, state: cureState() }, { headers: { "cache-control": "no-store" } });
+  }
   return new Response("nexus-sentinel: 404\n", { status: 404 });
 }
 
@@ -556,7 +890,7 @@ try { Bun.serve({ port: PORT, fetch: handle }); } catch (e) {
   process.exit(0);
 }
 logLine("info", "boot", { ver: VER, pid: process.pid, port: PORT });
-console.log(`[${tehran()}] ${VER} armed on :${PORT} — 6 probes · deep/30min · backup/3h`);
+console.log(`[${tehran()}] ${VER} armed on :${PORT} — 6 probes · deep/30min · backup/3h · turbopack-cure armed`);
 
 // bun --hot safety: reap old timers across hot reloads
 const g = globalThis as typeof globalThis & { __sentinelTimers?: ReturnType<typeof setInterval>[] };
@@ -570,7 +904,11 @@ g.__sentinelTimers = [
   setInterval(() => {
     const d = backupDue();
     if (d.due) scheduleBackup(d.reason);
+    const dr = drillDue();
+    if (dr.due) scheduleDrill(dr.reason);
   }, 5 * 60_000),
+  // v1.3.0 — turbopack panic radar + auto-cache-cure, every tick
+  setInterval(() => { void cureCheck(true).catch((e) => logLine("warn", "cure-check-failed", { err: String(e).slice(0, 160) })); }, 60_000),
 ];
 setTimeout(() => { void collect(true).catch((e) => logLine("warn", "collect-boot-failed", { err: String(e).slice(0, 160) })); lastDeepAt = nowMs(); }, 4_000);
 setTimeout(() => { const d = backupDue(); if (d.due) scheduleBackup(d.reason); }, 90_000); // first backup check after 90s

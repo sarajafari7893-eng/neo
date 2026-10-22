@@ -96,9 +96,13 @@ function dotenvValues(): Map<string, string> {
   return dotenvCache ? dotenvCache.values : new Map();
 }
 function envGet(key: string): string {
+  // Task 36: .env FILE first (live source of truth, mtime-cached) — the boot
+  // process.env is frozen and inherited stale by heal-spawn chains (proven:
+  // old key kept validating after rotation). process.env is fallback only.
+  const fromFile = dotenvValues().get(key);
+  if (fromFile && fromFile.length > 0) return fromFile;
   const v = process.env[key];
-  if (v && v.length > 0) return v;
-  return dotenvValues().get(key) ?? "";
+  return v && v.length > 0 ? v : "";
 }
 const TOKEN = (): string => envGet("TELEGRAM_BOT_TOKEN");
 const BOT_ID = (): string => (TOKEN() ? TOKEN().split(":")[0]! : "");

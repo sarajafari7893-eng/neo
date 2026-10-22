@@ -1,61 +1,97 @@
 {
- "ver": "supervisor-cron 1.0.0",
- "pid": 1305,
- "startedAt": "2026-10-22T22:26:20.500Z",
- "updatedAt": "2026-10-22T23:06:03.609Z",
+ "ver": "supervisor-cron 1.6.0",
+ "pid": 1267,
+ "startedAt": "2026-10-21T17:33:31.476Z",
+ "updatedAt": "2026-10-21T17:44:43.804Z",
  "jobs": {
   "sweep": {
-   "lastRunAt": 1792709810500,
-   "nextRunAt": 1792710410500,
+   "lastRunAt": 1792604683620,
+   "nextRunAt": 1792605283804,
    "lastStatus": "ok",
-   "lastDurationMs": 13,
-   "lastError": null,
-   "runs": 23,
-   "failures": 0
-  },
-  "progress": {
-   "lastRunAt": 1792710363272,
-   "nextRunAt": 1792710363272,
-   "lastStatus": "ok",
-   "lastDurationMs": 337,
-   "lastError": null,
-   "runs": 62,
-   "failures": 0
-  },
-  "review": {
-   "lastRunAt": 1792710310879,
-   "nextRunAt": 1792710406781,
-   "lastStatus": "ok",
-   "lastDurationMs": 5902,
+   "lastDurationMs": 182,
    "lastError": null,
    "runs": 64,
    "failures": 0
+  },
+  "progress": {
+   "lastRunAt": 1792589801359,
+   "nextRunAt": 1792611401359,
+   "lastStatus": "ok",
+   "lastDurationMs": 561,
+   "lastError": null,
+   "runs": 157,
+   "failures": 0
+  },
+  "review": {
+   "lastRunAt": 1792589872442,
+   "nextRunAt": 1792633072442,
+   "lastStatus": "ok",
+   "lastDurationMs": 90886,
+   "lastError": null,
+   "runs": 101,
+   "failures": 0
+  },
+  "watch": {
+   "lastRunAt": 1792591684023,
+   "nextRunAt": 1792591684023,
+   "lastStatus": "ok",
+   "lastDurationMs": 14713,
+   "lastError": null,
+   "runs": 3,
+   "failures": 0
+  },
+  "backup": {
+   "lastRunAt": 1792600864032,
+   "nextRunAt": 1792611664032,
+   "lastStatus": "ok",
+   "lastDurationMs": 30626,
+   "lastError": null,
+   "runs": 2,
+   "failures": 0
+  },
+  "digest": {
+   "lastRunAt": 1792604143476,
+   "nextRunAt": 1792611343476,
+   "lastStatus": "ok",
+   "lastDurationMs": 710,
+   "lastError": null,
+   "runs": 1,
+   "failures": 0
+  },
+  "keepwarm": {
+   "lastRunAt": 1792604632023,
+   "nextRunAt": 1792604932022,
+   "lastStatus": "ok",
+   "lastDurationMs": 21,
+   "lastError": null,
+   "runs": 50,
+   "failures": 8
   }
  },
  "lastSweep": {
-  "at": "2026-10-22T22:56:50.513Z",
+  "at": "2026-10-21T17:44:43.802Z",
   "verdict": "AMBER",
-  "reason": "sentinel :3030 verdict AMBER",
+  "reason": "toobit-bridge doctrine: 1 violation(s) — last=NOTIONAL-DELTA: exp=25.00 act=8.20 (6719bps)",
   "services": {
    "app": {
     "up": true,
     "status": 200,
-    "ms": 9
+    "ms": 103
    },
    "liq": {
     "up": true,
     "status": 200,
-    "ms": 1
+    "ms": 0
    },
    "trade": {
     "up": true,
     "status": 200,
-    "ms": 0
+    "ms": 1
    },
    "armor": {
     "up": true,
     "status": 200,
-    "ms": 1
+    "ms": 33
    },
    "watchdog": {
     "up": true,
@@ -65,379 +101,634 @@
    "sentinel": {
     "up": true,
     "status": 200,
+    "ms": 1
+   },
+   "ws": {
+    "up": true,
+    "status": 400,
+    "ms": 9
+   },
+   "bridge": {
+    "up": true,
+    "status": 200,
     "ms": 0
+   },
+   "tbt": {
+    "up": true,
+    "status": 200,
+    "ms": 1
    }
   },
   "anomalies": [
    {
-    "class": "sentinel-amber",
+    "class": "tbt-doctrine-violation",
     "sev": "warn",
-    "msg": "sentinel :3030 verdict AMBER"
+    "msg": "toobit-bridge doctrine: 1 violation(s) — last=NOTIONAL-DELTA: exp=25.00 act=8.20 (6719bps)"
    }
-  ]
+  ],
+  "data": {
+   "lastEventAgeMin": 0
+  },
+  "streaks": {
+   "wsDown": 0,
+   "stale": 0
+  }
  },
  "lastReview": {
-  "at": "2026-10-22T23:05:16.569Z",
-  "status": "ok",
-  "verdict": "AMBER"
+  "at": "2026-10-21T13:39:22.675Z",
+  "status": "llm_unavailable",
+  "verdict": null
  },
  "lastProgress": {
-  "at": "2026-10-22T23:06:03.609Z",
+  "at": "2026-10-21T13:36:41.920Z",
   "ok": true
  },
- "alertLedger": {
-  "sentinel-red": 1792708011406
+ "lastDigest": {
+  "at": "2026-10-21T17:35:44.186Z",
+  "ok": true,
+  "newN": 4
  },
+ "lastKeepwarm": {
+  "at": "2026-10-21T17:43:52.044Z",
+  "ok": true,
+  "ms": 21,
+  "bootAt": "2026-10-21T17:39:35.231Z",
+  "gitSha": "9bcf702",
+  "coldStreak": 0
+ },
+ "coldStreak": 0,
+ "alertLedger": {
+  "sentinel-red": 1792600451378,
+  "review-llm-unavailable": 1792589962676,
+  "app-down": 1792600451062
+ },
+ "wsDownStreak": 0,
+ "staleStreak": 0,
  "history": [
   {
-   "id": "progress",
-   "at": 1792708282636,
+   "id": "sweep",
+   "at": 1792595650198,
    "status": "ok",
-   "durationMs": 343,
-   "detail": "sent 17 lines"
+   "durationMs": 31,
+   "detail": "GREEN: all services up · sentinel not RED"
   },
   {
-   "id": "review",
-   "at": 1792708282706,
+   "id": "keepwarm",
+   "at": 1792595932022,
    "status": "ok",
-   "durationMs": 420,
-   "detail": "llm=llm_unavailable"
+   "durationMs": 27,
+   "detail": "HEARTBEAT OK 26ms boot=15:13:13Z sha=84f4f66"
   },
   {
-   "id": "progress",
-   "at": 1792708372980,
-   "status": "ok",
-   "durationMs": 339,
-   "detail": "sent 17 lines"
+   "id": "keepwarm",
+   "at": 1792596232022,
+   "status": "error",
+   "durationMs": 2,
+   "detail": "HEARTBEAT COLD app:3000 0ms streak=1"
   },
   {
-   "id": "review",
-   "at": 1792708373127,
+   "id": "sweep",
+   "at": 1792596250198,
    "status": "ok",
    "durationMs": 384,
-   "detail": "llm=llm_unavailable"
+   "detail": "GREEN: all services up · sentinel not RED"
   },
   {
-   "id": "progress",
-   "at": 1792708463320,
+   "id": "keepwarm",
+   "at": 1792596532023,
    "status": "ok",
-   "durationMs": 329,
-   "detail": "sent 17 lines"
+   "durationMs": 42,
+   "detail": "HEARTBEAT OK 42ms boot=15:23:55Z sha=7ff39fb"
   },
   {
-   "id": "review",
-   "at": 1792708463512,
+   "id": "keepwarm",
+   "at": 1792596832023,
    "status": "ok",
-   "durationMs": 360,
-   "detail": "llm=llm_unavailable"
-  },
-  {
-   "id": "progress",
-   "at": 1792708553650,
-   "status": "ok",
-   "durationMs": 597,
-   "detail": "sent 17 lines"
-  },
-  {
-   "id": "review",
-   "at": 1792708553873,
-   "status": "ok",
-   "durationMs": 426,
-   "detail": "llm=llm_unavailable"
+   "durationMs": 43,
+   "detail": "HEARTBEAT OK 43ms boot=15:23:55Z sha=7ff39fb"
   },
   {
    "id": "sweep",
-   "at": 1792708610500,
+   "at": 1792596850198,
    "status": "ok",
-   "durationMs": 11,
-   "detail": "AMBER: sentinel :3030 verdict AMBER"
+   "durationMs": 498,
+   "detail": "GREEN: all services up · sentinel not RED"
   },
   {
-   "id": "progress",
-   "at": 1792708644248,
+   "id": "keepwarm",
+   "at": 1792597132022,
    "status": "ok",
-   "durationMs": 338,
-   "detail": "sent 16 lines"
+   "durationMs": 32,
+   "detail": "HEARTBEAT OK 32ms boot=15:23:55Z sha=7ff39fb"
   },
   {
-   "id": "review",
-   "at": 1792708644300,
+   "id": "digest",
+   "at": 1792597204023,
    "status": "ok",
-   "durationMs": 401,
-   "detail": "llm=llm_unavailable"
+   "durationMs": 686,
+   "detail": "digest new=3 settled=1 bridge=ok"
   },
   {
-   "id": "progress",
-   "at": 1792708734587,
+   "id": "keepwarm",
+   "at": 1792597432022,
    "status": "ok",
-   "durationMs": 719,
-   "detail": "sent 16 lines"
-  },
-  {
-   "id": "review",
-   "at": 1792708734702,
-   "status": "ok",
-   "durationMs": 693,
-   "detail": "llm=llm_unavailable"
-  },
-  {
-   "id": "review",
-   "at": 1792708825396,
-   "status": "ok",
-   "durationMs": 434,
-   "detail": "llm=llm_unavailable"
-  },
-  {
-   "id": "progress",
-   "at": 1792708825307,
-   "status": "ok",
-   "durationMs": 980,
-   "detail": "sent 16 lines"
-  },
-  {
-   "id": "review",
-   "at": 1792708915831,
-   "status": "ok",
-   "durationMs": 578,
-   "detail": "llm=llm_unavailable"
-  },
-  {
-   "id": "progress",
-   "at": 1792708916288,
-   "status": "ok",
-   "durationMs": 323,
-   "detail": "sent 16 lines"
-  },
-  {
-   "id": "review",
-   "at": 1792709006410,
-   "status": "ok",
-   "durationMs": 473,
-   "detail": "llm=llm_unavailable"
-  },
-  {
-   "id": "progress",
-   "at": 1792709006612,
-   "status": "ok",
-   "durationMs": 436,
-   "detail": "sent 16 lines"
-  },
-  {
-   "id": "review",
-   "at": 1792709096884,
-   "status": "ok",
-   "durationMs": 360,
-   "detail": "llm=llm_unavailable"
-  },
-  {
-   "id": "progress",
-   "at": 1792709097049,
-   "status": "ok",
-   "durationMs": 569,
-   "detail": "sent 16 lines"
-  },
-  {
-   "id": "review",
-   "at": 1792709187245,
-   "status": "ok",
-   "durationMs": 387,
-   "detail": "llm=llm_unavailable"
-  },
-  {
-   "id": "progress",
-   "at": 1792709187619,
-   "status": "ok",
-   "durationMs": 364,
-   "detail": "sent 16 lines"
+   "durationMs": 154,
+   "detail": "HEARTBEAT OK 154ms boot=15:43:36Z sha=7ff39fb"
   },
   {
    "id": "sweep",
-   "at": 1792709210500,
+   "at": 1792597450198,
    "status": "ok",
-   "durationMs": 13,
-   "detail": "AMBER: sentinel :3030 verdict AMBER"
+   "durationMs": 6761,
+   "detail": "GREEN: all services up · sentinel not RED"
   },
   {
-   "id": "progress",
-   "at": 1792709277984,
+   "id": "keepwarm",
+   "at": 1792597732022,
    "status": "ok",
-   "durationMs": 358,
-   "detail": "sent 16 lines"
+   "durationMs": 190,
+   "detail": "HEARTBEAT OK 190ms boot=15:43:36Z sha=7ff39fb"
   },
   {
-   "id": "review",
-   "at": 1792709277633,
+   "id": "keepwarm",
+   "at": 1792598032022,
    "status": "ok",
-   "durationMs": 1257,
-   "detail": "llm=llm_unavailable"
-  },
-  {
-   "id": "progress",
-   "at": 1792709368343,
-   "status": "ok",
-   "durationMs": 410,
-   "detail": "sent 16 lines"
-  },
-  {
-   "id": "review",
-   "at": 1792709368891,
-   "status": "ok",
-   "durationMs": 447,
-   "detail": "llm=llm_unavailable"
-  },
-  {
-   "id": "progress",
-   "at": 1792709458754,
-   "status": "ok",
-   "durationMs": 356,
-   "detail": "sent 16 lines"
-  },
-  {
-   "id": "review",
-   "at": 1792709459339,
-   "status": "ok",
-   "durationMs": 417,
-   "detail": "llm=llm_unavailable"
-  },
-  {
-   "id": "progress",
-   "at": 1792709549111,
-   "status": "ok",
-   "durationMs": 340,
-   "detail": "sent 16 lines"
-  },
-  {
-   "id": "review",
-   "at": 1792709549757,
-   "status": "ok",
-   "durationMs": 382,
-   "detail": "llm=llm_unavailable"
-  },
-  {
-   "id": "progress",
-   "at": 1792709639452,
-   "status": "ok",
-   "durationMs": 358,
-   "detail": "sent 16 lines"
-  },
-  {
-   "id": "review",
-   "at": 1792709640139,
-   "status": "ok",
-   "durationMs": 426,
-   "detail": "llm=llm_unavailable"
-  },
-  {
-   "id": "progress",
-   "at": 1792709729811,
-   "status": "ok",
-   "durationMs": 826,
-   "detail": "sent 16 lines"
-  },
-  {
-   "id": "review",
-   "at": 1792709730566,
-   "status": "ok",
-   "durationMs": 6304,
-   "detail": "llm=ok"
+   "durationMs": 233,
+   "detail": "HEARTBEAT OK 233ms boot=15:43:36Z sha=7ff39fb"
   },
   {
    "id": "sweep",
-   "at": 1792709810500,
+   "at": 1792598050198,
    "status": "ok",
-   "durationMs": 13,
+   "durationMs": 439,
+   "detail": "GREEN: all services up · sentinel not RED"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1792598332022,
+   "status": "ok",
+   "durationMs": 35,
+   "detail": "HEARTBEAT OK 35ms boot=15:43:36Z sha=7ff39fb"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1792598632022,
+   "status": "ok",
+   "durationMs": 53,
+   "detail": "HEARTBEAT OK 52ms boot=16:00:19Z sha=a137aa3"
+  },
+  {
+   "id": "sweep",
+   "at": 1792598650198,
+   "status": "ok",
+   "durationMs": 537,
+   "detail": "GREEN: all services up · sentinel not RED"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1792598932022,
+   "status": "ok",
+   "durationMs": 25,
+   "detail": "HEARTBEAT OK 25ms boot=16:05:04Z sha=a137aa3"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1792599232023,
+   "status": "ok",
+   "durationMs": 110,
+   "detail": "HEARTBEAT OK 110ms boot=16:13:14Z sha=a137aa3"
+  },
+  {
+   "id": "sweep",
+   "at": 1792599250198,
+   "status": "ok",
+   "durationMs": 30,
+   "detail": "GREEN: all services up · sentinel not RED"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1792599532022,
+   "status": "ok",
+   "durationMs": 95,
+   "detail": "HEARTBEAT OK 95ms boot=16:13:14Z sha=a137aa3"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1792599832022,
+   "status": "ok",
+   "durationMs": 26,
+   "detail": "HEARTBEAT OK 26ms boot=16:13:14Z sha=a137aa3"
+  },
+  {
+   "id": "sweep",
+   "at": 1792599850198,
+   "status": "ok",
+   "durationMs": 731,
    "detail": "AMBER: sentinel :3030 verdict AMBER"
   },
   {
-   "id": "progress",
-   "at": 1792709820639,
+   "id": "keepwarm",
+   "at": 1792600132022,
    "status": "ok",
-   "durationMs": 374,
-   "detail": "sent 16 lines"
+   "durationMs": 21,
+   "detail": "HEARTBEAT OK 21ms boot=16:24:26Z sha=e3662d7"
   },
   {
-   "id": "review",
-   "at": 1792709826871,
+   "id": "keepwarm",
+   "at": 1792600432023,
    "status": "ok",
-   "durationMs": 7274,
-   "detail": "llm=ok"
+   "durationMs": 38,
+   "detail": "HEARTBEAT OK 38ms boot=16:24:26Z sha=e3662d7"
   },
   {
-   "id": "progress",
-   "at": 1792709911014,
+   "id": "sweep",
+   "at": 1792600450199,
    "status": "ok",
-   "durationMs": 374,
-   "detail": "sent 16 lines"
+   "durationMs": 1180,
+   "detail": "RED: app :3000 down"
   },
   {
-   "id": "review",
-   "at": 1792709924146,
+   "id": "keepwarm",
+   "at": 1792600732022,
    "status": "ok",
-   "durationMs": 8285,
-   "detail": "llm=llm_bad_output"
+   "durationMs": 17,
+   "detail": "HEARTBEAT OK 17ms boot=16:34:22Z sha=61a36d9"
   },
   {
-   "id": "progress",
-   "at": 1792710001389,
+   "id": "backup",
+   "at": 1792600864032,
    "status": "ok",
-   "durationMs": 833,
-   "detail": "sent 16 lines"
+   "durationMs": 30626,
+   "detail": "snapshot ok in 31s: SNAPSHOT OK — nexus-snapshot-20261021-164104.zip (48M) · 12 snapshots retained (max 12) · wal:VACUUM-COPY-CONSISTENT+CHECKPOINTED · cal:OK · enc:ENCRYPTED · off-site: SKIPPED · cha"
   },
   {
-   "id": "review",
-   "at": 1792710022433,
+   "id": "keepwarm",
+   "at": 1792601032022,
    "status": "ok",
-   "durationMs": 5626,
-   "detail": "llm=ok"
+   "durationMs": 31,
+   "detail": "HEARTBEAT OK 31ms boot=16:41:27Z sha=61a36d9"
   },
   {
-   "id": "progress",
-   "at": 1792710092223,
+   "id": "sweep",
+   "at": 1792601050198,
    "status": "ok",
-   "durationMs": 365,
-   "detail": "sent 16 lines"
+   "durationMs": 38,
+   "detail": "GREEN: all services up · sentinel not RED"
   },
   {
-   "id": "review",
-   "at": 1792710118059,
+   "id": "keepwarm",
+   "at": 1792601332023,
    "status": "ok",
-   "durationMs": 5823,
-   "detail": "llm=ok"
+   "durationMs": 19,
+   "detail": "HEARTBEAT OK 19ms boot=16:45:47Z sha=61a36d9"
   },
   {
-   "id": "progress",
-   "at": 1792710182590,
+   "id": "keepwarm",
+   "at": 1792601632023,
    "status": "ok",
-   "durationMs": 360,
-   "detail": "sent 16 lines"
+   "durationMs": 68,
+   "detail": "HEARTBEAT OK 68ms boot=16:45:47Z sha=61a36d9"
   },
   {
-   "id": "review",
-   "at": 1792710213883,
+   "id": "sweep",
+   "at": 1792601650198,
    "status": "ok",
-   "durationMs": 6995,
-   "detail": "llm=llm_bad_output"
+   "durationMs": 735,
+   "detail": "AMBER: sentinel :3030 verdict AMBER"
   },
   {
-   "id": "progress",
-   "at": 1792710272951,
+   "id": "keepwarm",
+   "at": 1792601932023,
    "status": "ok",
-   "durationMs": 320,
-   "detail": "sent 16 lines"
+   "durationMs": 21,
+   "detail": "HEARTBEAT OK 21ms boot=16:45:47Z sha=61a36d9"
   },
   {
-   "id": "review",
-   "at": 1792710310879,
+   "id": "keepwarm",
+   "at": 1792602232022,
    "status": "ok",
-   "durationMs": 5902,
-   "detail": "llm=ok"
+   "durationMs": 25,
+   "detail": "HEARTBEAT OK 25ms boot=17:01:03Z sha=d506c3a"
   },
   {
-   "id": "progress",
-   "at": 1792710363272,
+   "id": "sweep",
+   "at": 1792602250198,
    "status": "ok",
-   "durationMs": 337,
-   "detail": "sent 16 lines"
+   "durationMs": 41,
+   "detail": "GREEN: all services up · sentinel not RED"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1792602532022,
+   "status": "ok",
+   "durationMs": 65,
+   "detail": "HEARTBEAT OK 65ms boot=17:06:08Z sha=d506c3a"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1792602832022,
+   "status": "ok",
+   "durationMs": 23,
+   "detail": "HEARTBEAT OK 23ms boot=17:06:08Z sha=d506c3a"
+  },
+  {
+   "id": "sweep",
+   "at": 1792602850198,
+   "status": "ok",
+   "durationMs": 680,
+   "detail": "AMBER: sentinel :3030 verdict AMBER"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1792603132022,
+   "status": "ok",
+   "durationMs": 398,
+   "detail": "HEARTBEAT OK 398ms boot=17:15:19Z sha=d506c3a"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1792603432022,
+   "status": "error",
+   "durationMs": 3,
+   "detail": "HEARTBEAT COLD app:3000 1ms streak=1"
+  },
+  {
+   "id": "sweep",
+   "at": 1792603450198,
+   "status": "ok",
+   "durationMs": 3308,
+   "detail": "GREEN: all services up · sentinel not RED"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1792603732023,
+   "status": "ok",
+   "durationMs": 32,
+   "detail": "HEARTBEAT OK 32ms boot=17:23:56Z sha=d506c3a"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1792604032023,
+   "status": "ok",
+   "durationMs": 244,
+   "detail": "HEARTBEAT OK 244ms boot=17:33:18Z sha=9bcf702"
+  },
+  {
+   "id": "sweep",
+   "at": 1792604050198,
+   "status": "ok",
+   "durationMs": 48,
+   "detail": "AMBER: toobit-bridge :3021 /doctrine unreachable while health is up — doctrine supervisor degraded"
+  },
+  {
+   "id": "digest",
+   "at": 1792604143476,
+   "status": "ok",
+   "durationMs": 710,
+   "detail": "digest new=4 settled=2 bridge=ok"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1792604332022,
+   "status": "error",
+   "durationMs": 2,
+   "detail": "HEARTBEAT COLD app:3000 0ms streak=1"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1792604632023,
+   "status": "ok",
+   "durationMs": 21,
+   "detail": "HEARTBEAT OK 21ms boot=17:39:35Z sha=9bcf702"
+  },
+  {
+   "id": "sweep",
+   "at": 1792604650198,
+   "status": "ok",
+   "durationMs": 393,
+   "detail": "AMBER: toobit-bridge doctrine: 1 violation(s) — last=NOTIONAL-DELTA: exp=25.00 act=8.20 (6719bps)"
+  },
+  {
+   "id": "sweep",
+   "at": 1792604683620,
+   "status": "ok",
+   "durationMs": 182,
+   "detail": "AMBER: toobit-bridge doctrine: 1 violation(s) — last=NOTIONAL-DELTA: exp=25.00 act=8.20 (6719bps)"
   }
- ]
+ ],
+ "watchRuns": [
+  {
+   "run": 1,
+   "at": "2026-10-21T13:48:05.266Z",
+   "tehran": "21/10/2026, 17:18:05",
+   "taxonomy": {
+    "fresh35m": 0,
+    "latestAgeMin": 102,
+    "err": null,
+    "latest": [
+     {
+      "symbol": "BTCUSDT",
+      "ts": 1792584360000,
+      "source": "LIVE",
+      "price": 83493.7
+     },
+     {
+      "symbol": "ETHUSDT",
+      "ts": 1792584360000,
+      "source": "LIVE",
+      "price": 2467.82
+     },
+     {
+      "symbol": "BTCUSDT",
+      "ts": 1792584060000,
+      "source": "LIVE",
+      "price": 83466.4
+     }
+    ]
+   },
+   "arms": [
+    {
+     "id": "real-keep",
+     "label": "REAL · core said TRADE",
+     "n": 30,
+     "target": 30,
+     "fillPct": 100,
+     "starved": false
+    },
+    {
+     "id": "real-veto",
+     "label": "REAL · core said VETO (still traded)",
+     "n": 30,
+     "target": 30,
+     "fillPct": 100,
+     "starved": false
+    },
+    {
+     "id": "paper-keep",
+     "label": "PAPER · reject the core would trade",
+     "n": 30,
+     "target": 30,
+     "fillPct": 100,
+     "starved": false
+    },
+    {
+     "id": "paper-veto",
+     "label": "PAPER · pass the core blocked",
+     "n": 0,
+     "target": 30,
+     "fillPct": 0,
+     "starved": false
+    }
+   ],
+   "services": {
+    "app": true,
+    "ws": true,
+    "sentinelVerdict": "RED"
+   }
+  },
+  {
+   "run": 2,
+   "at": "2026-10-21T13:58:04.520Z",
+   "tehran": "21/10/2026, 17:28:04",
+   "taxonomy": {
+    "fresh35m": 6,
+    "latestAgeMin": 2,
+    "err": null,
+    "latest": [
+     {
+      "symbol": "BTCUSDT",
+      "ts": 1792590960000,
+      "source": "LIVE",
+      "price": 83852.4
+     },
+     {
+      "symbol": "ETHUSDT",
+      "ts": 1792590960000,
+      "source": "LIVE",
+      "price": 2474.38
+     },
+     {
+      "symbol": "BTCUSDT",
+      "ts": 1792590600000,
+      "source": "LIVE",
+      "price": 83834.9
+     }
+    ]
+   },
+   "arms": [
+    {
+     "id": "real-keep",
+     "label": "REAL · core said TRADE",
+     "n": 30,
+     "target": 30,
+     "fillPct": 100,
+     "starved": false
+    },
+    {
+     "id": "real-veto",
+     "label": "REAL · core said VETO (still traded)",
+     "n": 30,
+     "target": 30,
+     "fillPct": 100,
+     "starved": false
+    },
+    {
+     "id": "paper-keep",
+     "label": "PAPER · reject the core would trade",
+     "n": 30,
+     "target": 30,
+     "fillPct": 100,
+     "starved": true
+    },
+    {
+     "id": "paper-veto",
+     "label": "PAPER · pass the core blocked",
+     "n": 0,
+     "target": 30,
+     "fillPct": 0,
+     "starved": false
+    }
+   ],
+   "services": {
+    "app": true,
+    "ws": true,
+    "sentinelVerdict": "GREEN"
+   }
+  },
+  {
+   "run": 3,
+   "at": "2026-10-21T14:08:18.031Z",
+   "tehran": "21/10/2026, 17:38:18",
+   "taxonomy": {
+    "fresh35m": 6,
+    "latestAgeMin": 12,
+    "err": null,
+    "latest": [
+     {
+      "symbol": "BTCUSDT",
+      "ts": 1792590960000,
+      "source": "LIVE",
+      "price": 83852.4
+     },
+     {
+      "symbol": "ETHUSDT",
+      "ts": 1792590960000,
+      "source": "LIVE",
+      "price": 2474.38
+     },
+     {
+      "symbol": "BTCUSDT",
+      "ts": 1792590600000,
+      "source": "LIVE",
+      "price": 83834.9
+     }
+    ]
+   },
+   "arms": [
+    {
+     "id": "real-keep",
+     "label": "REAL · core said TRADE",
+     "n": 30,
+     "target": 30,
+     "fillPct": 100,
+     "starved": false
+    },
+    {
+     "id": "real-veto",
+     "label": "REAL · core said VETO (still traded)",
+     "n": 30,
+     "target": 30,
+     "fillPct": 100,
+     "starved": false
+    },
+    {
+     "id": "paper-keep",
+     "label": "PAPER · reject the core would trade",
+     "n": 30,
+     "target": 30,
+     "fillPct": 100,
+     "starved": true
+    },
+    {
+     "id": "paper-veto",
+     "label": "PAPER · pass the core blocked",
+     "n": 0,
+     "target": 30,
+     "fillPct": 0,
+     "starved": false
+    }
+   ],
+   "services": {
+    "app": false,
+    "ws": true,
+    "sentinelVerdict": "UNKNOWN"
+   }
+  }
+ ],
+ "lastWatch": {
+  "at": "2026-10-21T14:08:18.032Z",
+  "run": 3,
+  "done": true,
+  "summary": "mission complete · taxonomy rows/35min 0→6 (max 6) · arms Δ real-keep: 30→30/30 · real-veto: 30→30/30 · paper-keep: 30→30/30 · paper-veto: 0→0/30 · verdict RED→UNKNOWN"
+ }
 }

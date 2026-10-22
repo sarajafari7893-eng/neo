@@ -1,3 +1,4 @@
+import { liveEnv } from "@/lib/live-env";
 import { NextResponse } from "next/server";
 import { readKillSwitch, engageKillSwitch, releaseKillSwitch } from "@/lib/execution/kill-switch";
 
@@ -23,13 +24,15 @@ export async function GET() {
 
 export async function POST(req: Request) {
   // defense-in-depth re-check (mirrors /api/nexus/armor-boot)
-  const expected = process.env.NEXUS_CONTROL_KEY ?? "";
+  // Task 36: liveEnv — .env file is the live source of truth (frozen boot
+  // process.env kept validating the OLD key after rotation).
+  const expected = liveEnv("NEXUS_CONTROL_KEY");
   const provided = req.headers.get("x-nexus-key") ?? "";
   const keyOk = expected.length > 0 && provided.length > 0 && constantTimeEqual(provided, expected);
   if (!keyOk) {
     try {
       const { getToken } = await import("next-auth/jwt");
-      const token = await getToken({ req: req as never, secret: process.env.NEXTAUTH_SECRET ?? "" });
+      const token = await getToken({ req: req as never, secret: liveEnv("NEXTAUTH_SECRET") || process.env.NEXTAUTH_SECRET || "" });
       if (!token) return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
     } catch {
       return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });

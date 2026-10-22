@@ -11,7 +11,7 @@ import { pumpTick, pumpScreen, gatherEvidence, pumpGateAllows, PUMP_RULES } from
 const db = new PrismaClient();
 const realNow = Date.now();
 let fake = realNow;
-// eslint-disable-next-line no-global-assign
+
 (Date as unknown as { now: () => number }).now = () => fake;
 
 const SYM = "TESTUSDT";

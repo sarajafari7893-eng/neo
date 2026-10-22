@@ -43,10 +43,54 @@ export interface DailyDigest {
   statusMix: { tp: number; sl: number; expired: number; manual: number };
   /** closed trades in the window (worst→best mix, capped) — feeds the poster bars */
   trades: Array<{ symbol: string; pnl: number; status: string; strategy: string; direction: string }>;
+  /** v10.20 — 14-day realized-equity walk (oldest→newest); last point = the
+   * live equity mark (realized + open PNL). Feeds the poster sparkline. */
+  equityCurve: number[];
 }
 
-export async function buildDailyDigest(): Promise<DailyDigest> {
-  const since = new Date(Date.now() - 24 * 3600_000);
+/** v10.20 — 14-point daily equity walk over the trailing 14 Tehran-day
+ * buckets. Realized equity from settled rows only; the FINAL point is the
+ * live equity mark (realized + open PNL) so the curve ends where the
+ * dashboard stands right now. Fail-soft: [] on any error (poster hides the
+ * panel instead of inventing data). */
+async function equityCurvePoints(currentEquity: number): Promise<number[]> {
+  const N = 14;
+  const start = Date.now() - (N - 1) * 86_400_000;
+  try {
+    const [inWin, before] = await Promise.all([
+      db.signal.findMany({
+        where: { closedAt: { gte: new Date(start) }, status: { in: ["TP1", "TP2", "TP3", "SL", "EXPIRED", "CLOSED"] } },
+        select: { closedAt: true, pnlPercent: true, marginUsd: true },
+      }),
+      db.signal.findMany({
+        where: { closedAt: { lt: new Date(start) }, status: { in: ["TP1", "TP2", "TP3", "SL", "EXPIRED", "CLOSED"] } },
+        select: { pnlPercent: true, marginUsd: true },
+      }),
+    ]);
+    const base = before.reduce((a, s) => a + (s.marginUsd * s.pnlPercent) / 100, 0) + ACCOUNT_START_USD;
+    const buckets = new Array<number>(N).fill(0);
+    for (const s of inWin) {
+      if (!s.closedAt) continue;
+      const idx = Math.floor((s.closedAt.getTime() - start) / 86_400_000);
+      if (idx >= 0 && idx < N) buckets[idx]! += (s.marginUsd * s.pnlPercent) / 100;
+    }
+    const pts: number[] = [];
+    let cum = 0;
+    for (let i = 0; i < N - 1; i++) {
+      cum += buckets[i]!;
+      pts.push(Number((base + cum).toFixed(2)));
+    }
+    pts.push(currentEquity); // live mark — realized + open PNL
+    return pts;
+  } catch {
+    return [];
+  }
+}
+
+/** Shared digest builder — 24h for the daily report, 7×24h for the weekly
+ * report (v10.20). Same honest math, one implementation, zero drift. */
+async function buildDigest(sinceMs: number): Promise<DailyDigest> {
+  const since = new Date(Date.now() - sinceMs);
 
   const [openedSigs, closedSigs, activeSigs, volCauses] = await Promise.all([
     db.signal.findMany({ where: { createdAt: { gte: since } }, select: { id: true } }),
@@ -92,6 +136,9 @@ export async function buildDailyDigest(): Promise<DailyDigest> {
   for (const v of volCauses) causeCounts.set(v.primaryCause, (causeCounts.get(v.primaryCause) ?? 0) + 1);
   const topCause = [...causeCounts.entries()].sort((a, b) => b[1] - a[1])[0] ?? null;
 
+  const equityUsd = Number((ACCOUNT_START_USD + lifeRealized + lifeUnreal).toFixed(2));
+  const equityCurve = await equityCurvePoints(equityUsd);
+
   return {
     windowLabel: `${tehranDateStr(since)} → ${tehranDateStr(new Date())} (Tehran)`,
     opened: openedSigs.length,
@@ -103,7 +150,7 @@ export async function buildDailyDigest(): Promise<DailyDigest> {
     realizedUsd: Number(realizedUsd.toFixed(2)),
     feesUsd: Number(feesUsd.toFixed(2)),
     unrealizedUsd: Number(unrealizedUsd.toFixed(2)),
-    equityUsd: Number((ACCOUNT_START_USD + lifeRealized + lifeUnreal).toFixed(2)),
+    equityUsd,
     active: activeSigs.length,
     best: best ? { symbol: best.symbol, pnl: best.pnlPercent, strategy: best.strategy } : null,
     worst: worst && worst.pnlPercent < 0 ? { symbol: worst.symbol, pnl: worst.pnlPercent, strategy: worst.strategy } : null,
@@ -119,19 +166,32 @@ export async function buildDailyDigest(): Promise<DailyDigest> {
       .sort((a, b) => Math.abs(b.pnlPercent) - Math.abs(a.pnlPercent))
       .slice(0, 5)
       .map((s) => ({ symbol: s.symbol, pnl: s.pnlPercent, status: s.status, strategy: s.strategy, direction: s.direction })),
+    equityCurve,
   };
+}
+
+export async function buildDailyDigest(): Promise<DailyDigest> {
+  return buildDigest(24 * 3600_000);
+}
+
+/** v10.20 WEEKLY DIGEST — the last 7×24h through the exact same honest
+ * pipeline as the daily report (same fields, same equity math). Sent once
+ * per Iranian week (Sat→Fri) via /api/report/weekly. */
+export async function buildWeeklyDigest(): Promise<DailyDigest> {
+  return buildDigest(7 * 24 * 3600_000);
 }
 
 /** Compact HTML caption — Telegram caps photos captions at 1024 chars.
  * v6.6: `advisorBlock` (from advisor.advisorCaptionBlock()) rides along so the
  * operator sees pending calibration proposals in the same 00:00 report. */
-export function composeDailyCaption(d: DailyDigest, advisorBlock?: string): string {
+export function composeDailyCaption(d: DailyDigest, advisorBlock?: string, scope: "DAILY" | "WEEKLY" = "DAILY"): string {
   const money = (v: number) => `${v >= 0 ? "+" : "−"}$${Math.abs(v).toFixed(2)}`;
+  const netLabel = scope === "WEEKLY" ? "Net 7d" : "Net 24h";
   const lines: string[] = [
-    `📊 <b>${APP_NAME} — DAILY PERFORMANCE</b>`,
+    `📊 <b>${APP_NAME} — ${scope === "WEEKLY" ? "WEEKLY" : "DAILY"} PERFORMANCE</b>`,
     `🗓 ${esc(d.windowLabel)}`,
     "",
-    `💵 Net 24h: <b>${money(d.realizedUsd)}</b> (fees −$${d.feesUsd.toFixed(2)})`,
+    `💵 ${netLabel}: <b>${money(d.realizedUsd)}</b> (fees −$${d.feesUsd.toFixed(2)})`,
     `🏦 Equity: <b>$${d.equityUsd.toFixed(2)}</b> · open PNL ${money(d.unrealizedUsd)}`,
     `📡 Deployed: <b>${d.opened}</b> · Closed: <b>${d.closed}</b> · Active now: <b>${d.active}</b>`,
     `🏆 Proven-TP wins: <b>${d.wins}</b>${d.winRatePct !== null ? ` / ${d.winRatePct}%` : ""} · 🛑 Stops: <b>${d.stops}</b> · ⏰ Expired: <b>${d.expired}</b>`,
@@ -182,4 +242,44 @@ export async function lastSuccessfulSentAt(): Promise<number | null> {
  * Two timestamps share a key iff they fall on the same Tehran date. */
 export function tehranDayKey(ts: number): number {
   return Math.floor((ts + 12_600_000) / 86_400_000);
+}
+
+// ── v10.20 WEEKLY REPORT GUARD ───────────────────────────────────────────
+// Iranian week: Saturday → Friday. weekKey = the Tehran-day key of the most
+// recent Saturday ≤ ts, so every day inside one Iranian week shares a key.
+
+export function tehranWeekKey(ts: number): number {
+  const dow = new Date(ts + 12_600_000).getUTCDay(); // Sun=0 … Sat=6
+  const daysSinceSat = (dow + 1) % 7; // Sat→0, Sun→1, … Fri→6
+  return tehranDayKey(ts - daysSinceSat * 86_400_000);
+}
+
+export async function markWeeklySent(ok: boolean): Promise<void> {
+  await db.engineSetting.upsert({
+    where: { key: "weeklyreport.last" },
+    create: { key: "weeklyreport.last", value: JSON.stringify({ at: Date.now(), ok }) },
+    update: { value: JSON.stringify({ at: Date.now(), ok }) },
+  });
+}
+
+export async function lastWeeklySentAt(): Promise<number | null> {
+  const row = await db.engineSetting.findUnique({ where: { key: "weeklyreport.last" } }).catch(() => null);
+  if (!row) return null;
+  try {
+    return (JSON.parse(row.value) as { at: number }).at ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Only successful sends count — a failed weekly delivery must be retryable. */
+export async function lastWeeklySuccessfulSentAt(): Promise<number | null> {
+  const row = await db.engineSetting.findUnique({ where: { key: "weeklyreport.last" } }).catch(() => null);
+  if (!row) return null;
+  try {
+    const v = JSON.parse(row.value) as { at: number; ok?: boolean };
+    return v.ok ? v.at ?? null : null;
+  } catch {
+    return null;
+  }
 }

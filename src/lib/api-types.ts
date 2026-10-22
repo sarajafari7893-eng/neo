@@ -11,10 +11,13 @@ export interface FactorVoteDTO {
 }
 
 export interface FlowDTO {
-  verdict: "CONFIRMS" | "CONFLICTS" | "NEUTRAL" | "UNAVAILABLE";
+  verdict: "CONFIRMS" | "CONFLICTS" | "NEUTRAL" | "UNAVAILABLE" | "NO-DATA";
   score: number;
   reasons: string[];
   oiWeight: number;
+  // v12.1 Task-48 ② — honest blindness telemetry (NO-DATA ≠ NEUTRAL)
+  coverage?: number;
+  blind?: boolean;
   metrics: {
     oiDelta10m: number | null;
     oiDelta1h: number | null;
@@ -276,11 +279,24 @@ export interface PaperAccount {
   balance: number; // start + realized (all-time)
   equity: number; // balance + unrealized (open positions)
   unrealizedPnl: number;
+  /** v12.0 — legacy full-margin current-price unrealized over ALL priced rows
+   * (the breaker reads unrealizedPnl: tranche-aware + settlement-safe only).
+   * The gap between the two is banked-tranche re-pricing + unsafe rows. */
+  unrealizedPnlAllRows?: number;
+  unsafeOpenRows?: number;
   exposureUsd: number; // sum margin of open positions
   freeMargin: number;
   marginUsedPct: number; // exposure / equity
   openPositions: number;
   feesPaid: number; // all-time realized taker + swap
+  /** v11.5 — global open-pnl close-all breaker (operator mandate): when Σ
+   * open NET pnl ≥ targetUsd the engine closes every position at the mark. */
+  closeAll: {
+    enabled: boolean;
+    targetUsd: number;
+    lastTriggeredAt: string | null;
+    triggerCount: number;
+  } | null;
 }
 
 export interface AfterlifeStats {
@@ -359,6 +375,10 @@ export interface PnlLedgerTotals {
   avgPct: number; // per-trade expectancy, all-time
   ttlExtended: number; // signals that consumed the dynamic expiry gate
   extCapturedUsd: number; // NET usd captured by extended signals that reached TP
+  /** Task 56 LEDGER-AUDIT: integrity-flagged (qualityFlag) or non-settlement
+   *  (VOID) rows excluded from the clean ledger — the paper account keeps
+   *  full history, this ledger does not (v10.18 doctrine applied to the ledger). */
+  excludedN: number;
 }
 
 export interface PnlLedger {
@@ -415,8 +435,66 @@ export interface FeedStatusDTO {
   liq: LiqStatusDTO | null;
   triggers: TriggerBusDTO | null;
   regimes: RegimeRowDTO[];
-  universe: { tracked: number; poolTotal: number; liquidPool: number; target: number } | null;
+  universe: { tracked: number; poolTotal: number; liquidPool: number; target: number; poolSource?: string } | null;
   pump: PumpEngineStatus | null; // v9.0 PUMP/DUMP RADAR (lib/pump-dump.ts)
+  goldenLane: GoldenLaneBlockDTO | null; // Task 79 — pre-registered golden-formula paper lanes
+}
+
+// ── Task 79 GOLDEN-LANE (server mirror: lib/golden-lane.ts) ─────────────
+export interface LaneMatchDTO {
+  signalId: string;
+  serial: number;
+  lane: string;
+  symbol: string;
+  direction: string;
+  strategy: string;
+  tehranHour: number;
+  tp1DistPct: number;
+  status: string;
+  closedAt: number | null;
+  net2: number | null;
+  win: boolean | null;
+}
+
+export interface LaneStatusDTO {
+  id: string;
+  name: string;
+  windowStart: number;
+  windowEnd: number;
+  dayOfWindow: number;
+  phase: "PAPER" | "PROMOTE-CANDIDATE" | "EXTEND" | "ABSTAIN" | "KILLED";
+  detail: string;
+  matched: number;
+  open: number;
+  settled: number;
+  winRatePct: number | null;
+  net2: number;
+  gross2: number;
+  avgNet2: number | null;
+  bestDay: number | null;
+  worstDay: number | null;
+  todayNet2: number | null;
+  weekNet2: number | null;
+  dailyStopBreached: boolean;
+  weeklyStopBreached: boolean;
+  kills: { K1: boolean; K2: boolean; K3: boolean; K4: boolean };
+  killDetail: string[];
+  lastMatchAt: number | null;
+  recent: LaneMatchDTO[];
+}
+
+export interface GoldenLaneBlockDTO {
+  configured: boolean;
+  marginUsd: number;
+  dailyStop: number;
+  weeklyStop: number;
+  windowStart: number;
+  windowEnd: number;
+  extensions: number;
+  tampered: boolean;
+  lastSyncAt: number | null;
+  lastError: string | null;
+  lanes: LaneStatusDTO[];
 }
 
 // ── v9.0 PUMP/DUMP RADAR (server mirror: lib/pump-dump.ts) ──────────────
@@ -447,6 +525,30 @@ export interface PumpEngineStatus {
     unlockedAt: string | null;
   };
   authority: "direct" | "gated"; // v9.1 — operator-granted direct signal authority
+  /** v11.1 — nomination funnel counters: every silent drop is now visible
+   *  (operator: «چرا ردیابی‌ها تبدیل به سیگنال نمی‌شود؟»). */
+  nomination: {
+    declared: number;
+    learningHeld: number;
+    belowDeployFloor: number;
+    spacingDrop: number;
+    maxActiveDrop: number;
+    nominated: number;
+    deployed: number;
+    engineVetoed: number;
+    successResolutions: number;
+    renomSkippedHasCard: number;
+    renomAttempts: number;
+    renomDeployed: number;
+    renomSpacingDrop: number;
+    renomMaxActiveDrop: number;
+    // v12.1 Task-48 ① — R6 RADAR LANE funnel counters
+    laneAttempts: number;
+    laneCapDrop: number;
+    laneProbationNote: string;
+    laneDeployed: number;
+    laneVetoed: number;
+  };
   active: PumpTrackDTO[];
   recent: PumpTrackDTO[];
   tapeSymbols: number;
@@ -460,6 +562,17 @@ export interface PlatformStats {
   losses: number;
   expired: number;
   winRate: number;
+  /** TASK-40 (2026-09-27): ALL-TIME TP-proven split — same semantics as the
+   * rolling-7d headline counters but over the FULL table (monotonic). The
+   * WIN/LOSS SPLIT card headlines this because a rolling window shrinks by
+   * itself as rows age out and reads like data loss. */
+  allTimeSplit: {
+    wins: number;
+    losses: number;
+    expired: number;
+    settled: number;
+    winRate: number;
+  };
   totalPnlUsd: number;
   pnl24hUsd: number;
   avgPnlPercent: number;
@@ -484,10 +597,27 @@ export interface PlatformStats {
     degenStop: number;
     invertedStop: number;
     restoreCatchup: number;
+    /** Task 56: rows voided by the PHANTOM-FEED-0930 forensic guard */
+    phantomFeed: number;
   };
   lifecycle: LifecycleStats;
   tpFunnel: TpFunnel;
   pnlLedger: PnlLedger;
+  /** Task 65 SIZING-MODES — live margin sizing control state */
+  sizing: SizingStats;
+}
+
+/** Task 65 — margin sizing mode (EngineSetting "sizing.mode", live-switchable).
+ *  Backtest 2026-10-02: CONFIDENCE −$10.65 · FLAT$2 −$3.02 · ANTI_MART +$2.99. */
+export interface SizingStats {
+  mode: "CONFIDENCE" | "FLAT" | "ANTI_MARTINGALE";
+  flatBase: number;
+  antiBase: number;
+  decay: number;
+  floor: number;
+  consecCap: number;
+  /** consecutive-SL run since last TP (anti-martingale exponent) */
+  consecSl: number;
 }
 
 export interface PulseSnapshot {
@@ -549,7 +679,14 @@ export type GateNameDTO =
   | "SHORT-GUARD" // v8.4 R1 — audit corrective action (mirrors gate-journal GateName)
   | "CHASE-PRICE" // v9.3 anti-late-entry — entry too far past the detection reference
   | "DECISIVE" // v10.6 decisive-excursion filter — predicted no-touch deploys skipped pre-entry
-  | "VOL-BARRIER"; // v10.9.2 vol-scaled vertical barrier — slow-touch skip / solved TTL (mirrors gate-journal GateName)
+  | "VOL-BARRIER" // v10.9.2 vol-scaled vertical barrier — slow-touch skip / solved TTL (mirrors gate-journal GateName)
+  | "DISLOCATION" // v10.15 cross-exchange venue-dislocation gate
+  | "DEGEN-STOP" // 2026-09-24 integrity guard — degenerate stop geometry refused at deploy
+  | "SYMBOL-CAP" // v11.4 same-symbol concentration cap (mirrors gate-journal GateName)
+  | "ENTRY-LEVER" // v11.3 late-entry shield — evidence-gated deterministic levers
+  | "STALE-ANCHOR" // Task 53 — anchor freshness gate at deploy
+  | "DEPEG-MUTE" // Task 53 — stablecoin depeg global circuit breaker (fail-closed)
+  | "STABLE-REGIME"; // Task 53 — stablecoin regime gate (SHADOW: journals, never blocks)
 
 export interface GateBlockDTO {
   at: number;
@@ -738,6 +875,10 @@ export interface ShadowVetoDTO {
   armsLive?: ShadowArmDTO[]; // v10.11 COHORT-FREEZE — unfrozen live recompute (monitoring-only)
   cohortFreeze?: { epoch: string; frozenAt: number; reason: "FILL" | "SEQ-STOP"; seqState: string; realKeep: { n: number; wins: number; netUsd: number }; realVeto: { n: number; wins: number; netUsd: number } } | null; // v10.11
   promotion: ShadowPromotionDTO;
+  /** v11.0 PATTERN-VETO — the proven-performance filter's live evidence:
+   * scoped veto authority per (strategy|direction) cell, granted only when the
+   * cell's settled evidence passes the four-part proof. */
+  patternVeto?: { enabled: boolean; proven: string[]; rows: Array<{ pattern: string; nKeep: number; wrKeep: number | null; netKeep: number; nVeto: number; wrVeto: number | null; netVeto: number; ubVeto: number | null; proven: boolean; detail: string }> };
   recent: ShadowVerdictDTO[];
   paper: ShadowPaperDTO[];
   health: { verdicts: number; papers: number; fileKB: number; pending: number; callsLastHour: number; auditViolations: number; hydratedAt: number };

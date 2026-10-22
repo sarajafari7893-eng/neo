@@ -73,7 +73,22 @@ export type GateName =
   | "CHASE-PRICE" // v9.3 anti-late-entry — entry price ran too far past the detection reference
   | "DISLOCATION" // v10.15 cross-exchange venue-dislocation gate — rolling-5-scan median ≥ skipBps skips the candidate (SUPERVISOR proposal, operator APPROVE msg 861802422)
   | "DECISIVE" // v10.6 decisive-excursion filter — predicted no-touch deploys skipped pre-entry
-  | "VOL-BARRIER"; // v10.9.2 vol-scaled vertical barrier — slow-touch candidates skipped / TTL solved from projected 1R touch
+  | "VOL-BARRIER" // v10.9.2 vol-scaled vertical barrier — slow-touch candidates skipped / TTL solved from projected 1R touch
+  | "STALE-ANCHOR" // Task 53 — anchor freshness gate at deploy
+  | "DEPEG-MUTE" // Task 53 — stablecoin depeg global circuit breaker (fail-closed)
+  | "STABLE-REGIME" // Task 53 — stablecoin regime gate (SHADOW: journals, never blocks)
+  | "DEGEN-STOP" // 2026-09-24 integrity guard — degenerate stop geometry refused at deploy
+  | "SYMBOL-CAP" // v11.4 same-symbol concentration cap — EQ-92 P2 / EQ-94 mandate (RLC×2 / LUMIA×2 same-symbol SL chains)
+  | "STRAT-PAUSE" // v11.6 EQ-97 — data-driven per-strategy pause gate (review #1 action: AI-SCALP 14d n=284 WR 6.0% net −$39.35)
+  | "QUAD-SHORT" // v11.6 EQ-97 ③-c — SHORT refused in Q2_SQUEEZE BTC-quadrant context (book-edge n=111 net −$28.94/60d)
+  | "REENTRY-LOCKOUT" // v11.7 Task-41 — per-symbol stop-chain guard: AUTO deploy refused N minutes after a net-negative SL close (AGTUSDT storm: 6 deploys/21m/4 SL)
+  | "REARM-BRAKE" // v12.7 SENTINEL-20261020 — same-direction post-stop cooldown 360m/720m: binds auto+RAW-CAL capture+radar (NX-2910→NX-2911 6s relay); only operator-forced passes tagged
+  | "LIQUIDITY-FLOOR" // v11.8 Task-42 — per-symbol deployability floor: volume24h < min or zero real venue quotes (feed-integrity; AGT sat at sim with 4 null venues)
+  | "PHANTOM-FEED" // v11.9 Task-43 — corrupted-tape veto: regime jumps in recent PricePoints (XMRUSDT oscillated 118.7↔607.75 ×5; NX-2736/2744 stopped on phantom prints) block auto deploys
+  | "BOTTOM-FADE" // v12.1 Task-48 ③ — SHORT refused when entry sells the bottom X% of the ±30m range into oversold/stretch (NX-2770 RSI 18 / NX-2779 %B −0.01 / NX-2769 %B −0.25)
+  | "V-REVERSAL" // v12.1 Task-48 ④ — SHORT refused while a young violent bounce runs off the local low (NX-2770 bounced +3.71% at entry → +21% pump); LONG mirror shadow-only
+  | "FLOW-GATE" // v12.1 Task-48 ② — optional gate on flow-blind deploys (EngineSetting "flow-gate"; default tag-only — 10d ledger: blind cohort +$204.20/n=553 WR 57.1% OUTPERFORMED sighted +$7.11/n=235)
+  | "ENTRY-LEVER"; // v11.3 late-entry shield — evidence-gated deterministic levers (EXT/FLOW/CAUSE/STALE/SCALP/LEVCAP/MOMENTUM)
 
 export interface GateBlock {
   at: number;

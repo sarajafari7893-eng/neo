@@ -187,7 +187,7 @@ export function isHot(core: OnsetCore): boolean {
   );
 }
 
-function coreToTag(core: OnsetCore): OnsetTag {
+export function coreToTag(core: OnsetCore): OnsetTag {
   const score = onsetScoreOf(core);
   const dir = core.direction === 1 ? "UP" : "DOWN";
   const age = core.minutesSince >= 60 ? `${(core.minutesSince / 60).toFixed(1)}h` : `${core.minutesSince}m`;
@@ -246,6 +246,98 @@ export async function onsetTagFor(symbol: string, candles?: Candle[] | null): Pr
     return tag;
   } catch {
     return null; // contract: telemetry must never break the deploy path
+  }
+}
+
+// ── v11.8 TASK-42: latest-eruption core for the RETEST GATE ─────
+// detectOnset anchors on the FIRST eruption bar of the trailing 24h window
+// (telemetry/reporting semantics — learning cohorts depend on it, do NOT
+// change). On a pump→crash tape the pump anchors the core, the crash destroys
+// its follow-through and isHot() goes false — the storm class (AGTUSDT
+// 2026-10-17: 4 fade-stops into a −16%/100s intra-bar leg) slipped past the
+// retest gate EVEN WHEN ARMED, for three stacked reasons: first-eruption
+// anchoring, closed-bar lag, and the fade-direction exemption. The GATE asks
+// a different question: "is the tape's MOST RECENT impulse leg fresh and
+// unretraced?" — scan BACKWARD from the newest bar (forming bar INCLUDED:
+// an intra-bar crash leg is exactly what the gate must see) for the most
+// recent eruption bar within the hot window. This core feeds ONLY the engine
+// retest gate (onsetGateTagFor) — telemetry, tags, board and learning stay on
+// detectOnset. Never throws.
+export function latestOnsetCore(bars: Candle[], nowMs: number = Date.now()): OnsetCore | null {
+  try {
+    if (!bars || bars.length < ONSET_RULES.minBars) return null;
+    const TRAIL = ONSET_RULES.trailingBars;
+    const window = bars.slice(-TRAIL);
+    if (window.length < TRAIL) return null;
+    const absRets = window.map((b, i) => (i === 0 ? 0 : Math.abs((b.close - window[i - 1]!.close) / window[i - 1]!.close) * 100));
+    const med = median(absRets.slice(1));
+    if (!(med > 0)) return null;
+    const tfMs = ONSET_RULES.tfMinutes * 60_000;
+    const hotCutoff = nowMs - (ONSET_RULES.hotMinutes + ONSET_RULES.tfMinutes) * 60_000;
+    for (let i = window.length - 1; i >= 1; i--) {
+      const b = window[i]!;
+      if (b.openTime < hotCutoff) return null; // walked past the hot window — nothing fresh
+      const ret = ((b.close - window[i - 1]!.close) / window[i - 1]!.close) * 100;
+      if (Math.abs(ret) < ONSET_RULES.eruptionMult * med) continue;
+      // most recent eruption bar (may be the FORMING bar — intra-bar legs are the storm class)
+      const eruptRetPct = ret;
+      const direction: 1 | -1 = eruptRetPct >= 0 ? 1 : -1;
+      const minutesSince = Math.max(0, Math.round((nowMs - b.openTime) / 60_000));
+      const last = window[window.length - 1]!;
+      const rawFt = ((last.close - b.close) / b.close) * 100;
+      const followThroughPct = rawFt * direction;
+      const baseline = bars.slice(0, Math.max(0, bars.length - TRAIL));
+      const idx = bars.indexOf(b);
+      const preBars = bars.slice(Math.max(0, idx - 8), idx);
+      const preRanges = preBars.map((c) => ((c.high - c.low) / c.close) * 100);
+      const baseRanges = baseline.map((c) => ((c.high - c.low) / c.close) * 100);
+      const preRangePct = preRanges.length && baseRanges.length ? percentileRank(baseRanges, median(preRanges)) : 0.5;
+      let preSlope = 0;
+      if (preBars.length >= 2) {
+        const first = preBars[0]!;
+        const lastPre = preBars[preBars.length - 1]!;
+        preSlope = ((lastPre.close - first.close) / first.close) * 100 / (preBars.length - 1);
+      }
+      return { eruptionAt: b.openTime, minutesSince, direction, eruptRetPct, displacementX: Math.abs(eruptRetPct) / med, preRangePct, preSlope, followThroughPct };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+export interface OnsetGateView {
+  tag: OnsetTag; // OnsetTag-shaped view of the LATEST eruption (hot via isHot)
+  core: OnsetCore;
+  bars: Candle[]; // the bar series the core was computed on (engine retrace math)
+}
+
+/**
+ * Onset GATE view for one symbol — same sourcing ladder as onsetTagFor
+ * (engine 15m cache → kline fetch → DB-tick resample) but anchored on the
+ * LATEST eruption (see latestOnsetCore). Never throws; null = no view.
+ */
+export async function onsetGateViewFor(symbol: string, candles?: Candle[] | null): Promise<OnsetGateView | null> {
+  try {
+    let bars: Candle[] | null = null;
+    if (candles && candles.length >= ONSET_RULES.minBars) {
+      bars = candles;
+    } else {
+      try {
+        bars = await fetchFuturesKlines(symbol, "15m", 220);
+      } catch {
+        bars = null;
+      }
+    }
+    if (!bars || bars.length < ONSET_RULES.minBars) {
+      bars = await candlesFromTicks(symbol);
+    }
+    if (!bars) return null;
+    const core = latestOnsetCore(bars);
+    if (!core) return null;
+    return { tag: coreToTag(core), core, bars };
+  } catch {
+    return null;
   }
 }
 

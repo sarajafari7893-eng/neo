@@ -15,8 +15,17 @@ import type { MarketAssetDTO, SignalDTO } from "@/lib/api-types";
  * RiskDesk — portfolio heat engine:
  * ① semicircular HEAT gauge (account risk = Σ stop-out risk / equity, blended
  *    with stop-proximity of live positions) and ② a per-position risk table
- *    sorted hottest-first. Pure client-side math over the pulse snapshot —
- *    identical formulas to the resolution engine (pnl% = move × lev × 100).
+ *    sorted hottest-first. Pure client-side math over the pulse snapshot.
+ * v12.0.1 TASK-46 (operator bug report: «UNREALIZED با مجموع PNL/PRICE در
+ *    Position risk // live اختلاف دارد»): the row PNL% used to RECOMPUTE the
+ *    legacy full-margin formula client-side (move × leverage × 100) — the
+ *    exact overstating formula v12.0 removed from the ACCOUNT bar (banked
+ *    tranches re-priced at today's mark + sim rows included). The row now
+ *    reads the ENGINE's own stored mark (s.pnlPercent — tranche-aware,
+ *    fee-NET, written every tick; identical source as the position cards and
+ *    the close-all breaker), and the footer carries a bankable Σ OPEN NET
+ *    that reconciles 1:1 with ACCOUNT UNREALIZED (sim-held rows excluded +
+ *    tagged so the gap is never a mystery again).
  */
 
 const OPEN_STATUSES = new Set(["ACTIVE", "TP1", "TP2"]);
@@ -30,10 +39,13 @@ interface PositionRisk {
   riskUsd: number; // loss if stopped from current leverage
   proximity: number; // 0 at entry → 1 at SL
   heat: number; // 0..100 blended
+  netUsd: number; // v12.0.1 — margin × pnlPercent/100 (fee-NET, engine mark)
+  unsafe: boolean; // v12.0.1 — settlement-unsafe feed (sim/stale) — excluded from the bankable sum
 }
 
 function buildRisks(signals: SignalDTO[], market: MarketAssetDTO[]): PositionRisk[] {
   const priceMap = new Map(market.map((m) => [m.symbol, m.price]));
+  const safeMap = new Map(market.map((m) => [m.symbol, m.source === "live"]));
   const rows: PositionRisk[] = [];
 
   for (const s of signals) {
@@ -41,9 +53,10 @@ function buildRisks(signals: SignalDTO[], market: MarketAssetDTO[]): PositionRis
     const price = priceMap.get(s.symbol);
     if (!price) continue;
 
-    const dirMult = s.direction === "LONG" ? 1 : -1;
-    const move = ((price - s.entryPrice) / s.entryPrice) * dirMult;
-    const pnlPct = move * s.leverage * 100;
+    // v12.0.1 — the row PNL% IS the engine's stored tranche-aware fee-NET mark
+    // (single source of truth with the ACCOUNT bar / cards / close-all). The
+    // old client-side move×lev×100 double-printed banked rungs at today's price.
+    const pnlPct = s.pnlPercent;
 
     const slDistPct = (Math.abs(s.entryPrice - s.stopLoss) / s.entryPrice) * 100;
     const distToSlPct = (Math.abs(price - s.stopLoss) / price) * 100;
@@ -56,7 +69,7 @@ function buildRisks(signals: SignalDTO[], market: MarketAssetDTO[]): PositionRis
     // position heat: closer to stop = hotter, leverage-sized
     const heat = Math.min(100, proximity * 72 + Math.min(28, (s.leverage / 30) * 28));
 
-    rows.push({ signal: s, price, pnlPct, slDistPct, distToSlPct, riskUsd, proximity, heat });
+    rows.push({ signal: s, price, pnlPct, slDistPct, distToSlPct, riskUsd, proximity, heat, netUsd: (s.marginUsd * s.pnlPercent) / 100, unsafe: safeMap.get(s.symbol) === false });
   }
 
   return rows.sort((a, b) => b.heat - a.heat);
@@ -257,7 +270,17 @@ function RiskRow({ r, delay, coolColor }: { r: PositionRisk; delay: number; cool
             aria-hidden
           />
           <div className="min-w-0">
-            <div className="truncate font-terminal text-[11px] font-bold tracking-[0.1em] text-ink">{r.signal.symbol}</div>
+            <div className="flex items-center gap-1.5">
+              <span className="truncate font-terminal text-[11px] font-bold tracking-[0.1em] text-ink">{r.signal.symbol}</span>
+              {r.unsafe && (
+                <span
+                  className="shrink-0 rounded-sm border border-amber-neon/40 px-1 font-terminal text-[7px] font-bold tracking-[0.14em] text-amber-neon"
+                  title="settlement-unsafe feed (sim/stale) — this row is EXCLUDED from the bankable ACCOUNT UNREALIZED sum"
+                >
+                  SIM
+                </span>
+              )}
+            </div>
             <div className="flex items-center gap-1.5">
               <span className={cn("font-terminal text-[9px] font-bold tracking-[0.14em]", r.signal.direction === "LONG" ? "text-neon" : "text-magenta-neon")}>
                 {r.signal.direction}
@@ -267,12 +290,12 @@ function RiskRow({ r, delay, coolColor }: { r: PositionRisk; delay: number; cool
           </div>
         </div>
 
-        {/* live pnl */}
+        {/* live pnl — v12.0.1: engine tranche-aware fee-NET mark + USD (reconciles with ACCOUNT) */}
         <div className="flex-1 text-right">
           <div className={cn("font-terminal text-[11px] font-bold tabular-nums", win ? "text-neon" : "text-danger-neon")}>
             {win ? "+" : ""}{r.pnlPct.toFixed(1)}%
           </div>
-          <div className="font-terminal text-[9px] tabular-nums text-ink-3">{fmtPrice(r.price)}</div>
+          <div className="font-terminal text-[9px] tabular-nums text-ink-3">{fmtPrice(r.price)} · {r.netUsd >= 0 ? "+" : ""}{r.netUsd.toFixed(2)}$</div>
         </div>
 
         {/* distance to stop */}
@@ -345,6 +368,10 @@ export function RiskDesk() {
 
   const equity = data.stats.account.equity || 1;
   const totalRiskUsd = risks.reduce((a, r) => a + r.riskUsd, 0);
+  // v12.0.1 — the bankable open book: safe rows only, engine marks — the SAME
+  // number ACCOUNT UNREALIZED shows (within one engine tick of write lag).
+  const bankableUsd = risks.filter((r) => !r.unsafe).reduce((a, r) => a + r.netUsd, 0);
+  const unsafeN = risks.filter((r) => r.unsafe).length;
   const riskPctOfEquity = (totalRiskUsd / equity) * 100;
   const avgProx = risks.length ? risks.reduce((a, r) => a + r.proximity, 0) / risks.length : 0;
   const heat = Math.min(100, Math.min(1, riskPctOfEquity / 25) * 70 + avgProx * 30);
@@ -479,7 +506,9 @@ export function RiskDesk() {
 
         <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-white/6 pt-2.5 font-terminal text-[9px] tracking-[0.12em] text-ink-3">
           <span>Σ STAKE {fmtUsd(totalRiskUsd, false)} · {riskPctOfEquity.toFixed(1)}% OF EQUITY</span>
-          <span>ASSUMES FULL STOP-OUT · LEVERAGE INCLUDED</span>
+          <span className="text-ink-2">
+            Σ OPEN NET {bankableUsd >= 0 ? "+" : ""}{fmtUsd(bankableUsd)} ≡ ACCOUNT UNREALIZED{unsafeN > 0 ? ` · ${unsafeN} SIM-HELD EXCLUDED` : ""}
+          </span>
         </div>
       </BentoCard>
     </div>

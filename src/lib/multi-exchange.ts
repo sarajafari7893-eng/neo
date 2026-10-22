@@ -12,6 +12,7 @@
 
 import { getFeedStatus } from "./market-feed";
 import { gateFetch } from "./fapi-gate";
+import { HL_KEY_ALLOWLIST } from "./hl-allowlist";
 
 const TIMEOUT_MS = 6500;
 
@@ -20,6 +21,8 @@ export interface VenueQuote {
   price: number | null;
   latencyMs: number | null;
   ok: boolean;
+  /** v10.30 PHANTOM-FEED-0930: set when robustMedian rejected this quote as an outlier. */
+  rejected?: string;
 }
 
 export interface Consensus {
@@ -29,6 +32,8 @@ export interface Consensus {
   maxDevBps: number;
   venuesOk: number;
   sweptAt: number;
+  /** v10.30: true when at least one outlier quote was rejected (or trust was refused). */
+  degraded?: boolean;
 }
 
 async function fetchWithTimeout(url: string, init?: RequestInit): Promise<Response> {
@@ -70,19 +75,96 @@ async function bybitBatch(symbols: string[]): Promise<Map<string, number>> {
   return out;
 }
 
-async function hyperliquidAll(): Promise<Map<string, number>> {
+async function hyperliquidAll(symbols: string[]): Promise<Map<string, number>> {
   const out = new Map<string, number>();
+  if (Date.now() < hlCooldownUntil) return out; // 429 backoff — stay silent, retry after cooldown
   const res = await fetchWithTimeout("https://api.hyperliquid.xyz/info", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ type: "allMids" }) });
+  if (res.status === 429) {
+    hlCooldownUntil = Date.now() + 120_000;
+    if (!hlCooldownJournaled) {
+      hlCooldownJournaled = true;
+      console.log("[multi-exchange] HYPERLIQUID 429 — leg paused 2min (backoff, Task 49)");
+      setTimeout(() => {
+        hlCooldownJournaled = false;
+      }, 120_000);
+    }
+    return out;
+  }
   if (!res.ok) return out;
   const json = (await res.json()) as Record<string, string>;
-  for (const [k, v] of Object.entries(json)) out.set(`${k}USDT`, Number(v));
+  // v11.1 TASK-56 HL-ALLOWLIST (operator: «نگاشت کلید Hyperliquid به allowlist
+  // محدود شود»): the old map-every-key `${k}USDT` loop let same-ticker-
+  // different-asset HL tokens (HL "ARK"=0.1067 vs Binance ARKUSDT) impersonate
+  // traded symbols — the PHANTOM-FEED-0930 root. Only keys vetted by
+  // scripts/hl-vet.ts (plain ticker + exists on Binance fapi + price within
+  // 3% of the real perp) are mapped; unvetted/colliding keys are dropped and
+  // journaled once per process so new collisions stay visible, not silent.
+  const want = new Set(symbols);
+  for (const [k, v] of Object.entries(json)) {
+    const sym = `${k}USDT`;
+    if (!want.has(sym)) continue;
+    if (!HL_KEY_ALLOWLIST.has(k)) {
+      if (!hlBlockedJournaled.has(k)) {
+        hlBlockedJournaled.add(k);
+        console.log(`[multi-exchange] HL key "${k}" in allMids but NOT allowlisted (unvetted/colliding ticker) — quote dropped at root (Task 56)`);
+      }
+      continue;
+    }
+    const p = Number(v);
+    if (Number.isFinite(p) && p > 0) out.set(sym, p);
+  }
   return out;
 }
+
+const hlBlockedJournaled = new Set<string>(); // Task 56: one journal line per blocked key per process
+
+// v12.1 TASK-49 — HL 429 cooldown: the venue 429s under pool-wide throttling;
+// re-poking every 15s sweep extends it. On 429 the HL leg goes silent for
+// 2min (quotes degrade to "no quote" — the robust median handles that) and
+// a single journal line marks the pause instead of silent dark bars.
+let hlCooldownUntil = 0;
+let hlCooldownJournaled = false;
 
 function median(values: number[]): number {
   const sorted = [...values].sort((a, b) => a - b);
   const mid = Math.floor(sorted.length / 2);
   return sorted.length % 2 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2;
+}
+
+// ── v10.30 PHANTOM-FEED-0930 — robust median + outlier refusal ─────────────
+// Root cause (NX-0884/0887 phantom full-TP): OKX QNT-USDT-SWAP quotes ~49.2
+// with a FRESH timestamp while Binance/Bybit agree at ~298. With one healthy
+// venue temporarily absent, the plain median of [49.2, 298] = 173.6 — a price
+// that exists on NO exchange — flowed into PricePoint and the settlement
+// engine, instantly "full-TP"ing shorts anchored at the real ~290. A frozen
+// timestamp filter can NOT catch this (OKX ts is live); the guard must be
+// statistical.
+//
+// Rule: the median is trusted only while every quote is within 8% of it.
+// Otherwise: if a CLEAR MAJORITY exists (strictly fewer deviants than
+// agreements) reject the minority quotes and recompute; if two or more
+// disagreeing clusters remain (no majority), return null — the engine then
+// falls back to the real Binance fapi ticker instead of inventing a midpoint
+// that no market ever printed.
+const ROBUST_DEV_PCT = 8;
+
+export function robustMedian(quotes: VenueQuote[]): { median: number | null; degraded: boolean } {
+  const priced = quotes.filter((q): q is VenueQuote & { price: number } => typeof q.price === "number" && q.price > 0);
+  if (priced.length === 0) return { median: null, degraded: false };
+  if (priced.length === 1) return { median: priced[0]!.price, degraded: false };
+  const deviates = (p: number, ref: number) => (Math.abs(p - ref) / ref) * 100 > ROBUST_DEV_PCT;
+  let mdn = median(priced.map((q) => q.price));
+  const deviants = priced.filter((q) => deviates(q.price, mdn));
+  if (deviants.length === 0) return { median: mdn, degraded: false };
+  if (deviants.length * 2 < priced.length) {
+    // clear majority — reject the minority outliers and take the majority median
+    for (const q of deviants) q.rejected = `outlier >${ROBUST_DEV_PCT}% vs majority median`;
+    const kept = priced.filter((q) => !q.rejected);
+    mdn = median(kept.map((q) => q.price));
+    return { median: mdn, degraded: true };
+  }
+  // no majority (two clusters of comparable size) — refuse to invent a midpoint
+  return { median: null, degraded: true };
 }
 
 // v10.16 (a) REAL Binance futures quote — batch /fapi/v1/ticker/24hr once per
@@ -131,7 +213,7 @@ export async function sweepConsensus(symbols: string[]): Promise<Map<string, Con
   if (inFlight) return inFlight;
 
   inFlight = (async () => {
-    const [binance, okx, bybit, hl] = await Promise.allSettled([binanceFuturesBatch(symbols), okxBatch(symbols), bybitBatch(symbols), hyperliquidAll()]);
+    const [binance, okx, bybit, hl] = await Promise.allSettled([binanceFuturesBatch(symbols), okxBatch(symbols), bybitBatch(symbols), hyperliquidAll(symbols)]);
     const binanceMap = binance.status === "fulfilled" ? binance.value : new Map<string, number>();
     const okxMap = okx.status === "fulfilled" ? okx.value : new Map<string, number>();
     const bybitMap = bybit.status === "fulfilled" ? bybit.value : new Map<string, number>();
@@ -153,9 +235,11 @@ export async function sweepConsensus(symbols: string[]): Promise<Map<string, Con
         { venue: "HYPERLIQUID", price: hlMap.get(sym) ?? null, latencyMs: null, ok: hlMap.has(sym) },
       ];
       const prices = quotes.map((q) => q.price).filter((p): p is number => typeof p === "number" && p > 0);
-      const mdn = prices.length >= 2 ? median(prices) : (prices[0] ?? null);
+      // v10.30: robust median — rejects outlier venues, refuses impossible midpoints
+      const rm = robustMedian(quotes);
+      const mdn = rm.median;
       const maxDevBps = mdn && prices.length >= 2 ? Math.max(...prices.map((p) => (Math.abs(p - mdn) / mdn) * 10_000)) : 0;
-      out.set(sym, { symbol: sym, median: mdn, quotes, maxDevBps: Number(maxDevBps.toFixed(2)), venuesOk: prices.length, sweptAt: now });
+      out.set(sym, { symbol: sym, median: mdn, quotes, maxDevBps: Number(maxDevBps.toFixed(2)), venuesOk: prices.length, sweptAt: now, degraded: rm.degraded });
     }
     cache = { at: Date.now(), data: out };
     return out;

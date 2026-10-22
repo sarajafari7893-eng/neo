@@ -11,6 +11,7 @@ import { engineFlags } from "@/lib/engine-flags"; // v10.18 phased-consolidation
 import { ensureP0Watchdog } from "@/lib/watchdog-arm";
 import { ensureBridgeLoopAlive } from "@/lib/telegram-bridge";
 import { getPumpEngineStatus } from "@/lib/pump-dump"; // v9.0 PUMP/DUMP RADAR
+import { getGoldenLaneStatus, maybeApplyExtension, maybeRunGoldenLaneAdjudication } from "@/lib/golden-lane"; // Task 79 golden-formula paper lanes; v11.6 EQ-97 window-end adjudication
 import { maybeEnsureEnv } from "@/lib/env-guard"; // 2026-09-21 incident class: self-healing .env
 import { maybeRunScheduledReports } from "@/lib/daily-scheduler"; // self-driving Tehran-day reports
 import type { PulseSnapshot } from "@/lib/api-types";
@@ -132,6 +133,7 @@ export async function GET() {
         regimes: getRegimeSummary(),
         universe: scanDomain,
         pump: await getPumpEngineStatus().catch(() => null), // v9.0 — radar gate + tracks (15s memo inside)
+        goldenLane: (maybeApplyExtension(), void maybeRunGoldenLaneAdjudication().catch(() => undefined), await getGoldenLaneStatus().catch(() => null)), // Task 79 — pre-registered lanes; extension policy + v11.6 EQ-97 window-end adjudication at window close
       },
     };
 

@@ -17,6 +17,19 @@
 //   In veto mode a fresh VETO verdict blocks the deploy (fail-open: stale or
 //   missing verdict → deploy proceeds) and the blocked trade is paper-tracked
 //   so revocation pressure stays measurable.
+//   Phase 1.5 (THIS, operator mandate 2026-10-04 «چرا فیلتر عملکردی اثبات‌شده‌ای
+//   براش نمی‌زاری؟ چرا بازوها را سالم و کامل تغذیه نمی‌کنی؟»): PATTERN-VETO —
+//   the GLOBAL promotion gate is deadlocked on whole-cohort evidence (the AI
+//   core is roughly break-even on the fence as a whole), but the core may still
+//   carry REAL veto value on SPECIFIC sub-populations. PATTERN-VETO grants
+//   scoped veto authority per (strategy|direction) cell ONLY when that cell's
+//   settled evidence PROVES the edge: n≥8 per side + 15pp WR separation +
+//   Wilson-UB95(veto) < WR(keep) + negative would-veto net. In shadow mode a
+//   fresh MODEL VETO verdict on a PROVEN pattern blocks the deploy (fail-open,
+//   paper-tracked) — and every block feeds the paper-veto arm, which was
+//   STRUCTURALLY starved (0/30) because it can only fill from veto-mode blocks.
+//   This is the performance-proven filter the operator ordered: authority
+//   flows from the ledger, per cell, revocable by evidence moving the other way.
 //
 // Division of labour: gate-journal.ts = capture · verdict.ts = learning ·
 // THIS module = the adjudicator + outcome closure + A/B evidence. Zero SQLite
@@ -41,6 +54,8 @@
 //       verdict-only, revocable, paper-tracked).
 
 import { appendFile, mkdir, open, readFile, rename, stat, writeFile } from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import { createInterface } from "node:readline";
 import { seqStopEvaluate, type SeqStopResult } from "./seq-stop"; // v10.11 SEQ-STOP (operator APPROVE 2026-09-17)
 import path from "node:path";
 import { db } from "@/lib/db";
@@ -66,6 +81,7 @@ export interface ShadowVetoConfig {
   cacheTtlMs: number; // deploy-time veto lookup freshness
   paperMarginUsd: number; // hypothetical margin for paper trades
   autoPromote: boolean; // v9.3 — flip to mode=veto automatically when promotionEvidence reports READY (operator mandate ج)
+  patternVeto: boolean; // v11.0 PATTERN-VETO — scoped veto authority on PROVEN (strategy|direction) cells while still in shadow mode; also the only path that feeds the structurally-starved paper-veto arm in shadow mode
   observeCapture: boolean; // v10.6 (operator mandate 2026-09-15 «پرشدن بازوهای shadow-veto را سرعت و بهبود ببخش»):
   // RAW-CAL capture deploys run with ALL quality gates bypassed — including the
   // deploy-time adjudication — so 100+ capture issues produced ZERO pass-side
@@ -140,6 +156,22 @@ export interface PaperTrade {
 // ── storage (mirrors gate-journal: rings + JSONL, zero SQLite) ──
 
 const VERDICT_CAP = 600;
+// TASK-40 (operator bug report 2026-09-27: «بازوها پر میشوند ولی مجدد داده ها از
+// دست میرود»): PAPER_CAP=60 served TWO 30-settled windows (paper-keep REJECT/
+// TRADE + paper-veto PASS/VETO) plus open inventory — any new paper evicted
+// settled evidence the arms still needed. 160 lets both full windows coexist
+// with open counterfactuals; ring objects are tiny, cost is negligible.
+const PAPER_CAP = 160;
+// TASK-40 CORE FIX — replay-phase trim suppression. Forensic replay of
+// .data/shadow-veto.jsonl reproduced the operator's arms collapse EXACTLY
+// (RK 20→2, RV 9→1 after restarts): hydrate() ingested oldest→newest while
+// trimVerdicts/trimPapers ran on EVERY ingest — the settled records the
+// rolling-30 arms need were cannibalized mid-replay, and the later "o" delta
+// records then orphaned (their base verdict was already evicted). Evidence:
+// with trim active the exact module replay yields RK=1/RV=4 (== live), with
+// trim deferred RK=30/RV=17. Trims are suppressed until the FULL journal
+// replay completes, then run ONCE. Steady-state (post-boot) trims unchanged.
+let replayTrimSuppressed = true;
 // v10.7 ARM-EPOCH HYGIENE (operator-approved 2026-09-16 «تایید کامل و مهندسی
 // ARM-EPOCH HYGIENE» — SUPERVISOR proposal, web-search-validated min-sample
 // guardrail + regime-tagging practice). The A/B arms are REGIME evidence: a
@@ -167,7 +199,6 @@ const VERDICT_CAP = 600;
 // fixed rolling windows when regime change makes stale evidence obsolete.
 export const ARM_EPOCH = "E-20260915"; // opened at the v10.6 observeCapture regime
 const ROLLING_WINDOW = 30; // v10.10 — per-arm evidence window (most-recent settled)
-const PAPER_CAP = 60;
 const DATA_DIR = path.join(process.cwd(), ".data");
 const FILE = path.join(DATA_DIR, "shadow-veto.jsonl");
 const FILE_MAX_BYTES = 6 * 1024 * 1024;
@@ -184,6 +215,74 @@ let seq = 0;
 // collapse gates so rings stay honest no matter how many instances write.
 const seenIds = new Set<string>();
 const INGEST_COLLAPSE_MS = 10 * 60_000; // same candidate adjudicated twice within 10min = cross-instance duplicate
+
+// ── TASK-40 SETTLED-EVIDENCE ARCHIVE (2026-09-27) — journal-backed arm math ──
+// ROOT CAUSE of the operator bug «بازوها پر میشوند ولی مجدد داده‌ها از دست
+// میرود و کاهش پیدا می‌کند»: the VERDICT_CAP ring evicts RESOLVED records
+// FIRST during full-journal ingestion (trimVerdicts doctrine: "a SETTLED
+// record can always be re-derived from the rotated journal") — but NOTHING
+// ever re-derived them. The arm aggregates were computed over the live ring,
+// so every boot the settled PASS cohort was ingested and immediately evicted,
+// and the arms starved (observed live: real-keep 30→2, real-veto 30→1 after
+// the 09-25..09-27 restart waves; ring showed 41 PASS vs 559 REJECT because
+// settled PASS rows are exactly what trim removes).
+// FIX: every verdict/paper and every outcome record ALSO feeds this compact
+// archive (id → classification + outcome). It mirrors EXACTLY what the
+// journal holds (bounded by the 6MB rotation cap), survives ring eviction,
+// and the arm math reads it instead of the working-set rings. ~2k entries ×
+// ~150B — negligible memory. Monotonic semantics: entries only ever gain an
+// outcome, never lose one.
+interface SettledArchiveEntry {
+  kind: "real" | "paper";
+  // real verdict classification
+  side?: string;
+  verdict?: string;
+  // paper classification
+  originSide?: string;
+  originVerdict?: string;
+  // v11.0 PATTERN-VETO dimensions (additive; legacy rows without them are
+  // pattern-inert but keep voting in the global arms — zero contamination)
+  strategy?: string | null;
+  direction?: string | null;
+  epoch: string | null;
+  capture: boolean;
+  outcome: ShadowOutcome | null;
+}
+const settledArchive = new Map<string, SettledArchiveEntry>();
+
+function archiveVerdict(v: ShadowVerdict, merge = false): void {
+  let e = settledArchive.get(v.id);
+  if (!e) {
+    if (merge) return;
+    e = { kind: "real", side: v.side, verdict: v.verdict, strategy: v.strategy ?? null, direction: v.direction ?? null, epoch: v.epoch ?? null, capture: isCaptureOrigin(v), outcome: v.outcome ?? null };
+    settledArchive.set(v.id, e);
+  }
+  if (!e.outcome && v.outcome) e.outcome = v.outcome;
+  // v11.0 — upgrade records also backfill the pattern dimensions
+  if (!e.strategy && v.strategy) e.strategy = v.strategy;
+  if (!e.direction && v.direction) e.direction = v.direction;
+}
+
+function archivePaper(p: PaperTrade): void {
+  const e = settledArchive.get(p.id);
+  if (e) {
+    if (!e.outcome && p.outcome) e.outcome = p.outcome;
+    return;
+  }
+  settledArchive.set(p.id, { kind: "paper", originSide: p.originSide, originVerdict: p.originVerdict, strategy: p.strategy ?? null, direction: p.direction ?? null, epoch: p.epoch ?? null, capture: false, outcome: p.outcome ?? null });
+}
+
+/** Rolling-30 settled arm rows FROM THE ARCHIVE — classification at ingest
+ * time, outcomes merged from v/o (real) and p/pc (paper) records. */
+function archiveArm(rows: SettledArchiveEntry[]): { n: number; wins: number; netUsd: number } {
+  const settled = rows.filter((e) => e.outcome);
+  settled.sort((a, b) => (b.outcome!.closedAt || 0) - (a.outcome!.closedAt || 0));
+  return armOf(settled.slice(0, ROLLING_WINDOW).map((e) => ({ pnlPercent: e.outcome!.pnlPercent, pnlUsd: e.outcome!.pnlUsd, win: e.outcome!.win })));
+}
+
+function archivePaperRows(): SettledArchiveEntry[] {
+  return [...settledArchive.values()].filter((e) => e.kind === "paper" && e.epoch);
+}
 
 function maxIdSeq(list: Array<{ id: string }>): number {
   let max = 0;
@@ -210,6 +309,7 @@ function ingestVerdict(v: ShadowVerdict): boolean {
       if (!ex.outcome && v.outcome) ex.outcome = v.outcome;
       if (ex.sweptAt === undefined && v.sweptAt !== undefined) ex.sweptAt = v.sweptAt;
     }
+    archiveVerdict(v, true); // TASK-40: upgrade records also update the archive
     return false;
   }
   v.audit = v.audit ?? null; // normalize legacy records
@@ -224,6 +324,7 @@ function ingestVerdict(v: ShadowVerdict): boolean {
   }
   seenIds.add(v.id);
   verdicts.push(v);
+  archiveVerdict(v); // TASK-40: every ingested verdict is archived (trim-proof)
   trimVerdicts(); // Task 34-2: evidence-safety eviction (was: blind oldest-first splice)
   return true;
 }
@@ -240,6 +341,7 @@ function ingestVerdict(v: ShadowVerdict): boolean {
  * Resolved = outcome closed, OR unlinked-forever (orphan-swept with no serial).
  */
 function trimVerdicts(): void {
+  if (replayTrimSuppressed) return; // TASK-40: no mid-replay eviction — see flag doc
   if (verdicts.length <= VERDICT_CAP) return;
   let overflow = verdicts.length - VERDICT_CAP;
   for (let i = 0; i < verdicts.length && overflow > 0; ) {
@@ -255,9 +357,13 @@ function trimVerdicts(): void {
 
 function ingestPaper(p: PaperTrade): boolean {
   if (!p || typeof p.id !== "string") return false;
-  if (seenIds.has(p.id)) return false;
+  if (seenIds.has(p.id)) {
+    archivePaper(p); // TASK-40: re-persisted paper may carry an inline outcome upgrade
+    return false;
+  }
   seenIds.add(p.id);
   papers.push(p);
+  archivePaper(p);
   trimPapers();
   return true;
 }
@@ -267,6 +373,7 @@ function ingestPaper(p: PaperTrade): boolean {
  * A settled record can always be re-derived from the rotated journal, but a
  * live counterfactual evicted mid-flight is lost evidence forever. */
 function trimPapers(): void {
+  if (replayTrimSuppressed) return; // TASK-40: no mid-replay eviction — see flag doc
   if (papers.length <= PAPER_CAP) return;
   let overflow = papers.length - PAPER_CAP;
   for (let i = 0; i < papers.length && overflow > 0; ) {
@@ -299,6 +406,7 @@ const DEFAULT_CONFIG: ShadowVetoConfig = {
   paperMarginUsd: 5,
   autoPromote: true, // v9.3 — arms fill → real veto activates itself, no operator flip needed
   observeCapture: true, // v10.6 — capture deploys adjudicated observe-only so REAL arms fill
+  patternVeto: true, // v11.0 — proven-pattern scoped veto active in shadow mode (operator mandate 2026-10-04)
 };
 
 const CONFIG_KEY = "shadowveto.config";
@@ -309,56 +417,86 @@ async function hydrate(): Promise<void> {
   if (hydrating) return hydrating;
   hydrating = (async () => {
     try {
-      const buf = await readFile(FILE, "utf8").catch(() => "");
-      if (buf) {
-        const lines = buf.split("\n").filter(Boolean);
-        for (const line of lines.slice(-3000)) {
-          try {
-            const rec = JSON.parse(line) as { k: string; v: unknown };
-            if (rec.k === "v") ingestVerdict(rec.v as ShadowVerdict);
-            else if (rec.k === "p") ingestPaper(rec.v as PaperTrade);
-            else if (rec.k === "o") applyOutcomeRecord(rec.v as { id: string; outcome: ShadowOutcome });
-            else if (rec.k === "pc") applyPaperClose(rec.v as { id: string; status: PaperTrade["status"]; reachedTp: number; pnlPercent: number; pnlUsd: number; stop: number; outcome: ShadowOutcome; closeNote: string });
-          } catch {
-            /* torn line */
-          }
-        }
-        // v8.2.1 — seq MUST derive from the MAX id on disk (length-derived seq
-        // reused ids when two module instances wrote with independent counters)
-        seq = Math.max(maxIdSeq(verdicts), maxIdSeq(papers));
+    // TASK-40 (2026-09-27, operator bug «بازوها پر میشوند ولی مجدد داده‌ها از
+    // دست میرود و کاهش پیدا می‌کند»): hydrate previously ingested ONLY the last
+    // 3000 journal lines. With the live journal at ~5.1k lines, every restart
+    // dropped the older verdicts — and crucially the OUTCOME records ("o"/"pc")
+    // whose base record had scrolled out of the window — so the REAL arms
+    // collapsed after each boot (observed live: real-keep 30→2, real-veto
+    // 30→1 after the 09-25..09-27 restart waves; offline replay of the FULL
+    // journal proves both arms hold a complete rolling-30 cohort). The journal
+    // is rotation-capped at 6MB, so FULL ingestion is bounded; the .old
+    // rotation ring (when present) is ingested FIRST so upgrade-merge
+    // (ingestVerdict) and outcome application (applyOutcomeRecord /
+    // applyPaperClose) see correct oldest→newest chronology.
+    // MEMORY (Task-39 lesson): the first cut did one readFile + one giant
+    // split — a multi-MB transient spike exactly during the boot+compile
+    // window, which pushed the 09:46 boot over the edge into a kernel
+    // OOM-kill. Ingestion is now STREAMED line-by-line (64KB readahead):
+    // peak memory = one journal line, event loop yields naturally between
+    // stream chunks, and evidence completeness is unchanged.
+    const ingestJournalLine = (line: string): void => {
+      if (!line) return;
+      try {
+        const rec = JSON.parse(line) as { k: string; v: unknown };
+        if (rec.k === "v") ingestVerdict(rec.v as ShadowVerdict);
+        else if (rec.k === "p") ingestPaper(rec.v as PaperTrade);
+        else if (rec.k === "o") applyOutcomeRecord(rec.v as { id: string; outcome: ShadowOutcome });
+        else if (rec.k === "pc") applyPaperClose(rec.v as { id: string; status: PaperTrade["status"]; reachedTp: number; pnlPercent: number; pnlUsd: number; stop: number; outcome: ShadowOutcome; closeNote: string });
+      } catch {
+        /* torn line */
       }
-      const st = await stat(FILE).catch(() => null);
-      persisted = st?.size ?? 0;
-      readPos = st?.size ?? 0;
-      hydratedAt = Date.now();
-      // dedup continuity across instance swaps — a fresh instance must not
-      // instantly re-adjudicate what another instance just adjudicated
-      for (const v of verdicts) {
-        const key = `${v.symbol}|${v.direction}`;
-        const prev = lastAdjAt.get(key) ?? 0;
-        if (v.at > prev) lastAdjAt.set(key, v.at);
+    };
+    const ingestJournalStreamed = async (filePath: string): Promise<void> => {
+      try {
+        const rl = createInterface({ input: createReadStream(filePath, { encoding: "utf8" }), crlfDelay: Infinity });
+        for await (const line of rl) ingestJournalLine(line);
+      } catch {
+        /* missing ring (no rotation yet) or unreadable — cold for this ring only */
       }
-      if ((st?.size ?? 0) > FILE_MAX_BYTES) {
-        // v10.6.1 persist-guard (operator APPROVE 2026-09-18): rotation is the
-        // destructive rewrite — if a fresher boot just rotated, resync our
-        // counters from disk instead of renaming over its rotation.
-        const { persistGuardOk, persistWatermark, serializePersist } = await import("./persist-guard");
-        await serializePersist("shadow-veto-journal", async () => {
-          if (!(await persistGuardOk("shadow-veto-journal"))) {
-            const fresh = await stat(FILE).catch(() => null);
-            persisted = Math.min(fresh?.size ?? 0, FILE_MAX_BYTES);
-            readPos = fresh?.size ?? 0;
-            return;
-          }
-          await rename(FILE, `${FILE}.old`).catch(() => undefined);
-          await persistWatermark("shadow-veto-journal");
-          persisted = 0;
-          readPos = 0;
-        });
-      }
-    } catch {
-      /* journaling must never break the engine */
+    };
+    await ingestJournalStreamed(`${FILE}.old`); // rotation ring — OLDER records first
+    await ingestJournalStreamed(FILE);
+    if (verdicts.length || papers.length) {
+      // v8.2.1 — seq MUST derive from the MAX id on disk (length-derived seq
+      // reused ids when two module instances wrote with independent counters)
+      seq = Math.max(maxIdSeq(verdicts), maxIdSeq(papers));
     }
+    const st = await stat(FILE).catch(() => null);
+    persisted = st?.size ?? 0;
+    readPos = st?.size ?? 0;
+    hydratedAt = Date.now();
+    // dedup continuity across instance swaps — a fresh instance must not
+    // instantly re-adjudicate what another instance just adjudicated
+    for (const v of verdicts) {
+      const key = `${v.symbol}|${v.direction}`;
+      const prev = lastAdjAt.get(key) ?? 0;
+      if (v.at > prev) lastAdjAt.set(key, v.at);
+    }
+    if ((st?.size ?? 0) > FILE_MAX_BYTES) {
+      // v10.6.1 persist-guard (operator APPROVE 2026-09-18): rotation is the
+      // destructive rewrite — if a fresher boot just rotated, resync our
+      // counters from disk instead of renaming over its rotation.
+      const { persistGuardOk, persistWatermark, serializePersist } = await import("./persist-guard");
+      await serializePersist("shadow-veto-journal", async () => {
+        if (!(await persistGuardOk("shadow-veto-journal"))) {
+          const fresh = await stat(FILE).catch(() => null);
+          persisted = Math.min(fresh?.size ?? 0, FILE_MAX_BYTES);
+          readPos = fresh?.size ?? 0;
+          return;
+        }
+        await rename(FILE, `${FILE}.old`).catch(() => undefined);
+        await persistWatermark("shadow-veto-journal");
+        persisted = 0;
+        readPos = 0;
+      });
+    }
+  } catch (e) {
+    // TASK-40: journaling must never break the engine, but a SILENT hydrate
+    // failure used to leave empty rings that later persists could not repair
+    // (shadow-veto only appends). Make the failure observable in dev.log.
+    console.error("[shadow-veto] hydrate failed (rings cold, journal untouched):", e);
+  }
   })();
   return hydrating;
 }
@@ -464,6 +602,8 @@ export async function shadowVetoRefresh(maxAgeMs = REFRESH_MIN_INTERVAL_MS): Pro
 function applyOutcomeRecord(rec: { id: string; outcome: ShadowOutcome }): void {
   const v = [...verdicts].reverse().find((x) => x.id === rec.id);
   if (v && !v.outcome) v.outcome = rec.outcome;
+  const ae = settledArchive.get(rec.id); // TASK-40: the archive never misses an outcome, even if the base verdict was ring-evicted
+  if (ae && !ae.outcome) ae.outcome = rec.outcome;
 }
 
 function applyPaperClose(rec: { id: string; status: PaperTrade["status"]; reachedTp: number; pnlPercent: number; pnlUsd: number; stop: number; outcome: ShadowOutcome; closeNote: string }): void {
@@ -477,6 +617,8 @@ function applyPaperClose(rec: { id: string; status: PaperTrade["status"]; reache
     p.outcome = rec.outcome;
     p.closeNote = rec.closeNote;
   }
+  const ae = settledArchive.get(rec.id); // TASK-40
+  if (ae && !ae.outcome) ae.outcome = rec.outcome;
 }
 
 // ── config (EngineSetting — the rare-write exception, verdictcore pattern) ──
@@ -498,6 +640,7 @@ export async function getShadowVetoConfig(force = false): Promise<ShadowVetoConf
         paperMarginUsd: Number.isFinite(parsed.paperMarginUsd) ? Math.max(1, Math.min(20, parsed.paperMarginUsd!)) : DEFAULT_CONFIG.paperMarginUsd,
         autoPromote: typeof parsed.autoPromote === "boolean" ? parsed.autoPromote : DEFAULT_CONFIG.autoPromote,
         observeCapture: typeof parsed.observeCapture === "boolean" ? parsed.observeCapture : DEFAULT_CONFIG.observeCapture,
+        patternVeto: typeof parsed.patternVeto === "boolean" ? parsed.patternVeto : DEFAULT_CONFIG.patternVeto,
       };
     } else configCache = { ...DEFAULT_CONFIG };
   } catch {
@@ -531,6 +674,20 @@ export function wilsonLB(wins: number, n: number): number | null {
   const centre = p + (z * z) / (2 * n);
   const spread = z * Math.sqrt((p * (1 - p) + (z * z) / (4 * n)) / n);
   return Math.max(0, ((centre - spread) / denom) * 100);
+}
+
+/** v11.0 — Wilson score UPPER bound at 95%: the OPTIMISTIC reading of a cohort's
+ * win rate. PATTERN-VETO uses it as the strict arm of its proof: even granting
+ * the would-veto cohort every favorable doubt, its ceiling must sit BELOW the
+ * keep cohort's OBSERVED win rate before veto authority flows. */
+export function wilsonUB(wins: number, n: number): number | null {
+  if (n <= 0) return null;
+  const z = 1.96;
+  const p = wins / n;
+  const denom = 1 + (z * z) / n;
+  const centre = p + (z * z) / (2 * n);
+  const spread = z * Math.sqrt((p * (1 - p) + (z * z) / (4 * n)) / n);
+  return Math.min(100, ((centre + spread) / denom) * 100);
 }
 
 // ── budget / dedup state ──────────────────────────────────────
@@ -757,7 +914,15 @@ export async function shadowVetoDeployGate(ctx: DeployGateCtx): Promise<DeployGa
   try {
     const cfg = await getShadowVetoConfig();
     failOpen.mode = cfg.mode;
-    if (cfg.mode !== "veto" || ctx.gap > cfg.windowPass) return failOpen;
+    // v11.0 PATTERN-VETO — in shadow mode the gate wakes up ONLY as the scoped
+    // authority (cfg.patternVeto): same freshness/label discipline as the global
+    // gate, but the block fires only when the candidate's (strategy|direction)
+    // cell is PROVEN by the settled evidence. mode=off or patternVeto=false →
+    // shadow mode stays exactly as dormant at deploy time as before v11.0.
+    if (cfg.mode === "off" || ctx.gap > cfg.windowPass) return failOpen;
+    const globalVeto = cfg.mode === "veto";
+    const patternScoped = !globalVeto && cfg.patternVeto === true;
+    if (!globalVeto && !patternScoped) return failOpen;
     await shadowVetoReady();
     const key = `${ctx.symbol}|${ctx.direction}`;
     const cached = verdictCache.get(key);
@@ -805,6 +970,15 @@ export async function shadowVetoDeployGate(ctx: DeployGateCtx): Promise<DeployGa
       return failOpen;
     }
     if (cached.verdict !== "VETO") return failOpen;
+    // v11.0 PATTERN-VETO — scoped authority check: the candidate's cell must be
+    // PROVEN (n≥8/side · 15pp WR sep · Wilson-UB95(veto) < WR(keep) · net<0) or
+    // the deploy proceeds untouched (fail-open). This is the performance-
+    // proven filter: authority flows from the ledger per cell, not globally.
+    let scoped = false;
+    if (patternScoped) {
+      scoped = provenPatternSet().has(`${cached.strategy}|${cached.direction}`);
+      if (!scoped) return failOpen;
+    }
     // VETO fires — record the block + the counterfactual paper trade
     const geo = await paperGeometry(ctx.symbol, ctx.direction, ctx.strategy, ctx.entryPrice).catch(() => null);
     if (!geo) return failOpen;
@@ -813,7 +987,7 @@ export async function shadowVetoDeployGate(ctx: DeployGateCtx): Promise<DeployGa
     papers.push(paper);
     trimPapers();
     void persist({ k: "p", v: paper });
-    return { veto: true, verdictId: cached.id, reason: `${cached.label} ${cached.confidence}% — ${cached.reason}`, mode: cfg.mode };
+    return { veto: true, verdictId: cached.id, reason: `${scoped ? `PATTERN-VETO [${cached.strategy}|${cached.direction}] ` : ""}${cached.label} ${cached.confidence}% — ${cached.reason}`, mode: cfg.mode };
   } catch {
     return failOpen;
   }
@@ -953,7 +1127,13 @@ export async function closeRealOutcomes(): Promise<number> {
         win: sig.pnlPercent > 0 || sig.reachedTp >= 1,
         closedAt: sig.closedAt?.getTime() ?? Date.now(),
       };
-      void persist({ k: "o", v: { id: v.id, outcome: v.outcome } });
+      // TASK-40: persist the FULL verdict record, not the "o" delta — a
+      // self-contained record survives ring eviction and rotation: on the next
+      // boot its replay re-creates the settled verdict even if the base "v"
+      // fell outside the ingested window (the old "o"-only write orphaned
+      // closures whose base had been evicted → arms starved after restarts).
+      // The "o" handler stays for legacy journal lines.
+      void persist({ k: "v", v });
       closed++;
     }
     return closed;
@@ -1209,10 +1389,14 @@ function lastSettled<T extends { outcome: ShadowOutcome | null }>(rows: T[], k: 
  * v10.16 — fence-origin only (see lastSettled doc): capture-origin verdicts
  * never enter the promotion cohorts. */
 function liveRealArmAggregates(): { keep: { n: number; wins: number; netUsd: number }; veto: { n: number; wins: number; netUsd: number } } {
-  const realPass = verdicts.filter((v) => v.side === "PASS" && v.epoch && v.outcome && !isCaptureOrigin(v));
+  // TASK-40: read from the SETTLED-EVIDENCE ARCHIVE (journal-backed), not the
+  // VERDICT_CAP ring — ring trim evicts settled PASS rows first (by design),
+  // which starved these aggregates after every boot. The archive mirrors the
+  // full journal, so the rolling-30 cohorts are stable across restarts.
+  const realPass = [...settledArchive.values()].filter((e) => e.kind === "real" && e.side === "PASS" && e.epoch && !e.capture);
   return {
-    keep: armOf(lastSettled(realPass.filter((v) => v.verdict === "TRADE"), ROLLING_WINDOW).map((v) => ({ pnlPercent: v.outcome!.pnlPercent, pnlUsd: v.outcome!.pnlUsd, win: v.outcome!.win }))),
-    veto: armOf(lastSettled(realPass.filter((v) => v.verdict === "VETO"), ROLLING_WINDOW).map((v) => ({ pnlPercent: v.outcome!.pnlPercent, pnlUsd: v.outcome!.pnlUsd, win: v.outcome!.win }))),
+    keep: archiveArm(realPass.filter((e) => e.verdict === "TRADE")),
+    veto: archiveArm(realPass.filter((e) => e.verdict === "VETO")),
   };
 }
 
@@ -1226,9 +1410,9 @@ export function shadowArms(): ArmRow[] {
   const frozen = cohortFreeze && cohortFreeze.epoch === ARM_EPOCH ? cohortFreeze : null;
   const realKeep = frozen ? { ...frozen.realKeep } : live.keep;
   const realVeto = frozen ? { ...frozen.realVeto } : live.veto;
-  const paperSettled = papers.filter((p) => p.epoch && p.outcome);
-  const paperKeep = armOf(lastSettled(paperSettled.filter((p) => p.originSide === "REJECT" && p.originVerdict === "TRADE"), ROLLING_WINDOW).map((p) => ({ pnlPercent: p.outcome!.pnlPercent, pnlUsd: p.outcome!.pnlUsd, win: p.outcome!.win })));
-  const paperVeto = armOf(lastSettled(paperSettled.filter((p) => p.originSide === "PASS" && p.originVerdict === "VETO"), ROLLING_WINDOW).map((p) => ({ pnlPercent: p.outcome!.pnlPercent, pnlUsd: p.outcome!.pnlUsd, win: p.outcome!.win })));
+  // TASK-40: paper arms also read the archive — ring trim must never shrink them
+  const paperKeep = archiveArm(archivePaperRows().filter((e) => e.originSide === "REJECT" && e.originVerdict === "TRADE"));
+  const paperVeto = archiveArm(archivePaperRows().filter((e) => e.originSide === "PASS" && e.originVerdict === "VETO"));
   const mk = (id: ArmRow["id"], label: string, a: { n: number; wins: number; netUsd: number }, target: number): Omit<ArmRow, "epoch"> => ({
     id,
     label,
@@ -1249,6 +1433,85 @@ export function shadowArms(): ArmRow[] {
     epoch: ARM_EPOCH,
     ...(frozen && (r.id === "real-keep" || r.id === "real-veto") ? { frozenAt: frozen.frozenAt } : {}),
   }));
+}
+
+// ── v11.0 PATTERN-VETO — the proven-performance filter (operator mandate
+// 2026-10-04 «چرا فیلتر عملکردی اثبات‌شده‌ای براش نمی‌زاری؟») ─────────────
+
+export interface PatternEvidenceRow {
+  pattern: string; // "STRATEGY|DIRECTION"
+  nKeep: number;
+  wrKeep: number | null;
+  netKeep: number;
+  nVeto: number;
+  wrVeto: number | null;
+  netVeto: number;
+  ubVeto: number | null; // Wilson-UB95 of the would-veto cohort
+  proven: boolean;
+  detail: string;
+}
+
+const PATTERN_MIN_N = 8; // per side — below this a cell cannot speak
+const PATTERN_MIN_SEP_PP = 15; // observed WR separation (keep − veto)
+
+/** PATTERN-VETO evidence: per (strategy|direction) cell over the settled
+ * fence-origin REAL pass-side archive. The proof test (ALL must hold):
+ *   · n≥8 on BOTH sides (minimum sample per cell),
+ *   · observed WR separation keep−veto ≥ 15pp,
+ *   · Wilson-UB95(veto) < WR(keep) — even the OPTIMISTIC bound of the
+ *     would-veto cohort cannot reach the keep cohort's observed win rate,
+ *   · would-veto cohort net < 0 (the vetoes must have been losing money).
+ * REAL-only by design: paper rows measure fence REJECTS with base geometry —
+ * a different population; mixing them would contaminate the proof. Legacy
+ * archive rows without pattern dimensions are inert (never vote). */
+export function patternVetoEvidence(): { rows: PatternEvidenceRow[]; proven: string[] } {
+  const cells = new Map<string, { keep: Array<{ win: boolean; usd: number }>; veto: Array<{ win: boolean; usd: number }> }>();
+  for (const e of settledArchive.values()) {
+    if (e.kind !== "real" || e.side !== "PASS" || !e.epoch || e.capture || !e.outcome) continue;
+    if (!e.strategy || !e.direction) continue; // legacy row — pattern-inert
+    const key = `${e.strategy}|${e.direction}`;
+    if (!cells.has(key)) cells.set(key, { keep: [], veto: [] });
+    const cell = cells.get(key)!;
+    const row = { win: e.outcome.win, usd: e.outcome.pnlUsd };
+    if (e.verdict === "TRADE") cell.keep.push(row);
+    else if (e.verdict === "VETO") cell.veto.push(row);
+  }
+  const rows: PatternEvidenceRow[] = [];
+  for (const [pattern, cell] of [...cells.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+    const nK = cell.keep.length;
+    const nV = cell.veto.length;
+    const wK = cell.keep.filter((r) => r.win).length;
+    const wV = cell.veto.filter((r) => r.win).length;
+    const wrK = nK ? (100 * wK) / nK : null;
+    const wrV = nV ? (100 * wV) / nV : null;
+    const netK = Number(cell.keep.reduce((a, r) => a + r.usd, 0).toFixed(2));
+    const netV = Number(cell.veto.reduce((a, r) => a + r.usd, 0).toFixed(2));
+    const ubV = wilsonUB(wV, nV);
+    const okN = nK >= PATTERN_MIN_N && nV >= PATTERN_MIN_N;
+    const okSep = wrK !== null && wrV !== null && wrK - wrV >= PATTERN_MIN_SEP_PP;
+    const okUB = ubV !== null && wrK !== null && ubV < wrK;
+    const okNet = netV < 0;
+    const proven = okN && okSep && okUB && okNet;
+    const f1 = (x: number | null): string => (x === null ? "n/a" : `${x.toFixed(1)}%`);
+    rows.push({
+      pattern,
+      nKeep: nK,
+      wrKeep: wrK === null ? null : Number(wrK.toFixed(1)),
+      netKeep: netK,
+      nVeto: nV,
+      wrVeto: wrV === null ? null : Number(wrV.toFixed(1)),
+      netVeto: netV,
+      ubVeto: ubV === null ? null : Number(ubV.toFixed(1)),
+      proven,
+      detail: `n veto/keep ${nV}/${nK} · wr ${f1(wrV)}/${f1(wrK)} · UB95 ${f1(ubV)} · net $${netV}/$${netK} · ${okN ? "✓n" : "✗n"}${okSep ? " ✓sep" : " ✗sep"}${okUB ? " ✓ub" : " ✗ub"}${okNet ? " ✓net" : " ✗net"}`,
+    });
+  }
+  return { rows, proven: rows.filter((r) => r.proven).map((r) => r.pattern) };
+}
+
+/** Deploy-gate lookup — the exact source the scoped authority consults. */
+function provenPatternSet(): Set<string> {
+  return new Set(patternVetoEvidence().proven);
 }
 
 // ── v10.11 COHORT-FREEZE (SUPERVISOR proposal, operator APPROVE 2026-09-17) ──
@@ -1303,8 +1566,7 @@ export async function syncCohortFreeze(): Promise<CohortFreeze | null> {
     const live = liveRealArmAggregates();
     // revocation unfreeze: frozen evidence + live paper-veto pressure → re-open
     if (cohortFreeze && cohortFreeze.epoch === ARM_EPOCH) {
-      const paperSettled = papers.filter((p) => p.epoch && p.outcome);
-      const pv = armOf(lastSettled(paperSettled.filter((p) => p.originSide === "PASS" && p.originVerdict === "VETO"), ROLLING_WINDOW).map((p) => ({ pnlPercent: p.outcome!.pnlPercent, pnlUsd: p.outcome!.pnlUsd, win: p.outcome!.win })));
+      const pv = archiveArm(archivePaperRows().filter((e) => e.originSide === "PASS" && e.originVerdict === "VETO")); // TASK-40: archive-backed
       const pvLB = wilsonLB(pv.wins, pv.n);
       if (pv.n >= 15 && (pvLB ?? 0) >= 55 && pv.netUsd > 0) {
         await rename(FREEZE_FILE, `${FREEZE_FILE}.revoked-${Date.now()}`).catch(() => undefined);
@@ -1472,6 +1734,7 @@ export async function getShadowVetoState(): Promise<{
   armsLive: ArmRow[]; // v10.11 — unfrozen live recompute (monitoring-only while a COHORT-FREEZE exists)
   cohortFreeze: CohortFreeze | null; // v10.11 — decision-grade snapshot pointer
   promotion: PromotionEvidence;
+  patternVeto: { enabled: boolean; proven: string[]; rows: PatternEvidenceRow[] }; // v11.0 — the proven-performance filter's live evidence
   recent: ShadowVerdict[];
   paper: PaperTrade[];
   health: ShadowVetoHealth;
@@ -1487,6 +1750,7 @@ export async function getShadowVetoState(): Promise<{
   const rejectSideVerdicts = verdicts.filter((v) => v.side === "REJECT");
   const gateAgreement = rejectSideVerdicts.filter((v) => v.verdict === "VETO").length;
   const arms = shadowArms();
+  const pv = patternVetoEvidence(); // v11.0 — the proven-performance filter's live evidence
   // v10.11 — unfrozen live view for monitoring (identical to arms when no freeze exists)
   const liveAgg = liveRealArmAggregates();
   const frozen = cohortFreeze && cohortFreeze.epoch === ARM_EPOCH ? cohortFreeze : null;
@@ -1535,6 +1799,7 @@ export async function getShadowVetoState(): Promise<{
     armsLive,
     cohortFreeze: frozen,
     promotion: promotionEvidence(arms),
+    patternVeto: { enabled: cfg.patternVeto === true, proven: pv.proven, rows: pv.rows },
     recent: [...verdicts].sort((a, b) => b.at - a.at).slice(0, 14), // v8.2.1 — time-sorted (ingest order is interleaved across instances)
     paper: [...papers].sort((a, b) => b.at - a.at).slice(0, 10),
     health: {
@@ -1555,6 +1820,7 @@ export async function shadowVetoForCore(maxVerdicts = 6): Promise<{ narrative: s
   await shadowVetoRefresh(0); // grounding consumers always see fresh rings
   const cfg = await getShadowVetoConfig();
   const arms = shadowArms();
+  const pv = patternVetoEvidence();
   const promo = promotionEvidence(arms);
   const frozen = cohortFreeze && cohortFreeze.epoch === ARM_EPOCH ? cohortFreeze : null; // v10.11
   const rej = verdicts.filter((v) => v.side === "REJECT");
@@ -1571,6 +1837,7 @@ export async function shadowVetoForCore(maxVerdicts = 6): Promise<{ narrative: s
     `A/B arms (rolling-30 settled, tag ${ARM_EPOCH}, win-rate / Wilson-LB95 / net): real-keep ${fmtArm(arms[0]!)} · real-veto ${fmtArm(arms[1]!)} · paper-keep ${fmtArm(arms[2]!)} · paper-veto ${fmtArm(arms[3]!)}. Cohorts are regime-aligned rolling-30 (v10.10 REGIME-ALIGNED SHADOW COHORTS) — legacy un-stamped regimes never vote.`,
     `Promotion to veto mode ${promo.ready ? "EVIDENCE-READY" : "not ready"} (${promo.criteria.map((c) => `${c.id}:${c.ok ? "✓" : "✗"}`).join(" ")}). ${promo.revocation.detail}.`,
     `SEQ-STOP (v10.11 always-valid early decision): ${promo.sequential.detail}. COHORT-FREEZE: ${frozen ? `REAL arms FROZEN since ${new Date(frozen.frozenAt).toISOString()} (${frozen.reason}); live recompute is monitoring-only` : "no snapshot — evidence window still open"}.`,
+    `PATTERN-VETO (v11.0 scoped authority in shadow mode): ${pv.proven.length ? `PROVEN cells [${pv.proven.join(", ")}] — fresh MODEL vetoes on these cells BLOCK deploys (paper-tracked)` : "no proven cell yet — the filter stays fail-open until a (strategy|direction) cell proves n≥8/side + 15pp sep + UB95<keep-WR + negative net"}. Per-cell cohorts: ${pv.rows.slice(0, 6).map((r) => `${r.pattern}(${r.detail})`).join(" · ")}.`,
     "DOCTRINE: veto-only, fail-open, revocable, GROUNDED (no veto voice may rest on ungrounded reasoning). Paper arms use base geometry (slAtrMult×ATR stop, base RR) — directional-edge evidence, not PnL replication.",
   ].join(" ");
   return { narrative, verdictFiles };
@@ -1799,6 +2066,7 @@ export async function resetShadowEvidence(): Promise<void> {
   await shadowVetoReady();
   verdicts.length = 0;
   papers.length = 0;
+  settledArchive.clear(); // TASK-40: archive is evidence — reset it with the rings
   verdictCache.clear();
   lastAdjAt.clear();
   callStamps.length = 0;

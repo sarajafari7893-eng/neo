@@ -1,0 +1,32 @@
+# NEXUS//SIGNALS — bare-metal systemd units (SELFHOST-0929, no-docker path)
+#
+# Install (as root, repo cloned to /home/z/my-project — the path the code
+# expects; see deploy/README.md §2 for why):
+#   cp deploy/systemd/*.service /etc/systemd/system/
+#   systemctl daemon-reload
+#   systemctl enable --now nexus-app nexus-minis nexus-guard
+#
+# The sandbox's "platform lineage" (which reaped every process it didn't own)
+# is replaced by systemd supervision: Restart=always is the guardian now.
+
+[Unit]
+Description=NEXUS//SIGNALS — Next.js command terminal (:3000)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/z/my-project
+EnvironmentFile=/home/z/my-project/.env
+Environment=NODE_ENV=production
+ExecStart=/usr/local/bin/bun run start:selfhost
+Restart=always
+RestartSec=10
+# start/reload pacing — Turbopack dev is replaced by a production build here
+TimeoutStartSec=180
+KillSignal=SIGINT
+KillMode=mixed
+MemoryMax=3G
+
+[Install]
+WantedBy=multi-user.target

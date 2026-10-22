@@ -52,11 +52,13 @@ export async function GET() {
 
 export async function POST(req: Request) {
   try {
-    const body = (await req.json().catch(() => ({}))) as { action?: string; reason?: string; by?: string };
+    // EQ-99 — `batch` (optional): fresh-capture size for a POST-graduation
+    // re-arm campaign (clamped 50..2000, default 300 = R6 refresh basis).
+    const body = (await req.json().catch(() => ({}))) as { action?: string; reason?: string; by?: string; batch?: number };
     if (body.action === "arm") {
       // v10.20 — audited attribution: programmatic re-arms (EVID-BUDGET pattern)
       // carry their mandate narrative in `by`; dashboard/API default unchanged.
-      const state = await armRawCal(body.by?.trim().slice(0, 220) || "OPERATOR (dashboard/API)");
+      const state = await armRawCal(body.by?.trim().slice(0, 220) || "OPERATOR (dashboard/API)", body.batch);
       return NextResponse.json({ ok: true, state }, { headers: { "Cache-Control": "no-store" } });
     }
     if (body.action === "disarm") {

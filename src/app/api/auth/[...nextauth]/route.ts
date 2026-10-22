@@ -1,5 +1,6 @@
 import NextAuth, { type NextAuthOptions } from "next-auth";
 import CredentialsProvider from "next-auth/providers/credentials";
+import { liveEnv } from "@/lib/live-env";
 
 /**
  * NEXUS//SIGNALS — control-plane session auth (LIVE-HARDENING Phase 2).
@@ -32,7 +33,10 @@ export const authOptions: NextAuthOptions = {
         key: { label: "Control Key", type: "password" },
       },
       async authorize(credentials) {
-        const expected = process.env.NEXUS_CONTROL_KEY ?? "";
+        // Task 36: .env file is the live source of truth (stale frozen
+        // process.env kept validating the OLD key after rotation — see
+        // src/lib/live-env.ts header for the incident class).
+        const expected = liveEnv("NEXUS_CONTROL_KEY");
         const provided = credentials?.key ?? "";
         if (expected.length === 0 || provided.length === 0) return null;
         if (constantTimeEqual(provided, expected)) {
@@ -64,6 +68,14 @@ export const authOptions: NextAuthOptions = {
   secret: process.env.NEXTAUTH_SECRET,
 };
 
-const handler = NextAuth(authOptions);
+// Task 36 — per-request handler: authOptions.secret is snapshotted at module
+// eval (frozen with the boot env); rebuilding the config per request lets the
+// secret come from liveEnv so signing/verification stay coherent with the
+// middleware after a rotation (low-traffic control plane — cost is nil).
+function makeHandler() {
+  return NextAuth({ ...authOptions, secret: liveEnv("NEXTAUTH_SECRET") || process.env.NEXTAUTH_SECRET });
+}
+
+const handler = (req: Parameters<ReturnType<typeof NextAuth>>[0], ctx: Parameters<ReturnType<typeof NextAuth>>[1]) => makeHandler()(req, ctx);
 
 export { handler as GET, handler as POST };

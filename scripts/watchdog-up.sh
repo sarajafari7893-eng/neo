@@ -12,6 +12,7 @@ if [ -f "$LOCK" ]; then
   fi
 fi
 mkdir -p /home/z/my-project/logs /home/z/my-project/.data/p0-watchdog
+exec 9>&- 2>/dev/null   # RECOVERY-0927: never inherit/propagate a locked flock fd
 cd /home/z/my-project/mini-services/p0-watchdog || exit 1
 nohup bun run dev >> /home/z/my-project/logs/p0-watchdog-service.log 2>&1 &
 echo "watchdog:spawned"

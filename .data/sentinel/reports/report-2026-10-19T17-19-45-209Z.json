@@ -1,0 +1,219 @@
+{
+ "schemaVersion": 1,
+ "kind": "deep",
+ "at": "2026-10-19T17:19:36.661Z",
+ "tehran": "19/10/2026, 20:49:36",
+ "verdict": "AMBER",
+ "anomalies": [
+  {
+   "sev": "warn",
+   "area": "app",
+   "msg": "HTTP probe timeout but TCP port open — warming (dev compile storm), NOT down"
+  },
+  {
+   "sev": "warn",
+   "area": "dev.log",
+   "msg": "137 error lines in recent log window"
+  },
+  {
+   "sev": "warn",
+   "area": "turbopack",
+   "msg": "14 Turbopack panic marker(s) in current boot window — compile pipeline fragile (auto-cure armed)"
+  }
+ ],
+ "services": [
+  {
+   "key": "app",
+   "label": "app :3000",
+   "up": false,
+   "status": null,
+   "ms": 12003,
+   "tcpOpen": true
+  },
+  {
+   "key": "ws",
+   "label": "price-ws :3003",
+   "up": true,
+   "status": 400,
+   "ms": 4
+  },
+  {
+   "key": "bridge",
+   "label": "telegram-bridge :3005",
+   "up": true,
+   "status": 200,
+   "ms": 2
+  },
+  {
+   "key": "liq",
+   "label": "liq :3010",
+   "up": true,
+   "status": 200,
+   "ms": 2
+  },
+  {
+   "key": "trade",
+   "label": "trade :3011",
+   "up": true,
+   "status": 200,
+   "ms": 2
+  },
+  {
+   "key": "watchdog",
+   "label": "p0-watchdog :3020",
+   "up": true,
+   "status": 200,
+   "ms": 3
+  }
+ ],
+ "mem": {
+  "availableMb": 2268
+ },
+ "disk": {
+  "rootFreeGb": 5.92,
+  "tmpFreeGb": 5.92
+ },
+ "db": {
+  "ok": true,
+  "signals": 2860,
+  "events": 80244,
+  "prices": 173047,
+  "assets": 50,
+  "pumps": 2190,
+  "events1h": 474,
+  "lastEventAgeMs": 7392,
+  "stuckActive": 0,
+  "orphanEvents": 0,
+  "stuckPumpTracks": 0,
+  "dbBytes": 64393216,
+  "walBytes": 4128272
+ },
+ "backup": {
+  "ok": true,
+  "dir": "/tmp/my-project/backups",
+  "encCount": 12,
+  "zipCount": 12,
+  "newestEncMs": 1792419735128.9233,
+  "newestAnyMs": 1792419735128.9233,
+  "encAgeMs": 10633524.076660156
+ },
+ "watchdog": {
+  "ok": true,
+  "ver": "p0-watchdog 1.4.8",
+  "modes": {
+   "app": "ok",
+   "liq": "ok",
+   "ws": "ok",
+   "bridge": "ok",
+   "trade": "ok",
+   "sentinel": "ok",
+   "armor": "ok",
+   "cron": "ok",
+   "stable": "ok",
+   "kw": "ok",
+   "mem": "ok",
+   "warm": "ok"
+  },
+  "nonOk": 0,
+  "memLevel": "ok",
+  "memAvailableMb": 2276,
+  "paused": false
+ },
+ "log": {
+  "windowLines": 1013,
+  "errors": 137,
+  "http500": 0,
+  "oom": 0,
+  "enospc": 0,
+  "hydration": 0,
+  "unhandled": 0,
+  "settlementStalled": 0,
+  "turbopackPanic": 14
+ },
+ "shadow": {
+  "ok": true,
+  "source": "legacy-file",
+  "degraded": true,
+  "fileAgeH": 1,
+  "mode": "veto",
+  "generatedAt": "2026-10-19T16:46:16.794Z",
+  "stats": {
+   "total": 600,
+   "passSide": 371,
+   "rejectSide": 229,
+   "vetoCount": 566,
+   "tradeCount": 34,
+   "modelSharePct": 37.7,
+   "modelGroundedPct": 100,
+   "avgConfidence": 66.5,
+   "gateAgreement": 223,
+   "paperOpen": 8,
+   "paperSettled": 1199,
+   "recent24h": {
+    "n": 172,
+    "modelSharePct": 52.9,
+    "lastModelAgeH": 0.1,
+    "lastVerdictAgeH": 0.1
+   }
+  },
+  "arms": [
+   {
+    "id": "real-keep",
+    "n": 30,
+    "target": 30,
+    "pct": 100,
+    "starved": false,
+    "fed": null,
+    "lastFedAgeH": null
+   },
+   {
+    "id": "real-veto",
+    "n": 30,
+    "target": 30,
+    "pct": 100,
+    "starved": false,
+    "fed": null,
+    "lastFedAgeH": null
+   },
+   {
+    "id": "paper-keep",
+    "n": 30,
+    "target": 30,
+    "pct": 100,
+    "starved": false,
+    "fed": null,
+    "lastFedAgeH": null
+   },
+   {
+    "id": "paper-veto",
+    "n": 0,
+    "target": 30,
+    "pct": 0,
+    "starved": false,
+    "fed": null,
+    "lastFedAgeH": null
+   }
+  ],
+  "fillPct": 75,
+  "nSum": 90,
+  "tSum": 120,
+  "fenceEntries24hFloor": 335
+ },
+ "rawcal": {
+  "armed": null,
+  "error": "api unreachable",
+  "heartbeatAgeH": 0,
+  "heartbeatAt": "2026-10-19T1719Z ARMED issued=415/1826 target=2856"
+ },
+ "cures": {
+  "armed": true,
+  "curing": false,
+  "cures24h": 2,
+  "lastCureAt": "2026-10-19T16:28:17.626Z",
+  "lastCureOutcome": "app-200-post-cure",
+  "failStreak": 0,
+  "baselineMark": 12
+ },
+ "uptimeSec": 21620,
+ "ver": "nexus-sentinel 1.3.2"
+}

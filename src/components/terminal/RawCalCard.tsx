@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Activity, FlaskConical, Gauge, Microscope, Power, Scale, ShieldCheck, TrendingUp, TriangleAlert } from "lucide-react";
+import { Activity, Compass, FlaskConical, Gauge, Microscope, Power, Scale, ShieldCheck, TrendingUp, TriangleAlert } from "lucide-react";
 import { toast } from "sonner";
 import { BentoCard, LiveDot, NeonBadge } from "@/components/shared/primitives";
 import { cn } from "@/lib/utils";
@@ -117,6 +117,8 @@ interface RawCalStatus {
     pendingDeficit: number;
     note: string;
   } | null;
+  // v11.5 — capture-book regime gauge (رژیم‌سنجی قبل از اعتماد به کتاب کپچر)
+  regimeSplit?: Array<{ regime: string; label: string; n: number; wins: number; winRatePct: number; netUsd: number }>;
 }
 
 function ago(iso: string | null): string {
@@ -371,6 +373,48 @@ export default function RawCalCard() {
               <div className="font-terminal text-[9px] text-ink-3">anti-flood rail</div>
             </div>
           </div>
+
+          {/* ── v11.5 CAPTURE BOOK × REGIME — رژیم‌سنجی قبل از اعتماد ──
+              The LAYER-0 regime ruling is never bypassed by capture (vetoed
+              candidates never become rows) and every row keeps its REGIME-*
+              tag. Trust the book PER REGIME, not book-wide. */}
+          {st.regimeSplit && st.regimeSplit.length > 0 && (
+            <div className="mt-3 rounded-lg border border-[rgba(0,229,255,0.16)] bg-white/[0.02] p-2.5">
+              <div className="flex flex-wrap items-center gap-2">
+                <Compass className="size-3 text-cyan-neon" aria-hidden />
+                <span className="font-terminal text-[9px] font-bold uppercase tracking-[0.12em] text-ink-2">
+                  CAPTURE BOOK × REGIME — TRUST IS PER-REGIME
+                </span>
+                <NeonBadge tone="muted" className="ml-auto">
+                  LAYER-0 VETO LIVE AT ISSUE
+                </NeonBadge>
+              </div>
+              <div className="mt-1.5 grid grid-cols-2 gap-1.5 sm:grid-cols-5">
+                {st.regimeSplit.map((r) => (
+                  <div
+                    key={r.regime}
+                    title={`${r.regime} — ${r.n} settled capture rows · WR ${r.winRatePct}% · net ${r.netUsd >= 0 ? "+" : ""}$${r.netUsd.toFixed(2)} on the $2-rescaled paper doctrine`}
+                    className={cn(
+                      "rounded border px-1.5 py-1",
+                      r.netUsd >= 0 ? "border-[rgba(0,255,157,0.28)]" : "border-[rgba(255,71,87,0.28)]",
+                    )}
+                  >
+                    <div className="truncate font-terminal text-[8px] font-bold uppercase tracking-[0.08em] text-ink-2">{r.label}</div>
+                    <div className="font-terminal text-xs font-bold tabular-nums text-ink">
+                      {r.n}
+                      <span className="ml-1 text-[8px] font-normal text-ink-3">{r.winRatePct}%</span>
+                    </div>
+                    <div className={cn("font-terminal text-[9px] font-bold tabular-nums", r.netUsd >= 0 ? "text-neon" : "text-danger-neon")}>
+                      {r.netUsd >= 0 ? "+" : ""}${r.netUsd.toFixed(2)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <p className="mt-1.5 font-terminal text-[9px] leading-relaxed text-ink-3">
+                SETTLED RAW-CAL ROWS SPLIT BY THEIR BIRTH REGIME (N · WR · NET $) — A CHOP-HEAVY BOOK MUST NEVER BE READ AS A TREND VERDICT
+              </p>
+            </div>
+          )}
 
           {/* ── v9.2 PACE MONITOR ── */}
           {pace && (

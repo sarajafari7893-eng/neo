@@ -310,8 +310,8 @@ export default function ShadowVetoCard() {
               ))}
             </div>
             {mode !== "veto" && (arms.find((a) => a.id === "paper-veto")?.n ?? 0) === 0 && (
-              <p className="mt-1.5 border-t border-white/5 px-1 pt-1.5 font-terminal text-[9px] leading-relaxed text-ink-3" title="paper-veto only fills in VETO mode: only then a core VETO actually blocks the deploy and the blocked trade is paper-tracked. In shadow mode the trade still deploys, so the same verdicts fill the REAL·VETO arm instead.">
-                paper-veto idle BY DESIGN — it fills only after auto-promotion to veto mode (arms 30/30 + LB separation). In shadow mode PASS+VETO verdicts still deploy → they feed real-veto.
+              <p className="mt-1.5 border-t border-white/5 px-1 pt-1.5 font-terminal text-[9px] leading-relaxed text-ink-3" title="paper-veto only fills when a core VETO actually BLOCKS a deploy: globally after promotion to veto mode, or (v11.0) on a PROVEN pattern cell while still in shadow. In shadow mode unblocked PASS+VETO verdicts still deploy → they feed real-veto.">
+                paper-veto idle BY DESIGN — it fills when the core actually BLOCKS deploys: after global promotion, or (v11.0) on proven pattern cells below.
               </p>
             )}
             <div className="mt-1.5 border-t border-white/5 px-1 pt-1.5">
@@ -328,6 +328,35 @@ export default function ShadowVetoCard() {
                 {data.promotion.revocation.detail}
               </div>
             </div>
+            {/* v11.0 PATTERN-VETO — the proven-performance filter (scoped authority per strategy|direction cell) */}
+            {data.patternVeto && (
+              <div className="mt-1.5 border-t border-white/5 px-1 pt-1.5">
+                <div className="flex flex-wrap items-center gap-x-2 font-terminal text-[9px] uppercase tracking-[0.14em] text-ink-3">
+                  <span className="font-bold normal-case tracking-normal">PATTERN-VETO</span>
+                  <span className={data.patternVeto.enabled ? "text-neon" : "text-ink-3"}>{data.patternVeto.enabled ? "armed" : "off"}</span>
+                  <span className="ml-auto normal-case tracking-normal">
+                    {data.patternVeto.proven.length > 0 ? (
+                      <span className="font-bold text-amber-neon">AUTHORITY ACTIVE: {data.patternVeto.proven.join(" · ")}</span>
+                    ) : (
+                      "no proven cell — fail-open until a cell passes the proof"
+                    )}
+                  </span>
+                </div>
+                <div className="mt-0.5 space-y-0.5">
+                  {data.patternVeto.rows
+                    .filter((r) => r.proven || r.nVeto >= 3)
+                    .slice(0, 4)
+                    .map((r) => (
+                      <div key={r.pattern} className="flex items-center justify-between font-terminal text-[9px]" title={`${r.detail} — proof: n≥8/side · 15pp WR sep · Wilson-UB95(veto) < WR(keep) · net(veto) < 0`}>
+                        <span className={`truncate font-bold ${r.proven ? "text-amber-neon" : "text-ink-2"}`}>{r.pattern}</span>
+                        <span className={`shrink-0 tabular-nums ${r.proven ? "text-amber-neon" : "text-ink-3"}`}>
+                          veto {r.nVeto} wr {r.wrVeto !== null ? `${r.wrVeto.toFixed(0)}%` : "—"} / keep {r.nKeep} wr {r.wrKeep !== null ? `${r.wrKeep.toFixed(0)}%` : "—"} · UB95 {r.ubVeto !== null ? `${r.ubVeto.toFixed(0)}%` : "—"} {r.proven ? "· PROVEN" : ""}
+                        </span>
+                      </div>
+                    ))}
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="grid gap-3 lg:grid-cols-[1fr_260px]">

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { existsSync, readFileSync } from "node:fs";
+import { db } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
@@ -9,6 +10,41 @@ function memAvailableMB(): number | null {
     return m ? Math.round(parseInt(m[1]!, 10) / 1024) : null;
   } catch {
     return null;
+  }
+}
+
+// ── TASK-51 LINEAGE (operator mandate RESET-0929: «نمی‌توانی بخوانی») ──────
+// After any platform reset the operator must be able to READ the system's
+// continuity at a glance: when this generation booted, which commit is
+// running, and where the signal ledger stands (serial continuity = data
+// survived). Fail-open on every read — lineage is metadata, never a gate.
+function gitHeadSha(): string | null {
+  try {
+    const head = readFileSync("/home/z/my-project/.git/HEAD", "utf8").trim();
+    const m = head.match(/^ref:\s+(.+)$/);
+    if (!m) return head.slice(0, 7) || null;
+    const refPath = `/home/z/my-project/.git/${m[1]!}`;
+    if (!existsSync(refPath)) return null;
+    const sha = readFileSync(refPath, "utf8").trim();
+    return sha.slice(0, 7) || null;
+  } catch {
+    return null;
+  }
+}
+
+async function ledgerLineage(): Promise<{ maxSerial: number | null; total: number | null; oldestAt: string | null }> {
+  try {
+    const [agg, oldest] = await Promise.all([
+      db.signal.aggregate({ _max: { serial: true }, _count: { _all: true } }),
+      db.signal.findFirst({ orderBy: { createdAt: "asc" }, select: { createdAt: true } }),
+    ]);
+    return {
+      maxSerial: agg._max.serial ?? null,
+      total: agg._count._all ?? null,
+      oldestAt: oldest?.createdAt?.toISOString() ?? null,
+    };
+  } catch {
+    return { maxSerial: null, total: null, oldestAt: null };
   }
 }
 
@@ -95,11 +131,19 @@ function layer2Status(): { running: boolean; pid: number | null } {
  */
 export async function GET() {
   const mem = process.memoryUsage();
+  const ledger = await ledgerLineage();
   return NextResponse.json(
     {
       ok: true,
       ts: Date.now(),
       uptimeSec: Math.round(process.uptime()),
+      bootAt: new Date(Date.now() - process.uptime() * 1000).toISOString(),
+      gitSha: gitHeadSha(),
+      lineage: {
+        ledgerMaxSerial: ledger.maxSerial,
+        ledgerTotal: ledger.total,
+        ledgerOldestAt: ledger.oldestAt,
+      },
       rssMB: Math.round(mem.rss / 1048576),
       heapUsedMB: Math.round(mem.heapUsed / 1048576),
       heapTotalMB: Math.round(mem.heapTotal / 1048576),

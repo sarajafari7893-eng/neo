@@ -16,6 +16,7 @@
 //            keeps the honest OBSERVING declaration, never fabricated.
 
 import { gateFetch } from "./fapi-gate";
+import { bridgeTape, bridgeDepth } from "./flow-bridge"; // v12.3 TASK-52 — tape/depth ladders
 import { getLiquidationSnapshot } from "./liquidations";
 import { fetchFlowMetrics, getFlowHistory } from "./flow";
 import { peekRegime } from "./regime";
@@ -74,20 +75,46 @@ const COUNTER_CASCADE_SUPPRESS_MS = 10 * 60_000;
 const CROWD_CUT_MS = 30 * 60_000;
 
 // ── module state ────────────────────────────────────────────────
-const ring: TriggerEvent[] = [];
-const counts: Record<TriggerLayer, number> = {
-  L1_TAKER_SWEEP: 0,
-  L15_OBI_IMBALANCE: 0,
-  L2_VACUUM: 0,
-  L3_LIQ_CASCADE: 0,
-  L3P_LIQ_PRE: 0,
-  L35_CROWD_JUMP: 0,
-  L4_MACRO: 0,
+// TASK-40 (2026-09-27, operator bug report «Trigger Bus داده‌ها را از دست می‌دهد»):
+// GENERATION-PROOF STATE. Next dev bundles one module instance per route, so
+// module-scoped state forks per bundle (the v10.16 serial-mutex lesson in
+// engine.ts). The old code was doubly broken:
+//   1. A fresh generation restored NOTHING (its `restored` flag was private)
+//      and its first fire()/markTriggerSpawn() persisted ALL-ZERO counts over
+//      the good EngineSetting row — permanent destruction, observed live
+//      2026-09-27 09:50 (row zeroed while lastCycleAt stayed fresh).
+//   2. restore() latched `restored = true` even on a TRANSIENT DB error, so a
+//      hiccup under memory pressure froze a zeroed generation that then
+//      faithfully overwrote every later persist.
+// Counters/ring now live on globalThis (shared by every generation in the
+// process), restore() merges with MAX (monotonic counters) + deduped ring,
+// and persist() is DENIED until a successful restore (or a confirmed-fresh
+// row) — the zero-overwrite destroyer is structurally impossible now.
+interface NexusTriggerState {
+  counts: Record<TriggerLayer, number>;
+  ring: TriggerEvent[];
+  lastCycleAt: number | null;
+  lastSpawnAt: number;
+}
+const gState = globalThis as { __nexusTriggerState?: NexusTriggerState };
+const S: NexusTriggerState = gState.__nexusTriggerState ?? {
+  counts: {
+    L1_TAKER_SWEEP: 0,
+    L15_OBI_IMBALANCE: 0,
+    L2_VACUUM: 0,
+    L3_LIQ_CASCADE: 0,
+    L3P_LIQ_PRE: 0,
+    L35_CROWD_JUMP: 0,
+    L4_MACRO: 0,
+  },
+  ring: [],
+  lastCycleAt: null,
+  lastSpawnAt: 0,
 };
+gState.__nexusTriggerState = S;
+const { counts, ring } = S; // shared references — mutations flow through S
 let cursor = 0;
 let rotationSize = 40;
-let lastCycleAt: number | null = null;
-let lastSpawnAt = 0;
 let cycleInFlight = false;
 let macroAnnounced = false;
 
@@ -127,7 +154,13 @@ async function measureTakerSweep(symbol: string): Promise<TakerSweep | null> {
   const ck = `agg:${symbol}`;
   const hit = measCache.get(ck);
   if (hit && Date.now() - hit.at < MEAS_TTL) return hit.v as TakerSweep | null;
-  const trades = await fapi<AggTrade[]>(`/fapi/v1/aggTrades?symbol=${symbol}&limit=1000`);
+  // v12.3 TASK-52: fapi aggTrades (w20) is rung 1 — during fapi starvation the
+  // sweep survives on the bridge ladder (BYBIT tape → SPOT-MIRROR, honest venue).
+  let trades = await fapi<AggTrade[]>(`/fapi/v1/aggTrades?symbol=${symbol}&limit=1000`);
+  if (!trades || trades.length < 10) {
+    const b = await bridgeTape(symbol).catch(() => null);
+    if (b && b.trades.length >= 10) trades = b.trades.map((t) => ({ p: t.price, q: t.qty, T: t.time, m: t.isBuyerMaker }));
+  }
   if (!trades || trades.length < 10) {
     measCache.set(ck, { at: Date.now(), v: null });
     return null;
@@ -171,13 +204,15 @@ async function measureDepth(symbol: string): Promise<DepthMeasure | null> {
   const ck = `depth:${symbol}`;
   const hit = measCache.get(ck);
   if (hit && Date.now() - hit.at < MEAS_TTL) return hit.v as DepthMeasure | null;
-  const d = await fapi<{ bids: [string, string][]; asks: [string, string][] }>(`/fapi/v1/depth?symbol=${symbol}&limit=500`);
+  // v12.3 TASK-52: depth rides the ladder — fapi (w5) → BYBIT linear book →
+  // SPOT-MIRROR book; OBI/vacuum math is venue-shape-agnostic (bids DESC / asks ASC).
+  const d = await bridgeDepth(symbol, 500);
   if (!d || d.bids.length === 0 || d.asks.length === 0) {
     measCache.set(ck, { at: Date.now(), v: null });
     return null;
   }
-  const bids: DepthLevel[] = d.bids.map(([p, q]) => ({ price: Number(p), qty: Number(q) }));
-  const asks: DepthLevel[] = d.asks.map(([p, q]) => ({ price: Number(p), qty: Number(q) }));
+  const bids: DepthLevel[] = d.bids.map(([p, q]) => ({ price: p, qty: q }));
+  const asks: DepthLevel[] = d.asks.map(([p, q]) => ({ price: p, qty: q }));
   const mid = (bids[0]!.price + asks[0]!.price) / 2;
 
   // OBI over the top ±0.5% band
@@ -277,32 +312,52 @@ export function isCrowdCut(symbol: string): boolean {
 }
 
 async function persist(): Promise<void> {
+  if (!restoreOk) return; // TASK-40: never overwrite an unrestored (possibly good) row with cold state
   try {
-    const value = JSON.stringify({ counts, last: ring.slice(0, RING_CAP), lastCycleAt, lastSpawnAt });
+    const value = JSON.stringify({ counts: S.counts, last: S.ring.slice(0, RING_CAP), lastCycleAt: S.lastCycleAt, lastSpawnAt: S.lastSpawnAt });
     await db.engineSetting.upsert({ where: { key: PERSIST_KEY }, create: { key: PERSIST_KEY, value }, update: { value } });
   } catch {
     /* non-fatal */
   }
 }
 
-/** Restore counters/ring after a dev-server restart. */
-let restored = false;
+/** Restore counters/ring after a dev-server restart.
+ * TASK-40 hardening: a TRANSIENT DB error no longer latches the restore —
+ * failed restores retry on the next cycle and persist() stays denied until
+ * this succeeds. Counters merge MAX (they are monotonic), the ring merges
+ * deduped by at|layer|symbol: a double-restore or a racing generation can
+ * never move the visible numbers backwards. */
+let restoreOk = false;
 async function restore(): Promise<void> {
-  if (restored) return;
-  restored = true;
+  if (restoreOk) return;
   try {
     const row = await db.engineSetting.findUnique({ where: { key: PERSIST_KEY } });
-    if (!row) return;
-    const v = JSON.parse(row.value) as { counts: Record<TriggerLayer, number>; last: TriggerEvent[]; lastCycleAt: number | null; lastSpawnAt: number };
-    Object.assign(counts, v.counts);
-    // layer-set evolution guard — a layer added after the persist was written
-    // would otherwise sit at undefined and NaN on the first ++
-    for (const k of Object.keys(counts) as TriggerLayer[]) if (typeof counts[k] !== "number" || Number.isNaN(counts[k])) counts[k] = 0;
-    for (const e of v.last.slice(0, RING_CAP)) ring.push(e);
-    lastCycleAt = v.lastCycleAt;
-    lastSpawnAt = v.lastSpawnAt ?? 0;
+    if (!row) {
+      restoreOk = true; // confirmed fresh — first persist may create the row
+      return;
+    }
+    const v = JSON.parse(row.value) as { counts?: Record<TriggerLayer, number>; last?: TriggerEvent[]; lastCycleAt?: number | null; lastSpawnAt?: number };
+    // layer-set evolution guard + MAX-merge — a layer added after the persist
+    // was written would otherwise sit at undefined and NaN on the first ++
+    for (const k of Object.keys(S.counts) as TriggerLayer[]) {
+      const disk = Number(v.counts?.[k] ?? 0);
+      S.counts[k] = Math.max(S.counts[k] ?? 0, Number.isFinite(disk) ? disk : 0);
+    }
+    const seen = new Set(S.ring.map((e) => `${e?.at}|${e?.layer}|${e?.symbol}`));
+    for (const e of (v.last ?? []).slice(0, RING_CAP)) {
+      if (!e || typeof e.at !== "number") continue;
+      const k = `${e.at}|${e.layer}|${e.symbol}`;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      S.ring.push(e);
+    }
+    S.ring.sort((a, b) => b.at - a.at);
+    if (S.ring.length > RING_CAP) S.ring.length = RING_CAP;
+    if (typeof v.lastCycleAt === "number") S.lastCycleAt = Math.max(S.lastCycleAt ?? 0, v.lastCycleAt);
+    S.lastSpawnAt = Math.max(S.lastSpawnAt, v.lastSpawnAt ?? 0);
+    restoreOk = true;
   } catch {
-    /* fresh start */
+    /* transient DB hiccup — NOT latched; next cycle retries; persist stays denied */
   }
 }
 
@@ -468,7 +523,7 @@ async function runTriggerCycleInner(symbols: string[]): Promise<void> {
   for (const s of batch) {
     await withTimeout(scanSymbolTriggers(s), SYMBOL_TIMEOUT_MS, `trigger scan ${s}`);
   }
-  lastCycleAt = Date.now();
+  S.lastCycleAt = Date.now();
 }
 
 export async function runTriggerCycle(symbols: string[]): Promise<void> {
@@ -490,22 +545,28 @@ export async function runTriggerCycle(symbols: string[]): Promise<void> {
 }
 
 export function canTriggerSpawn(): boolean {
-  return Date.now() - lastSpawnAt > SPAWN_COOLDOWN_MS;
+  return Date.now() - S.lastSpawnAt > SPAWN_COOLDOWN_MS;
 }
 
 export function markTriggerSpawn(): void {
-  lastSpawnAt = Date.now();
+  S.lastSpawnAt = Date.now();
   void persist();
 }
 
 export function getTriggerBusSummary(): TriggerBusSummary {
+  // TASK-40: kick the restore on the READ path too — a fresh process used to
+  // report zero counts until the first bus cycle ran (a seconds-wide window
+  // that reads exactly like "the data was wiped again"). The kick is
+  // fire-and-forget; the first poll may still be cold, the next one (≤5s) is
+  // already MAX-merged from EngineSetting.
+  void restore();
   return {
-    counts: { ...counts },
-    last: ring.slice(0, 12),
+    counts: { ...S.counts },
+    last: S.ring.slice(0, 12),
     rotation: cursor,
     rotationSize,
-    lastCycleAt,
-    lastSpawnAt: lastSpawnAt || null,
+    lastCycleAt: S.lastCycleAt,
+    lastSpawnAt: S.lastSpawnAt || null,
     suppressed: [...cascadeUntil.entries()].filter(([, t]) => Date.now() < t).map(([s]) => s),
     crowdCut: [...crowdCutUntil.entries()].filter(([, t]) => Date.now() < t).map(([s]) => s),
     macroNote: (() => {
@@ -519,3 +580,9 @@ export function getTriggerBusSummary(): TriggerBusSummary {
     lastCycleError,
   };
 }
+
+// TASK-40: module-load self-restore — every Turbopack per-route module instance
+// pulls its persisted counters/ring the moment it is imported, so even the
+// FIRST dashboard poll after a restart/recompile serves real state (the
+// getTriggerBusSummary read-path kick is the second line of defense).
+void restore().catch(() => undefined);

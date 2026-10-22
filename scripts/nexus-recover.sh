@@ -30,7 +30,7 @@ sleep 1
 
 cd "$APP" || exit 1
 # double-detached spawn: setsid new session + nohup immune to HUP; own log
-setsid nohup env NODE_OPTIONS="--max-old-space-size=1400" \
+setsid nohup env NODE_OPTIONS="--max-old-space-size=768" \
   ./node_modules/.bin/next dev -p 3000 >> "$APP/dev.log" 2>&1 < /dev/null &
 echo "[$(date '+%F %T')] spawned pid $!" >> "$LOG"
 

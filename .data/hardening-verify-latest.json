@@ -1,0 +1,113 @@
+{
+  "exec_sm_legal_edges": {
+    "status": "PASS",
+    "note": "SIGNAL→ELIGIBLE, RISK_APPROVED→ORDER_SUBMITTED, PROTECTED→EXITING, RECONCILING→QUARANTINED accept"
+  },
+  "exec_sm_illegal_blocked": {
+    "status": "PASS",
+    "note": "CLOSED terminal, FILLED↛SIGNAL, QUARANTINED↛ELIGIBLE (reconciliation-only exit)"
+  },
+  "exec_sm_unknown_failclosed": {
+    "status": "PASS",
+    "note": "unknown states never transition; unknown ledger status projects to QUARANTINED"
+  },
+  "exec_sm_reconcile_rules": {
+    "status": "PASS",
+    "note": "clean=OK; no-stop=QUARANTINE; unknown-status=QUARANTINE; integrity-flag=QUARANTINE"
+  },
+  "exec_sm_entry_failclosed": {
+    "status": "PASS",
+    "note": "clean=allow; stale-feed/clock-skew/NaN-skew=fail-closed"
+  },
+  "entry_quality_rejects": {
+    "status": "PASS",
+    "note": "late-chase / overextended(2.8 ATR) / one-shot-spike ⇒ STRONG_REJECT"
+  },
+  "entry_quality_gray_not_eligible": {
+    "status": "PASS",
+    "note": "weak persistence + incomplete data ⇒ GRAY_ZONE; GRAY_ZONE can NEVER be live-eligible (spec law encoded)"
+  },
+  "entry_quality_strong_pass": {
+    "status": "PASS",
+    "note": "clean inputs ⇒ STRONG_PASS (only state eligible for live)"
+  },
+  "risk_daily_halt_absolute": {
+    "status": "PASS",
+    "note": "daily loss 1% ⇒ HALT even with operatorForced=true (non-bypassable)"
+  },
+  "risk_weekly_halt_absolute": {
+    "status": "PASS",
+    "note": "weekly loss ≥ 2.5% ⇒ HALT"
+  },
+  "risk_unknown_state_fails_closed": {
+    "status": "PASS",
+    "note": "NaN/Infinity entry ⇒ HALT (unknown execution state prevents new entries)"
+  },
+  "risk_concentration_reject_override": {
+    "status": "PASS",
+    "note": "same-symbol open ⇒ REJECT; operator-forced ⇒ THROTTLE ×0.5 (audited override)"
+  },
+  "risk_throttle_into_band": {
+    "status": "PASS",
+    "note": "0.5% risk shrunk ×0.5 to 0.25% (band max 0.25%); >4× band stays REJECT (sizing defect)"
+  },
+  "risk_daily_weekly_split": {
+    "status": "PASS",
+    "note": "UTC-day window −0.5; rolling 7d −0.9; 9d-old excluded"
+  },
+  "accounting_realized_r_anchor": {
+    "status": "PASS",
+    "note": "R vs immutable initialStopLoss anchor = 1.5R; no anchor ⇒ null (never fabricate R)"
+  },
+  "accounting_slippage_and_labels": {
+    "status": "PASS",
+    "note": "adverse slippage positive (L5/SH4 bps); PnL exits labeled PAPER; fees reduce net"
+  },
+  "kill_switch_roundtrip": {
+    "status": "PASS",
+    "note": "engage→file→status→release verified; engine deploy path returns 423 while engaged"
+  },
+  "kill_switch_missing_flag_failclosed": {
+    "status": "PASS",
+    "note": "flag deleted ⇒ engaged (\"KILL-SWITCH FLAG FILE MISSING while trail exists — fail-clos…\"); restored ⇒ released (tamper guard)"
+  },
+  "security_middleware": {
+    "status": "PASS",
+    "note": "anonymous POST=401; FORGED same-origin POST=401 (want 401 — F1 closed on kill-switch); x-nexus-key POST=200; GET=200; release=200; readiness=200. Residual: other mutating routes still accept forged same-origin (browser-UX constraint) — session-auth layer is the next hardening step"
+  },
+  "db_integrity": {
+    "status": "PASS",
+    "note": "PRAGMA integrity_check=ok; fk_violations=0; dup_serials=0; unknown_status=0; open rows=41, reconcile QUARANTINE=0"
+  },
+  "migration_baseline": {
+    "status": "PASS",
+    "note": "prisma/migrations/0000_baseline/migration.sql + MIGRATIONS.md policy present (db-push dependence removed going forward)"
+  },
+  "services_loopback": {
+    "status": "PASS",
+    "note": "LISTEN loopback 7/7 service ports: 3011:loopback, 3012:loopback, 3016:loopback, 3030:loopback, 3003:loopback, 3005:loopback, 3010:loopback"
+  },
+  "execution_reconciliation": {
+    "status": "PASS",
+    "note": "state machine + reconciliation family (exec_sm_* checks)"
+  },
+  "entry_quality_family": {
+    "status": "PASS",
+    "note": "entry-quality family (reject/gray/pass + eligibility law)"
+  },
+  "risk_engine_hard_limits": {
+    "status": "PASS",
+    "note": "hard risk engine family (daily/weekly HALT absolute, fail-closed unknown, concentration reject, band throttle)"
+  },
+  "accounting_family": {
+    "status": "PASS",
+    "note": "real-accounting family (R-anchor, slippage sign, class labels)"
+  },
+  "_summary": {
+    "ranAt": "2026-09-25T23:51:43.042Z",
+    "pass": 26,
+    "fail": 0,
+    "unknown": 0,
+    "tool": "bun .zscripts/hardening-verify.ts"
+  }
+}

@@ -16,25 +16,128 @@
 #     alerts, and revives layer-1 itself if it dies (supervisor-of-supervisor).
 #   Coordination: THIS script writes .data/p0-watchdog/pause-until (+120s) before
 #     touching next-server, so layer 1 never races an operator-driven restart.
+#
+# v8.2 (TASK-39, 2026-09-27): memory envelope closed on BOTH sides.
+#   V8 heap 1400MB (unchanged, line one) + turbopack native now capped 768MiB via
+#   next.config.ts experimental.turbopackMemoryLimit. Validated steady-state:
+#   next-server RSS ~2.0-2.2GB plateau (was: unbounded ramp → mem-crit → probe
+#   timeout → heal treadmill, 6 recoveries/day), MemAvailable ~850-1000MB →
+#   sentinel GREEN. Layer-2 RSS_WARN_MB re-validated 1800 → 2300 to match.
 mkdir -p /home/z/my-project/.data/p0-watchdog
+
+# v8.3 (RECOVERY-0927): when spawned from inside a watchdog cycle we inherit the
+# cycle's locked flock fd (9). Inheriting children pin that lock forever and
+# blind every later cycle — close it before spawning anything of our own.
+exec 9>&- 2>/dev/null
+
+# ── v8.4 (Task 73, SENTINEL-20261003-0020 rec P2) — fresh-wipe escalation ──
+# 2026-10-03 crash-loop lesson: when the turbopack SST cache is corrupt, a bare
+# restart (what every heal does) lands on the SAME corrupt cache and dies again
+# → 5min heal-treadmill. Fix: dev-up.sh now tracks its OWN consecutive-fail
+# streak (.data/dev-up/fail-streak) — the single source of truth covering ALL
+# callers (layer-1 heal, layer-2 fallback, backup.sh repair, human). On the 3rd
+# consecutive failed spawn the restart becomes FRESH: full `rm -rf .next` while
+# the server is verifiably dead. Explicit `--fresh` forces the same path.
+# Also hardened (v8.4): graceful kill now WAITS for real process exit (pkill -f
+# "next dev" alone never killed next-server — verified lesson) with pkill -9
+# fallback + port-close wait, closing the double-writer race that corrupts .next.
+FRESH=0
+[ "${1:-}" = "--fresh" ] && FRESH=1
+
+# v8.5 (STAB-20261022-a) — spawner unification: foreground supervisor contract.
+# The platform chain (tini → /start.sh → bun run dev) needs its callee to HOLD
+# for the app's lifetime; a detaching spawner makes the chain think the app
+# died and re-races it (the three-spawner war). --foreground: after ALL
+# arming/warm-up logic below completes, WAIT on the spawned app pid instead of
+# exiting. Background mode (no arg) stays byte-identical to v8.4 behavior.
+FOREGROUND=0
+[ "${1:-}" = "--foreground" ] && FOREGROUND=1
+STREAK_DIR="/home/z/my-project/.data/dev-up"
+STREAK_FILE="$STREAK_DIR/fail-streak"
+mkdir -p "$STREAK_DIR"
 
 # probe-gated restart of the Next.js dev server
 code=$(curl -s -m 5 -o /dev/null -w '%{http_code}' http://localhost:3000/api/pulse 2>/dev/null || true)
-if [ "$code" != "200" ]; then
+if [ "$code" = "200" ]; then
+  echo 0 > "$STREAK_FILE" 2>/dev/null   # healthy: reset the escalation counter
+else
+  STREAK=$(( $(cat "$STREAK_FILE" 2>/dev/null || echo 0) + 1 ))
+  echo "$STREAK" > "$STREAK_FILE" 2>/dev/null
+  if [ "$STREAK" -ge 3 ] && [ "$FRESH" = "0" ]; then
+    FRESH=1
+    echo "[dev-up] fail-streak=$STREAK → AUTO-FRESH (full .next wipe) $(date -u '+%H:%M:%SZ')"
+  fi
   # pause the p0-watchdogs for 120s (2× measured restart time) — never race an
   # operator-driven restart (honored by BOTH layer-1 :3020 and layer-2 v3.0)
   echo $(( $(date +%s) + 120 )) > /home/z/my-project/.data/p0-watchdog/pause-until
-  # stale instance cleanup (port squatters)
+  # stale instance cleanup — GRACEFUL then WAIT for real exit (v8.4)
   pkill -f "next dev" 2>/dev/null
   pkill -f "next-server" 2>/dev/null
-  sleep 1
+  for i in $(seq 1 15); do
+    pgrep -f "next-server" >/dev/null 2>&1 || pgrep -f "next dev" >/dev/null 2>&1 || break
+    sleep 1
+  done
+  if pgrep -f "next-server" >/dev/null 2>&1 || pgrep -f "next dev" >/dev/null 2>&1; then
+    echo "[dev-up] graceful stop timed out — pkill -9 fallback"
+    pkill -9 -f "next-server" 2>/dev/null
+    pkill -9 -f "next dev" 2>/dev/null
+    sleep 2
+  fi
+  # wait for port 3000 to close — two next-server writers on one .next is the
+  # classic SST-corruption race (Task 73)
+  for i in $(seq 1 10); do
+    ss -ltn 2>/dev/null | grep -q ':3000 ' || break
+    sleep 1
+  done
   cd /home/z/my-project || exit 1
-  setsid bash -c 'NODE_OPTIONS="--max-old-space-size=1400" exec ./node_modules/.bin/next dev -p 3000 >> dev.log 2>&1' < /dev/null &
+  if [ "$FRESH" = "1" ]; then
+    # server verifiably dead → full cache wipe is now SAFE (the ONLY safe moment)
+    BEFORE_MB=$(du -sm .next 2>/dev/null | cut -f1 || echo 0)
+    rm -rf /home/z/my-project/.next 2>/dev/null
+    echo "[dev-up] FRESH wipe done: .next ${BEFORE_MB}MB → 0MB $(date -u '+%H:%M:%SZ')"
+  else
+    # v8.4 opportunistic trim at the one guaranteed-safe moment: the cache is
+    # the disk-hygiene SCHEDULED job's deferred debt — pay it here, server dead.
+    TC=".next/dev/cache/turbopack"
+    if [ -d "$TC" ]; then
+      TC_MB=$(du -sm "$TC" 2>/dev/null | cut -f1 || echo 0)
+      if [ "${TC_MB:-0}" -gt 1024 ]; then
+        rm -rf "$TC" 2>/dev/null
+        echo "[dev-up] opportunistic turbopack trim: ${TC_MB}MB wiped (server dead, >1024MB)"
+      fi
+    fi
+  fi
+  # v9.0 EQ-97 MEMORY FLOOR before spawn — the two Oct-11 OOMs were cold
+  # compiles landing on a memory-starved box (MemAvailable <350MB). After the
+  # old server dies its RSS returns to the OS quickly; WAIT for the floor
+  # (≤60s) before spawning so the fresh server never boots into a squeeze.
+  # Fail-open: after the timeout we spawn anyway — the watchdog remains the
+  # second line of defense.
+  memavail() { awk '/MemAvailable/{printf "%d", $2/1024}' /proc/meminfo 2>/dev/null || echo 9999; }
+  for i in $(seq 1 12); do
+    m=$(memavail)
+    [ "$m" -ge 550 ] && break
+    echo "[dev-up] mem floor ${m}MB < 550MB — pre-spawn wait $i $(date -u '+%H:%M:%SZ')"
+    sleep 5
+  done
+  # v9.2 (EQ-98 escalation, 2026-10-13 ~09:15Z): v9.1's 1024MB cap did NOT stop
+  # the kill loop — dmesg: THREE more kernel kills within 4.5min (pids 12413/
+  # 13254/13960, all anon-rss ~2.04-2.11GB) during warm-cache hydration spikes.
+  # The binding constraint is the HYDRATION SPIKE, not the steady heap. New
+  # envelope: V8 768MB (the pre-0927 validated value; telegram-arm.sh precedent)
+  # + turbopack native 384MiB (next.config.ts) → target plateau 1.4-1.7GB,
+  # spike ≤1.8GB, avail stays >800MB → kernel never reaches the trigger.
+  # 109 total OOM kills in 11 days on this box — this is the line in the sand.
+  setsid bash -c 'NODE_OPTIONS="--max-old-space-size=768" exec ./node_modules/.bin/next dev -p 3000 >> dev.log 2>&1' < /dev/null &
+  APP_PID=$!   # v8.5: captured for the --foreground supervisor contract (harmless in bg mode)
   for i in $(seq 1 30); do
     sleep 2
     code=$(curl -s -m 5 -o /dev/null -w '%{http_code}' http://localhost:3000/api/pulse 2>/dev/null || true)
     [ "$code" = "200" ] && break
   done
+  # v8.4: outcome feeds the streak — 200 heals the counter, failure keeps it
+  # climbing so the NEXT spawn escalates to AUTO-FRESH.
+  if [ "$code" = "200" ]; then echo 0 > "$STREAK_FILE" 2>/dev/null; else echo "$STREAK" > "$STREAK_FILE" 2>/dev/null; fi
 fi
 echo "app:$code"
 
@@ -54,6 +157,43 @@ echo "app:$code"
     fi
   done
 ) >> dev.log 2>&1 &
+
+# ── v9.0 (EQ-97) SEQUENTIAL BOOT-WARMER — cold-start OOM immunization ──────
+# Incident replay (2026-10-11, twice): cold turbopack compile of burst routes
+# + a reviewer chrome session → next-server RSS 2.13GB → OOM kill → heal
+# treadmill. Fix: on a COLD start (fresh wipe / missing .next / fail-streak
+# ≥2) compile the core routes ONE AT A TIME with 12s gaps — the heap never
+# sees a burst — after waiting for the memory floor. Fast heals (streak<2,
+# warm .next) keep the old fast path unchanged. Fully non-blocking.
+COLD=0
+[ "$FRESH" = "1" ] && COLD=1
+[ -d /home/z/my-project/.next ] || COLD=1
+[ "${STREAK:-0}" -ge 2 ] && COLD=1
+if [ "$code" = "200" ] && [ "$COLD" = "1" ]; then
+(
+  mem() { awk '/MemAvailable/{printf "%d", $2/1024}' /proc/meminfo 2>/dev/null || echo 0; }
+  echo "[dev-up] boot-warmer seq start mem=$(mem)MB cold=1 $(date -u '+%H:%M:%SZ')" 
+  for i in $(seq 1 12); do
+    m=$(mem); [ "$m" -ge 550 ] && break
+    echo "[dev-up] boot-warmer mem floor wait ${m}MB < 550MB (try $i)"
+    sleep 5
+  done
+  warm_route() {
+    t0=$(date +%s)
+    c=$(curl -s -m 75 -o /dev/null -w '%{http_code}' "http://localhost:3000$1" 2>/dev/null || true)
+    echo "[dev-up] boot-warmer warm $1 → $c in $(( $(date +%s) - t0 ))s mem=$(mem)MB"
+    sleep 12   # stagger — one compile in flight at a time
+  }
+  warm_route "/"
+  warm_route "/api/pulse"
+  warm_route "/api/signals?limit=1"
+  warm_route "/api/rawcal"
+  warm_route "/api/golden-lane"
+  warm_route "/api/entry-levers"
+  warm_route "/api/closeall"
+  echo "[dev-up] boot-warmer seq done $(date -u '+%H:%M:%SZ')"
+) >> dev.log 2>&1 &
+fi
 
 # ── P0 WATCHDOG arming (TWO-LAYER contract, OP-P0-WD-0909 × OP-P0-WD-V3) ──
 # Layer 1 (fast heal, 15s) = bun p0-watchdog :3020 — owns auto-restart of
@@ -77,12 +217,55 @@ if [ -f "$WD_PIDF" ]; then
 fi
 if [ "$WD_ALIVE" = "0" ]; then
   mkdir -p "$WD_DIR"
-  nohup bash "$WD_SH" --loop >> "$WD_DIR/loop.out" 2>&1 &
-  echo "$!" > "$WD_PIDF"   # pre-write so the same-run layer-1 call sees it
-  echo "[dev-up] P0 watchdog layer-2 ARMED (pid $!)"
+  # v8.5 (STAB-20261022-a): pgrep singleton guard — the pidfile liveness check
+  # above can miss live instances spawned via another path (stale pidfile),
+  # and every dev-up run used to add ANOTHER --loop (duplicates accumulate →
+  # parallel kill/heal races). Never spawn when a live one already exists.
+  if pgrep -f "watchdog.sh --loop" >/dev/null 2>&1; then
+    echo "[dev-up] watchdog --loop already running (singleton guard) — skip spawn"
+  else
+    nohup bash "$WD_SH" --loop >> "$WD_DIR/loop.out" 2>&1 &
+    echo "$!" > "$WD_PIDF"   # pre-write so the same-run layer-1 call sees it
+    echo "[dev-up] P0 watchdog layer-2 ARMED (pid $!)"
+  fi
 else
   echo "[dev-up] P0 watchdog layer-2 already armed (pid $(cat "$WD_PIDF"))"
 fi
 
 # (2) layer-1 guardian — idempotent
 bash /home/z/my-project/scripts/watchdog-up.sh
+
+# (3) mem-guard boot contract (RECOVERY-1016) — the recycle that killed the app
+# also killed mem-guard and nothing re-spawned it → rollback sentinel + OOM
+# guard + schema gate all dead. Idempotent + probe-gated inside the script.
+bash /home/z/my-project/scripts/mem-guard-up.sh || true
+
+# (4) warm-loop boot contract (Task-45 Q4) — the headless pulse driver (:3012).
+# Orphaned by the 2026-10-16 recycle and never re-armed; without it the engine
+# tick depends on an open browser tab. Idempotent: pid-lock singleton inside.
+cd /home/z/my-project/mini-services/warm-loop && nohup bun index.ts >> /home/z/my-project/logs/warm-loop.log 2>&1 &
+echo "[dev-up] warm-loop :3012 spawn issued"
+
+# ── v8.5 (STAB-20261022-a) FOREGROUND CONTRACT — hold for the supervisor ────
+# Everything above (pre-kill gate, mem floor, spawn, pulse wait, self-warm,
+# boot-warmer, watchdog/mem-guard/warm-loop arming) already ran in normal
+# flow. Now HOLD so the platform chain sees a live callee for the app's
+# lifetime; when the app dies, exit → the supervisor re-enters through the
+# SAME pre-kill/warm-up/single-spawner gate.
+if [ "$FOREGROUND" = "1" ]; then
+  if [ -n "${APP_PID:-}" ]; then
+    echo "[dev-up] foreground: holding on app pid $APP_PID (platform-supervisor contract)"
+    wait "$APP_PID"
+    echo "[dev-up] app pid $APP_PID exited rc=$? — releasing to supervisor respawn"
+  else
+    # Healthy-at-attach: probe was 200, no spawn happened. Hold by polling so
+    # the supervisor does NOT busy-loop re-running this script every second.
+    echo "[dev-up] foreground: app already healthy — attach-hold (poll)"
+    while pgrep -f "next dev" >/dev/null 2>&1 || pgrep -f "next-server" >/dev/null 2>&1; do
+      sleep 30
+    done
+    echo "[dev-up] app gone — releasing to supervisor respawn"
+  fi
+  exit 0
+fi
+exit 0

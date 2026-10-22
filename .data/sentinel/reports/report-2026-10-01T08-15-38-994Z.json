@@ -1,0 +1,201 @@
+{
+ "schemaVersion": 1,
+ "kind": "deep",
+ "at": "2026-10-01T08:15:38.985Z",
+ "tehran": "01/10/2026, 11:45:38",
+ "verdict": "RED",
+ "anomalies": [
+  {
+   "sev": "crit",
+   "area": "memory",
+   "msg": "MemAvailable 240MB < 250MB crit floor"
+  },
+  {
+   "sev": "warn",
+   "area": "dev.log",
+   "msg": "180 error lines in recent log window"
+  }
+ ],
+ "services": [
+  {
+   "key": "app",
+   "label": "app :3000",
+   "up": true,
+   "status": 200,
+   "ms": 21
+  },
+  {
+   "key": "ws",
+   "label": "price-ws :3003",
+   "up": true,
+   "status": 400,
+   "ms": 2
+  },
+  {
+   "key": "bridge",
+   "label": "telegram-bridge :3005",
+   "up": true,
+   "status": 200,
+   "ms": 2
+  },
+  {
+   "key": "liq",
+   "label": "liq :3010",
+   "up": true,
+   "status": 200,
+   "ms": 2
+  },
+  {
+   "key": "trade",
+   "label": "trade :3011",
+   "up": true,
+   "status": 200,
+   "ms": 2
+  },
+  {
+   "key": "watchdog",
+   "label": "p0-watchdog :3020",
+   "up": true,
+   "status": 200,
+   "ms": 2
+  }
+ ],
+ "mem": {
+  "availableMb": 240
+ },
+ "disk": {
+  "rootFreeGb": 4.64,
+  "tmpFreeGb": 4.64
+ },
+ "db": {
+  "ok": true,
+  "signals": 970,
+  "events": 81439,
+  "prices": 93684,
+  "assets": 51,
+  "pumps": 856,
+  "events1h": 1549,
+  "lastEventAgeMs": 16544,
+  "stuckActive": 0,
+  "orphanEvents": 0,
+  "stuckPumpTracks": 0,
+  "dbBytes": 40812544,
+  "walBytes": 4124152
+ },
+ "backup": {
+  "ok": true,
+  "dir": "/tmp/my-project/backups",
+  "encCount": 12,
+  "zipCount": 12,
+  "newestEncMs": 1790841054274.6213,
+  "newestAnyMs": 1790841054274.6213,
+  "encAgeMs": 1484513.3786621094
+ },
+ "watchdog": {
+  "ok": true,
+  "ver": "p0-watchdog 1.4.6",
+  "modes": {
+   "app": "ok",
+   "liq": "ok",
+   "ws": "ok",
+   "bridge": "ok",
+   "trade": "ok",
+   "sentinel": "ok",
+   "armor": "ok",
+   "cron": "ok",
+   "stable": "ok",
+   "kw": "ok"
+  },
+  "nonOk": 0,
+  "memLevel": "warn",
+  "memAvailableMb": 250,
+  "paused": false
+ },
+ "log": {
+  "windowLines": 2963,
+  "errors": 180,
+  "http500": 0,
+  "oom": 0,
+  "enospc": 0,
+  "hydration": 0,
+  "unhandled": 0,
+  "settlementStalled": 0
+ },
+ "shadow": {
+  "ok": true,
+  "source": "legacy-file",
+  "degraded": true,
+  "fileAgeH": 0,
+  "mode": "shadow",
+  "generatedAt": "2026-10-01T08:14:38.939Z",
+  "stats": {
+   "total": 600,
+   "passSide": 355,
+   "rejectSide": 245,
+   "vetoCount": 322,
+   "tradeCount": 278,
+   "modelSharePct": 36.2,
+   "modelGroundedPct": 100,
+   "avgConfidence": 65,
+   "gateAgreement": 129,
+   "paperOpen": 15,
+   "paperSettled": 738,
+   "recent24h": {
+    "n": 231,
+    "modelSharePct": 47.6,
+    "lastModelAgeH": 7.2,
+    "lastVerdictAgeH": 0.1
+   }
+  },
+  "arms": [
+   {
+    "id": "real-keep",
+    "n": 30,
+    "target": 30,
+    "pct": 100,
+    "starved": false,
+    "fed": null,
+    "lastFedAgeH": null
+   },
+   {
+    "id": "real-veto",
+    "n": 22,
+    "target": 30,
+    "pct": 73,
+    "starved": false,
+    "fed": null,
+    "lastFedAgeH": null
+   },
+   {
+    "id": "paper-keep",
+    "n": 30,
+    "target": 30,
+    "pct": 100,
+    "starved": false,
+    "fed": null,
+    "lastFedAgeH": null
+   },
+   {
+    "id": "paper-veto",
+    "n": 0,
+    "target": 30,
+    "pct": 0,
+    "starved": false,
+    "fed": null,
+    "lastFedAgeH": null
+   }
+  ],
+  "fillPct": 68,
+  "nSum": 82,
+  "tSum": 120,
+  "fenceEntries24hFloor": 468
+ },
+ "rawcal": {
+  "armed": null,
+  "error": "api unreachable",
+  "heartbeatAgeH": 0,
+  "heartbeatAt": "2026-10-01T0815Z ARMED issued=139/340 target=964"
+ },
+ "uptimeSec": 30600,
+ "ver": "nexus-sentinel 1.2.0"
+}

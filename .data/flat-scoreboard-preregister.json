@@ -1,0 +1,17 @@
+{
+ "version": 1,
+ "registeredAt": 1791295253236,
+ "configSha256": "50e772bd78ea0ba13855e9bed4255cef33bb1b95bebfdd5bf0ff8baa951134c5",
+ "config": {
+  "version": "FSB-1.0",
+  "unitUsd": 10,
+  "basisUsd": 1000,
+  "targetDailyPct": 100,
+  "dayBoundary": "Tehran UTC+03:30 (no DST since 2022)",
+  "scoreFormula": "Σ over settled signals of the Tehran day: pnlPercent − (feeUsd+swapUsd)/marginUsd×100 (fee-NET levered %, margin-invariant)",
+  "dollarFormula": "netPct × unitUsd / 100 — exact linear rescale (fees scale with margin)",
+  "dustFilter": "marginUsd ≥ 0.05 (dust rows excluded from % math)",
+  "trailingBars": 30,
+  "feeModel": "per-row measured taker + funding, linear in marginUsd"
+ }
+}

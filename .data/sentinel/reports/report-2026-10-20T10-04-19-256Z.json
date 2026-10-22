@@ -1,0 +1,227 @@
+{
+ "schemaVersion": 1,
+ "kind": "deep",
+ "at": "2026-10-20T09:59:19.836Z",
+ "tehran": "20/10/2026, 13:29:19",
+ "verdict": "AMBER",
+ "anomalies": [
+  {
+   "sev": "warn",
+   "area": "app",
+   "msg": "HTTP probe timeout but TCP port open — warming (dev compile storm), NOT down"
+  },
+  {
+   "sev": "warn",
+   "area": "dev.log",
+   "msg": "31 error lines in recent log window"
+  },
+  {
+   "sev": "warn",
+   "area": "turbopack",
+   "msg": "8 Turbopack panic marker(s) in current boot window — compile pipeline fragile (auto-cure armed)"
+  }
+ ],
+ "services": [
+  {
+   "key": "app",
+   "label": "app :3000",
+   "up": false,
+   "status": null,
+   "ms": 300004,
+   "tcpOpen": true
+  },
+  {
+   "key": "ws",
+   "label": "price-ws :3003",
+   "up": true,
+   "status": 400,
+   "ms": 4
+  },
+  {
+   "key": "bridge",
+   "label": "telegram-bridge :3005",
+   "up": true,
+   "status": 200,
+   "ms": 3
+  },
+  {
+   "key": "liq",
+   "label": "liq :3010",
+   "up": true,
+   "status": 200,
+   "ms": 3
+  },
+  {
+   "key": "trade",
+   "label": "trade :3011",
+   "up": true,
+   "status": 200,
+   "ms": 3
+  },
+  {
+   "key": "watchdog",
+   "label": "p0-watchdog :3020",
+   "up": true,
+   "status": 200,
+   "ms": 3
+  }
+ ],
+ "mem": {
+  "availableMb": 2126
+ },
+ "disk": {
+  "rootFreeGb": 5.18,
+  "tmpFreeGb": 5.18
+ },
+ "db": {
+  "ok": true,
+  "signals": 2898,
+  "events": 80121,
+  "prices": 142357,
+  "assets": 44,
+  "pumps": 2200,
+  "events1h": 496,
+  "lastEventAgeMs": 6249,
+  "stuckActive": 0,
+  "orphanEvents": 0,
+  "stuckPumpTracks": 0,
+  "dbBytes": 64393216,
+  "walBytes": 4260112
+ },
+ "backup": {
+  "ok": true,
+  "dir": "/tmp/my-project/backups",
+  "encCount": 12,
+  "zipCount": 12,
+  "newestEncMs": 1792484529927.1301,
+  "newestAnyMs": 1792484529927.1301,
+  "encAgeMs": 5829295.869873047
+ },
+ "watchdog": {
+  "ok": true,
+  "ver": "p0-watchdog 1.4.9",
+  "modes": {
+   "app": "ok",
+   "liq": "ok",
+   "ws": "ok",
+   "bridge": "ok",
+   "trade": "ok",
+   "sentinel": "ok",
+   "armor": "ok",
+   "cron": "ok",
+   "stable": "ok",
+   "kw": "ok",
+   "mem": "ok",
+   "warm": "ok",
+   "tbt": "ok"
+  },
+  "nonOk": 0,
+  "memLevel": "ok",
+  "memAvailableMb": 2131,
+  "paused": false
+ },
+ "log": {
+  "windowLines": 382,
+  "errors": 31,
+  "http500": 0,
+  "oom": 0,
+  "enospc": 0,
+  "hydration": 0,
+  "unhandled": 0,
+  "settlementStalled": 0,
+  "turbopackPanic": 8
+ },
+ "shadow": {
+  "ok": true,
+  "source": "live-api",
+  "mode": "veto",
+  "generatedAt": "2026-10-20T09:59:19.456Z",
+  "stats": {
+   "total": 6485,
+   "passSide": 3777,
+   "rejectSide": 2708,
+   "vetoCount": 3930,
+   "tradeCount": 2555,
+   "modelSharePct": 43.3,
+   "modelGroundedPct": 100,
+   "avgConfidence": 68.3,
+   "gateAgreement": 1505,
+   "paperOpen": 8,
+   "paperSettled": 1199,
+   "recent24h": {
+    "n": 207,
+    "modelSharePct": 47.3,
+    "lastModelAgeH": 7.2,
+    "lastVerdictAgeH": 0.2
+   }
+  },
+  "arms": [
+   {
+    "id": "real-keep",
+    "n": 30,
+    "target": 30,
+    "pct": 100,
+    "starved": false,
+    "reachable": true,
+    "fed": 1352,
+    "lastFedAgeH": null
+   },
+   {
+    "id": "real-veto",
+    "n": 30,
+    "target": 30,
+    "pct": 100,
+    "starved": false,
+    "reachable": true,
+    "fed": 2425,
+    "lastFedAgeH": null
+   },
+   {
+    "id": "paper-keep",
+    "n": 30,
+    "target": 30,
+    "pct": 100,
+    "starved": false,
+    "reachable": true,
+    "fed": 1207,
+    "lastFedAgeH": null
+   },
+   {
+    "id": "paper-veto",
+    "n": 0,
+    "target": 30,
+    "pct": 0,
+    "starved": false,
+    "reachable": true,
+    "fed": 0,
+    "lastFedAgeH": null
+   }
+  ],
+  "fillPct": 75,
+  "fillPctReach": 75,
+  "nSum": 90,
+  "tSum": 120,
+  "nSumReach": 90,
+  "tSumReach": 120,
+  "fenceEntries24hFloor": 405
+ },
+ "rawcal": {
+  "armed": true,
+  "issued": 453,
+  "issuedTotal": 1864,
+  "target": 2916,
+  "heartbeatAgeH": 0,
+  "heartbeatAt": "2026-10-20T0958Z ARMED issued=453/1864 target=2916"
+ },
+ "cures": {
+  "armed": true,
+  "curing": true,
+  "cures24h": 3,
+  "lastCureAt": "2026-10-20T08:24:19.469Z",
+  "lastCureOutcome": "app-200-post-cure",
+  "failStreak": 0,
+  "baselineMark": 12
+ },
+ "uptimeSec": 81603,
+ "ver": "nexus-sentinel 1.3.2"
+}

@@ -30,8 +30,14 @@ export function Providers({ children }: { children: React.ReactNode }) {
   return (
     <QueryClientProvider client={client}>
       {/* next-auth session context — the operator badge + control-plane
-          mutating cards read the session state from here (Task 34-1) */}
-      <SessionProvider refetchOnWindowFocus={false}>
+          mutating cards read the session state from here (Task 34-1).
+          refetchInterval 60s (2026-10-21, trace 1a15bc29d2bb2c29): during the
+          Turbopack SST-corruption era /api/auth/session transiently served the
+          HTML error page → next-auth client logged CLIENT_FETCH_ERROR and, with
+          no refetch trigger, the badge stayed stuck until a manual refocus.
+          60s self-heal absorbs transient cold-boot blips (mem-guard rescue
+          treadmill) without user interaction. */}
+      <SessionProvider refetchOnWindowFocus={false} refetchInterval={60_000}>
         <SystemBridge />
         {children}
         <SignalDetailHost />

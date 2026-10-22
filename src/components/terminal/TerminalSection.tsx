@@ -10,8 +10,11 @@ import LiqDepthRadarCard from "@/components/terminal/LiqDepthRadarCard";
 import VolRiskCard from "@/components/terminal/VolRiskCard";
 import GateGaugeCard from "@/components/terminal/GateGaugeCard";
 import ShadowVetoCard from "@/components/terminal/ShadowVetoCard";
+import EntryLeversCard from "@/components/terminal/EntryLeversCard";
+import GoldenLaneCard from "@/components/terminal/GoldenLaneCard";
 import FuturesRadarCard from "@/components/terminal/FuturesRadarCard";
 import RawCalCard from "@/components/terminal/RawCalCard";
+import ToobitBridgeCard from "@/components/terminal/ToobitBridgeCard";
 import { useMounted, useNow, useDeviceNow, usePulse } from "@/hooks/usePulse";
 import { fmtClockLocal, localTzLabel } from "@/lib/format";
 import type { EventLevel, SignalEventDTO } from "@/lib/api-types";
@@ -471,6 +474,26 @@ export default function TerminalSection() {
               </NeonBadge>
             </div>
             <div className="space-y-2.5">
+              {/* Task 65 SIZING-MODES — live margin sizing control state.
+                  Backtest 2026-10-02: CONFIDENCE −$10.65 · FLAT$2 −$3.02 · ANTI-MART +$2.99. */}
+              {pulse?.stats?.sizing && (
+                <div className="flex items-center justify-between border-b border-white/5 pb-2 font-terminal text-[10px]">
+                  <span className="uppercase tracking-[0.16em] text-ink-3">SIZING</span>
+                  <span
+                    className={cn(
+                      "font-bold uppercase tracking-[0.1em]",
+                      pulse.stats.sizing.mode === "ANTI_MARTINGALE" ? "text-neon" : pulse.stats.sizing.mode === "FLAT" ? "text-amber-neon" : "text-ink"
+                    )}
+                    title={`flat $${pulse.stats.sizing.flatBase} · anti-base $${pulse.stats.sizing.antiBase} ×${pulse.stats.sizing.decay} · floor $${pulse.stats.sizing.floor}`}
+                  >
+                    {pulse.stats.sizing.mode === "ANTI_MARTINGALE"
+                      ? `ANTI-MART ×${pulse.stats.sizing.decay} · k=${pulse.stats.sizing.consecSl}/${pulse.stats.sizing.consecCap}`
+                      : pulse.stats.sizing.mode === "FLAT"
+                        ? `FLAT $${pulse.stats.sizing.flatBase.toFixed(2)}`
+                        : "CONFIDENCE 2-8%"}
+                  </span>
+                </div>
+              )}
               {STAT_TYPES.map((t) => {
                 const c = counts.get(t.type) ?? 0;
                 return (
@@ -821,6 +844,17 @@ export default function TerminalSection() {
             opinion at the gate fence: shadow adjudication, would-have-won paper
             ledger, Wilson-LB A/B evidence, evidence-gated veto power ── */}
         <ShadowVetoCard />
+        {/* ── ENTRY-LEVERS — late-entry shield (v11.3→v11.4, operator mandate 2026-10-07
+            «کامل و مهندسی شده اجرا کن»): seven deterministic levers from the
+            EQ-89/EQ-90 forensics (+ v11.4 MOMENTUM valve, the EQ-93 TIGHTEN
+            alternative), shadow-journaled on every deploy and promoted
+            to enforce only on own-cohort evidence (n≥100 · avg≤−0.5 · sep≥0.5) ── */}
+        <EntryLeversCard />
+        {/* ── GOLDEN LANE — pre-registered paper evaluation (Task 79; visibility fix
+            EQ-92/EQ-94: the module ran headless since Oct-5 — the operator must
+            SEE the 7d window verdict, rails and K1..K4 to rule on
+            re-register-on-v11.3 vs retire when the window closes) ── */}
+        <GoldenLaneCard />
       </div>
 
       {/* ── SENSOR MATRIX — module bus (2026-09-08 operator order: flow/liq/vol cards
@@ -838,6 +872,9 @@ export default function TerminalSection() {
         <FlowScannerCard />
         <LiqDepthRadarCard />
         <VolRiskCard />
+        {/* ── TOOBIT EXEC BRIDGE — signal-card execution mirror (Task-52: PAPER/LIVE,
+            reconciliation, latency telemetry; read-only panel, key-only control) ── */}
+        <ToobitBridgeCard />
       </div>
     </section>
   );

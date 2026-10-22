@@ -155,6 +155,43 @@ export default function HeroPanel({ stats }: { stats: PlatformStats }) {
   const scanDomain = pulse?.feed?.universe ?? null;
   const setView = useUi((s) => s.setView);
 
+  // TASK-51 lineage readout — after any platform reset the operator must READ
+  // continuity at a glance: boot time of this generation, running commit, and
+  // ledger serial (serial ≈ pre-reset value ⇒ data survived the recycle).
+  const [lineage, setLineage] = useState<{
+    bootAt: string | null;
+    gitSha: string | null;
+    ledgerMaxSerial: number | null;
+  } | null>(null);
+  useEffect(() => {
+    let alive = true;
+    const load = async () => {
+      try {
+        const r = await fetch("/api/healthz", { cache: "no-store" });
+        if (!r.ok) return;
+        const j = (await r.json()) as {
+          bootAt?: string;
+          gitSha?: string | null;
+          lineage?: { ledgerMaxSerial?: number | null };
+        };
+        if (alive)
+          setLineage({
+            bootAt: j.bootAt ?? null,
+            gitSha: j.gitSha ?? null,
+            ledgerMaxSerial: j.lineage?.ledgerMaxSerial ?? null,
+          });
+      } catch {
+        /* fail-open: lineage is metadata, never a gate */
+      }
+    };
+    void load();
+    const t = setInterval(load, 60_000);
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+  }, []);
+
   const pnlPositive = stats.totalPnlUsd >= 0;
 
   // v6.0 TOTAL AUTONOMY: the manual "Deploy AI Signal" path was REMOVED —
@@ -195,6 +232,26 @@ export default function HeroPanel({ stats }: { stats: PlatformStats }) {
             <span className="mx-1.5 text-ink-3">·</span>flow-ranked, event-driven
             <span className="mx-1.5 text-ink-3">·</span>TTL-enforced discipline
           </p>
+
+          {/* TASK-51 lineage strip — continuity you can READ (RESET-0929 doctrine) */}
+          {lineage && (
+            <div
+              className="mt-2 flex flex-wrap items-center gap-x-2 font-terminal text-[10px] uppercase tracking-[0.18em] text-ink-3"
+              aria-label="Generation lineage: boot time, ledger serial, running commit"
+            >
+              <span className="text-violet-neon/80">gen boot {lineage.bootAt ? `${new Date(lineage.bootAt).toISOString().slice(11, 16)}Z` : "--"}</span>
+              <span aria-hidden>·</span>
+              <span>
+                ledger <span className="text-ink-2">#{lineage.ledgerMaxSerial ?? "--"}</span>
+              </span>
+              {lineage.gitSha && (
+                <>
+                  <span aria-hidden>·</span>
+                  <span>{lineage.gitSha}</span>
+                </>
+              )}
+            </div>
+          )}
 
           {/* key stats */}
           <div className="mt-7 grid grid-cols-2 gap-x-4 gap-y-5 border-t border-white/5 pt-5 sm:grid-cols-4">

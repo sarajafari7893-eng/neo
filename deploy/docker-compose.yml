@@ -1,0 +1,121 @@
+# NEXUS//SIGNALS — self-hosted stack (SELFHOST-0929)
+#   cp deploy/.env.example .env && $EDITOR .env
+#   docker compose -f deploy/docker-compose.yml up -d
+#
+# Design: ONE image, many roles (same as the sandbox service map).
+# The platform-lineage spawn chain that kept services alive in the sandbox is
+# REPLACED by compose restart policies (restart: unless-stopped) + healthchecks
+# — that is the structural cure for «هر چند ساعت ریست می‌شود»: there is no
+# external platform to recycle the box anymore.
+#
+# Volumes: the repo root is bind-mounted read-write at the SAME path the code
+# expects (/home/z/my-project) — db/, .data/, logs/ persist on the host.
+
+x-nexus-common: &nexus-common
+  image: nexus-signals:latest
+  working_dir: /home/z/my-project
+  env_file:
+    - ../.env
+  restart: unless-stopped
+  stop_grace_period: 30s
+  logging:
+    driver: json-file
+    options: { max-size: "20m", max-file: "5" }
+
+services:
+  # ── core: Next.js command terminal (Turbopack build, next start) ──────────
+  app:
+    <<: *nexus-common
+    command: bun run start:selfhost
+    ports:
+      - "3000:3000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:3000/api/healthz || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+
+  # ── market data feed (bybit/binance ws → socket.io :3003) ─────────────────
+  price-ws:
+    <<: *nexus-common
+    command: bun mini-services/price-ws/index.ts
+    ports:
+      - "3003:3003"
+    healthcheck:
+      test: ["CMD-SHELL", "code=$$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3003/); [ \"$$code\" = \"400\" ] || [ \"$$code\" = \"200\" ]"]
+      interval: 20s
+      timeout: 6s
+      retries: 5
+      start_period: 20s
+
+  # ── telegram bridge (:3005) — alerts / reports / control ──────────────────
+  bridge:
+    <<: *nexus-common
+    command: bun mini-services/telegram-bridge/index.ts
+    ports:
+      - "3005:3005"
+
+  # ── liquidation feed (:3010) ───────────────────────────────────────────────
+  liq:
+    <<: *nexus-common
+    command: bun mini-services/liq-service/index.ts
+    ports:
+      - "3010:3010"
+
+  # ── trade/paper engine (:3011) ─────────────────────────────────────────────
+  trade:
+    <<: *nexus-common
+    command: bun mini-services/trade-service/index.ts
+    ports:
+      - "3011:3011"
+
+  # ── supervisor-cron (:3015) — sweep/freshness/progress/review/backup ──────
+  cron:
+    <<: *nexus-common
+    command: bun mini-services/supervisor-cron/index.ts
+    ports:
+      - "3015:3015"
+
+  # ── push-armor (:3016) — 10-min git state pushes (durable store) ──────────
+  armor:
+    <<: *nexus-common
+    command: bun mini-services/push-armor/index.ts
+    ports:
+      - "3016:3016"
+    depends_on: [app]
+
+  # ── sentinel (:3030) — one-verdict telemetry + backup ring owner ──────────
+  sentinel:
+    <<: *nexus-common
+    command: bun mini-services/sentinel-service/index.ts
+    ports:
+      - "3030:3030"
+    depends_on: [app]
+
+  # ── headless warm-loop — engine tick driver WITHOUT a browser ─────────────
+  # (the 2026-09-23 «dashboard depends on the browser» cure; on a real box it
+  #  guarantees signals/settlements flow 24/7 even with zero visitors)
+  warm-loop:
+    <<: *nexus-common
+    command: bun mini-services/warm-loop/index.ts
+    depends_on: [app]
+
+  # ── layer-1 guardian (:3020) — probe + heal every service ─────────────────
+  p0-watchdog:
+    <<: *nexus-common
+    command: bun mini-services/p0-watchdog/index.ts
+    ports:
+      - "3020:3020"
+    depends_on: [app, price-ws, bridge, liq, trade, cron, armor, sentinel]
+    # Inside one compose network each service resolves by name; the watchdog's
+    # heal commands spawn processes on ITS container — cross-container healing
+    # is delegated to restart policies, so keep heals advisory here.
+
+# Optional host-level guardian (bash loop) — enable if you want the SAME
+# two-layer watchdog contract as the sandbox:
+#   guardian:
+#     <<: *nexus-common
+#     command: bash scripts/watchdog.sh --loop
+#     pid: "host"          # see README notes before enabling
+#     depends_on: [app]
