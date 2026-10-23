@@ -2,15 +2,15 @@
  "ver": "supervisor-cron 1.6.0",
  "pid": 6187,
  "startedAt": "2026-10-22T23:18:00.186Z",
- "updatedAt": "2026-10-23T15:18:30.270Z",
+ "updatedAt": "2026-10-23T15:28:30.225Z",
  "jobs": {
   "sweep": {
-   "lastRunAt": 1792768710186,
+   "lastRunAt": 1792769310186,
    "nextRunAt": 1792769310186,
    "lastStatus": "ok",
-   "lastDurationMs": 83,
+   "lastDurationMs": 39,
    "lastError": null,
-   "runs": 161,
+   "runs": 162,
    "failures": 0
   },
   "progress": {
@@ -50,38 +50,38 @@
    "failures": 0
   },
   "digest": {
-   "lastRunAt": 1792761612188,
-   "nextRunAt": 1792768812188,
+   "lastRunAt": 1792768812188,
+   "nextRunAt": 1792776012188,
    "lastStatus": "ok",
-   "lastDurationMs": 714,
+   "lastDurationMs": 691,
    "lastError": null,
-   "runs": 8,
+   "runs": 9,
    "failures": 0
   },
   "keepwarm": {
-   "lastRunAt": 1792768710187,
-   "nextRunAt": 1792768710186,
+   "lastRunAt": 1792769310186,
+   "nextRunAt": 1792769610186,
    "lastStatus": "ok",
-   "lastDurationMs": 83,
+   "lastDurationMs": 22,
    "lastError": null,
-   "runs": 243,
+   "runs": 245,
    "failures": 11
   }
  },
  "lastSweep": {
-  "at": "2026-10-23T15:18:30.269Z",
+  "at": "2026-10-23T15:28:30.225Z",
   "verdict": "AMBER",
   "reason": "toobit-bridge doctrine: 2 violation(s) — last=MIRROR-LAG: card=TP1 but intent still OPEN 2722s — pollCards transition should have fired",
   "services": {
    "app": {
     "up": true,
     "status": 200,
-    "ms": 56
+    "ms": 26
    },
    "liq": {
     "up": true,
     "status": 200,
-    "ms": 0
+    "ms": 1
    },
    "trade": {
     "up": true,
@@ -96,17 +96,17 @@
    "watchdog": {
     "up": true,
     "status": 200,
-    "ms": 1
+    "ms": 0
    },
    "sentinel": {
     "up": true,
     "status": 200,
-    "ms": 0
+    "ms": 1
    },
    "ws": {
     "up": true,
     "status": 400,
-    "ms": 2
+    "ms": 1
    },
    "bridge": {
     "up": true,
@@ -144,16 +144,16 @@
   "ok": true
  },
  "lastDigest": {
-  "at": "2026-10-23T13:20:12.902Z",
+  "at": "2026-10-23T15:20:12.879Z",
   "ok": true,
-  "newN": 8
+  "newN": 2
  },
  "lastKeepwarm": {
-  "at": "2026-10-23T15:18:30.270Z",
+  "at": "2026-10-23T15:28:30.208Z",
   "ok": true,
-  "ms": 83,
-  "bootAt": "2026-10-23T15:13:26.999Z",
-  "gitSha": "082853e",
+  "ms": 22,
+  "bootAt": "2026-10-23T15:21:34.826Z",
+  "gitSha": "3153dbe",
   "coldStreak": 0
  },
  "coldStreak": 0,
@@ -165,34 +165,6 @@
  "wsDownStreak": 0,
  "staleStreak": 0,
  "history": [
-  {
-   "id": "keepwarm",
-   "at": 1792759410186,
-   "status": "error",
-   "durationMs": 5,
-   "detail": "HEARTBEAT COLD app:3000 1ms streak=1"
-  },
-  {
-   "id": "keepwarm",
-   "at": 1792759710187,
-   "status": "ok",
-   "durationMs": 27,
-   "detail": "HEARTBEAT OK 26ms boot=12:43:32Z sha=843d47a"
-  },
-  {
-   "id": "sweep",
-   "at": 1792759710187,
-   "status": "ok",
-   "durationMs": 39,
-   "detail": "AMBER: toobit-bridge doctrine: 1 violation(s) — last=NOTIONAL-DELTA: exp=25.00 act=8.20 (6719bps)"
-  },
-  {
-   "id": "keepwarm",
-   "at": 1792760010186,
-   "status": "ok",
-   "durationMs": 19,
-   "detail": "HEARTBEAT OK 19ms boot=12:43:32Z sha=193995d"
-  },
   {
    "id": "keepwarm",
    "at": 1792760310187,
@@ -514,6 +486,34 @@
    "status": "ok",
    "durationMs": 83,
    "detail": "HEARTBEAT OK 83ms boot=15:13:26Z sha=082853e"
+  },
+  {
+   "id": "digest",
+   "at": 1792768812188,
+   "status": "ok",
+   "durationMs": 691,
+   "detail": "digest new=2 settled=2 bridge=ok"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1792769010186,
+   "status": "ok",
+   "durationMs": 20,
+   "detail": "HEARTBEAT OK 20ms boot=15:21:34Z sha=3153dbe"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1792769310186,
+   "status": "ok",
+   "durationMs": 22,
+   "detail": "HEARTBEAT OK 22ms boot=15:21:34Z sha=3153dbe"
+  },
+  {
+   "id": "sweep",
+   "at": 1792769310186,
+   "status": "ok",
+   "durationMs": 39,
+   "detail": "AMBER: toobit-bridge doctrine: 2 violation(s) — last=MIRROR-LAG: card=TP1 but intent still OPEN 2722s — pollCards transition sh"
   }
  ],
  "watchRuns": [
