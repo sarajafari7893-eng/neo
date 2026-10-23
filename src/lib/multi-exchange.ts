@@ -18,8 +18,8 @@
 import { getFeedStatus } from "./market-feed";
 import { gateFetch } from "./fapi-gate";
 import { HL_KEY_ALLOWLIST } from "./hl-allowlist";
-// v12.11 RUNG 0 — Binance futures aggTrade WS ring (see binanceFuturesBatch)
-import { ensureFstreamSubs, fstreamFreshQuotes } from "./binance-fstream";
+// v12.11 RUNG 0 — Binance spot !miniTicker@arr WS ring (see binanceFuturesBatch)
+import { ensureSpotWsRing, spotwsFreshQuotes } from "./binance-spotws";
 
 const TIMEOUT_MS = 6500;
 
@@ -210,31 +210,34 @@ export function robustMedian(quotes: VenueQuote[]): { median: number | null; deg
 
 // v10.16 (a) REAL Binance futures quote — batch /fapi/v1/ticker/24hr once per
 // sweep (15s cache so concurrent sweeps/venues share one call).
-// v12.11 RUNG 0 — FSTREAM aggTrade WS ring (operator mandate: futures-only
-// Binance anchor). BOTH Binance REST planes are 418-banned from this egress
-// while the per-symbol futures TRADE TAPE flows (~214 frames/s on IRYSUSDT,
-// ttfb 186ms — probe 2026-10-23). The ring is rung 0: real-time prints,
-// zero fapi weight, separate ban pool — REST rungs below only fill symbols
-// the ring cannot (not subscribed / no trade in 90s). A fully ring-fed sweep
-// touches ZERO Binance REST — ban-escalation risk structurally removed
-// (Task-50 law).
+// v12.11 RUNG 0 — SPOT-ARR WS RING (operator mandate: Binance anchor from a
+// REAL Binance plane while both REST pools are 418-banned). EVIDENCE CHAIN
+// 2026-10-23: fstream (futures WS) was ATTEMPTED and REFUTED — handshake OK,
+// data MUTED from this egress (sustain probe: 240s ZERO frames on
+// btcusdt@aggTrade with the socket open; the v12.10 p50=30ms reading was a
+// short-window burst artifact — probe kept as re-runnable evidence). The
+// spot WS is the one Binance plane that SUSTAINS here (price-ws runs it for
+// hours as its primary source). Rung 0 = spot-arr prints (real-time, zero
+// REST weight, separate ban pool); REST rungs below fill only what the ring
+// cannot price (futures-only microcaps stay honestly NULL → NO-BINANCE-
+// CONFIRM +12 keeps firing exactly where no Binance ticket exists).
 
 let binanceFutCache: { at: number; data: Map<string, number> } | null = null;
-let lastFstreamLogAt = 0;
+let lastSpotwsLogAt = 0;
 
 async function binanceFuturesBatch(symbols: string[]): Promise<Map<string, number>> {
   const out = new Map<string, number>();
-  // RUNG 0 — live trade prints from the futures tape (fresher than any REST cache)
+  // RUNG 0 — live spot prints from the sustained Binance WS plane
   try {
-    ensureFstreamSubs(symbols);
-    for (const [s, q] of fstreamFreshQuotes(symbols)) out.set(s, q.price);
+    ensureSpotWsRing();
+    for (const [s, q] of spotwsFreshQuotes(symbols)) out.set(s, q.price);
   } catch {
     /* ring never throws — REST rungs below are the safety net */
   }
   if (symbols.length > 0 && out.size === symbols.length) {
-    if (Date.now() - lastFstreamLogAt > 600_000) {
-      lastFstreamLogAt = Date.now();
-      console.log(`ulti-exchange] v12.11 BINANCE venue fully ring-fed (${out.size}/${symbols.length} aggTrade prints ≤90s) — zero Binance REST contact this sweep`);
+    if (Date.now() - lastSpotwsLogAt > 600_000) {
+      lastSpotwsLogAt = Date.now();
+      console.log(`ulti-exchange] v12.11 BINANCE venue fully spotws-fed (${out.size}/${symbols.length} spot prints ≤90s) — zero Binance REST contact this sweep`);
     }
     return out;
   }
