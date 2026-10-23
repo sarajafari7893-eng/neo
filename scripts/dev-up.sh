@@ -158,8 +158,18 @@ echo "app:$code"
 # up to 4 tries x 20s apart, 90s timeout each, fully non-blocking for this
 # script. Page stays compiled in the dev server until the next restart.
 (
+  # v12.11 boot-spike cut (OOM loop 2026-10-23, 4 kernel kills): the `/` cold
+  # compile lands 150-400MB on top of the engine's first cycles. Entering it
+  # with RSS already near the kernel line (~2.2-2.4GB) loses the OOM race —
+  # the manual staged boot survived at 830-1078MB where the warmer boot died
+  # at 2583-2592MB. Guard every try: skip while RSS ≥1850MB, retry next cycle.
   for i in 1 2 3 4; do
     sleep 20
+    r=$(curl -s -m 8 http://localhost:3000/api/healthz 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin).get('rssMB') or 9999)" 2>/dev/null || echo 9999)
+    if [ "${r:-9999}" -ge 1850 ] 2>/dev/null; then
+      echo "[dev-up] dashboard self-warm SKIP (rss=${r}MB ≥1850 — spike guard, v12.11) try $i"
+      continue
+    fi
     c=$(curl -s -m 90 -o /dev/null -w '%{http_code}' http://localhost:3000/ 2>/dev/null || true)
     if [ "$c" = "200" ]; then
       echo "[dev-up] dashboard self-warm OK (try $i)"
@@ -192,6 +202,15 @@ if [ "$code" = "200" ] && [ "$COLD" = "1" ]; then
     sleep 5
   done
   warm_route() {
+    # v12.11 boot-spike cut — same RSS guard as the self-warm: one heavy route
+    # compile at the wrong moment loses the OOM race; skipped routes compile
+    # lazily on first real use instead (a one-time hang, never a kernel kill).
+    local r; r=$(curl -s -m 8 http://localhost:3000/api/healthz 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin).get('rssMB') or 9999)" 2>/dev/null || echo 9999)
+    if [ "${r:-9999}" -ge 1850 ] 2>/dev/null; then
+      echo "[dev-up] boot-warmer SKIP $1 (rss=${r}MB ≥1850 — spike guard, v12.11)"
+      sleep 12
+      return
+    fi
     t0=$(date +%s)
     c=$(curl -s -m 75 -o /dev/null -w '%{http_code}' "http://localhost:3000$1" 2>/dev/null || true)
     echo "[dev-up] boot-warmer warm $1 → $c in $(( $(date +%s) - t0 ))s mem=$(mem)MB"
