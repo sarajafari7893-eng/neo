@@ -2,11 +2,11 @@
  "ver": "supervisor-cron 1.6.0",
  "pid": 6187,
  "startedAt": "2026-10-22T23:18:00.186Z",
- "updatedAt": "2026-10-23T20:08:30.488Z",
+ "updatedAt": "2026-10-23T20:13:30.188Z",
  "jobs": {
   "sweep": {
    "lastRunAt": 1792786110186,
-   "nextRunAt": 1792786110186,
+   "nextRunAt": 1792786710186,
    "lastStatus": "ok",
    "lastDurationMs": 302,
    "lastError": null,
@@ -59,13 +59,13 @@
    "failures": 0
   },
   "keepwarm": {
-   "lastRunAt": 1792786110186,
+   "lastRunAt": 1792786410186,
    "nextRunAt": 1792786410186,
    "lastStatus": "error",
    "lastDurationMs": 2,
-   "lastError": "HEARTBEAT COLD app:3000 1ms streak=1",
-   "runs": 301,
-   "failures": 13
+   "lastError": "HEARTBEAT COLD app:3000 1ms streak=2",
+   "runs": 302,
+   "failures": 14
   }
  },
  "lastSweep": {
@@ -159,14 +159,14 @@
   "newN": 4
  },
  "lastKeepwarm": {
-  "at": "2026-10-23T20:08:30.187Z",
+  "at": "2026-10-23T20:13:30.187Z",
   "ok": false,
   "ms": 1,
   "bootAt": null,
   "gitSha": null,
-  "coldStreak": 1
+  "coldStreak": 2
  },
- "coldStreak": 1,
+ "coldStreak": 2,
  "alertLedger": {
   "sentinel-red": 1792783710858,
   "review-llm-unavailable": 1792754373436,
@@ -175,13 +175,6 @@
  "wsDownStreak": 0,
  "staleStreak": 0,
  "history": [
-  {
-   "id": "sweep",
-   "at": 1792776510186,
-   "status": "ok",
-   "durationMs": 3546,
-   "detail": "RED: sentinel verdict RED"
-  },
   {
    "id": "keepwarm",
    "at": 1792776810186,
@@ -524,6 +517,13 @@
    "status": "ok",
    "durationMs": 302,
    "detail": "RED: app :3000 down"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1792786410186,
+   "status": "error",
+   "durationMs": 2,
+   "detail": "HEARTBEAT COLD app:3000 1ms streak=2"
   }
  ],
  "watchRuns": [
