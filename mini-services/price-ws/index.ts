@@ -64,6 +64,50 @@ let spotLastOkAt = 0;
 // IP means any request may land on it and re-escalate the expiry).
 import { ledgerUnknownScopeBanUntil, writeLedgerBan } from "../_shared/ban-ledger";
 
+// ── v12.10 CASCADE-ALERT — tick-velocity freeze (AUDIT-20261023 follow-up) ──
+// Root cause measured: the app's L3_LIQ_CASCADE layer is LIQUIDATION-STREAM
+// based — structurally silent for microcaps that emit zero forceOrder events
+// (JCT/IRYS forensics), so a −40%/8.5min flush stayed invisible until the
+// deploy was already 359s late. This detector watches the TICK plane itself:
+// a ≥±5% move measured inside a 60s sliding window (≥15s span, ≥3 ticks,
+// price-change deduped) is a live cascade either way (flush OR squeeze) —
+// the engine freezes BOTH-direction deploys for 10min via the ingest route.
+// Detection latency: the window of the tape itself (15-60s), not the 6min
+// rotation lag. Re-fires extend the freeze; 8min per-symbol alert cooldown.
+const CASCADE_WINDOW_MS = 60_000;
+const CASCADE_MOVE_PCT = 5;
+const CASCADE_MIN_SPAN_MS = 15_000;
+const CASCADE_MIN_TICKS = 3;
+const CASCADE_ALERT_COOLDOWN_MS = 8 * 60_000;
+const cascadeRing = new Map<string, Array<{ at: number; price: number }>>();
+const cascadeLastAlert = new Map<string, number>();
+const cascadeLastPrice = new Map<string, number>();
+
+function observeTick(symbol: string, price: number, lane: string): void {
+  if (!(price > 0)) return;
+  if (cascadeLastPrice.get(symbol) === price) return; // unchanged-tick dedupe (bybit heartbeats)
+  cascadeLastPrice.set(symbol, price);
+  const now = Date.now();
+  const ring = cascadeRing.get(symbol) ?? [];
+  ring.push({ at: now, price });
+  while (ring.length > CASCADE_MIN_TICKS && now - ring[0]!.at > CASCADE_WINDOW_MS) ring.shift();
+  cascadeRing.set(symbol, ring);
+  const first = ring[0]!;
+  if (ring.length < CASCADE_MIN_TICKS || now - first.at < CASCADE_MIN_SPAN_MS) return;
+  const movePct = ((price - first.price) / first.price) * 100;
+  if (Math.abs(movePct) < CASCADE_MOVE_PCT) return;
+  if (now - (cascadeLastAlert.get(symbol) ?? 0) < CASCADE_ALERT_COOLDOWN_MS) return;
+  cascadeLastAlert.set(symbol, now);
+  const side = movePct < 0 ? "DOWN" : "UP";
+  console.log(`[price-ws] CASCADE-ALERT ${symbol} ${side} ${movePct.toFixed(2)}% in ${(now - first.at) / 1000}s (${lane}) — freeze posted to engine (both-direction deploys 10min)`);
+  void fetch("http://localhost:3000/api/internal/cascade-alert", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    cache: "no-store",
+    body: JSON.stringify({ symbol, side, movePct: Number(movePct.toFixed(2)), windowMs: now - first.at, lane, at: now }),
+  }).catch(() => {});
+}
+
 // ── v12.8 SPOT-ARR ring — Binance spot WS (rung 2) ──────────────────────────
 // Raw stream frames arrive as the event object itself (no combined-wrapper):
 // { e:"24hrMiniTicker", E, s, c, o, h, l, v, q }. Symbol parity with futures
@@ -101,6 +145,7 @@ function connectSpotWs(): void {
             volume24h: Number(d.q) || 0,
             at: d.E || Date.now(),
           });
+          observeTick(d.s, price, "WS·SPOT"); // v12.10 tick-velocity cascade detector
           lastEventAt = Date.now();
         }
       } catch {
@@ -270,6 +315,7 @@ function connect() {
           volume24h: Number(d.q),
           at: d.E || Date.now(),
         });
+        observeTick(d.s, Number(d.c), "WS PUSH"); // v12.10 tick-velocity cascade detector
         lastEventAt = Date.now();
       } catch {
         /* skip */
@@ -339,6 +385,7 @@ function connectBybit() {
               volume24h: p.volume24h ?? 0,
               at: Date.now(),
             });
+            observeTick(sym, p.price, "WS·BYBIT"); // v12.10 tick-velocity cascade detector
             lastEventAt = Date.now();
           }
         }

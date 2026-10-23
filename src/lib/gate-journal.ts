@@ -93,7 +93,9 @@ export type GateName =
   | "CHASE-EXTREME" // v12.8 AUDIT-20261023 — ≥1.5×ATR extended burst + RSI extreme refused outright (NX-3013 top-tick RSI 87.4 / NX-3020 hole-chase)
   | "REENTRY-WHIPSAW" // v12.8 AUDIT-20261023 — opposite-direction flip <240m after a net-negative stop refused for all machine lanes (NX-3014→NX-3020 −61.2%×2)
   | "FLUSH-EXHAUSTION" // v12.9 AUDIT-NX3046 — deploying WITH a ≥max(12%,1.2×ATR%) 4-bar cascade / SHORT below 20-bar low in a live waterfall / implied SL < 0.5×max-3-bar-range (NX-3046 −40.4% terminal-tick, dead in 23.4s)
-  | "SINGLE-VENUE"; // v12.9 AUDIT-NX3046 — only ONE live venue: cross-venue confirmation impossible, machine deploy refused (JCT 12 deploys/48h on BYBIT-only tape); operator-forced passes tagged
+  | "SINGLE-VENUE" // v12.9 AUDIT-NX3046 — only ONE live venue: cross-venue confirmation impossible, machine deploy refused (JCT 12 deploys/48h on BYBIT-only tape); operator-forced passes tagged
+  | "CASCADE-FREEZE" // v12.10 — price-ws tick-velocity freeze: ≥±5% inside a 60s sliding window (flush OR squeeze) freezes BOTH-direction deploys 10min (L3 liq-stream layer is structurally silent for microcaps; NX-3046 was detected 359s late)
+  | "STALE-BAR"; // v12.10 — stale detection inputs × hot tape: flow-board age beyond calibrated budgets while the live 4-bar tape is moving (NX-3046: 281s stale × −40% flush; NX-3040: 9.7min stale) — refusing to decide on dead structure
 
 export interface GateBlock {
   at: number;
