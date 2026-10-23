@@ -78,21 +78,31 @@ function connectSpotWs(): void {
     };
     ws.onmessage = (ev) => {
       try {
-        const d = JSON.parse(String(ev.data)) as { e?: string; s?: string; c?: string; o?: string; h?: string; l?: string; q?: string; E?: number };
-        if (d.e !== "24hrMiniTicker" || !d.s || !d.s.endsWith("USDT")) return;
-        spotWsLastFrame = Date.now();
-        const price = Number(d.c);
-        if (!(price > 0)) return;
-        prices.set(d.s, {
-          symbol: d.s,
-          price,
-          change24h: d.o ? ((price - Number(d.o)) / Number(d.o)) * 100 : 0,
-          high24h: Number(d.h) || price,
-          low24h: Number(d.l) || price,
-          volume24h: Number(d.q) || 0,
-          at: d.E || Date.now(),
-        });
-        lastEventAt = Date.now();
+        // v12.8.1 — !miniTicker@arr payloads arrive as an ARRAY of miniTicker
+        // objects (measured live: frames with e=undefined when parsed as a
+        // single object). Accept array / combined-wrapper / single-object.
+        const raw = JSON.parse(String(ev.data)) as unknown;
+        const items: Array<{ e?: string; s?: string; c?: string; o?: string; h?: string; l?: string; q?: string; E?: number }> = Array.isArray(raw)
+          ? (raw as Array<{ e?: string; s?: string; c?: string; o?: string; h?: string; l?: string; q?: string; E?: number }>)
+          : raw && typeof raw === "object" && Array.isArray((raw as { data?: unknown }).data)
+            ? ((raw as { data: Array<{ e?: string; s?: string; c?: string; o?: string; h?: string; l?: string; q?: string; E?: number }> }).data)
+            : [raw as { e?: string; s?: string; c?: string; o?: string; h?: string; l?: string; q?: string; E?: number }];
+        for (const d of items) {
+          if (!d || !d.s || !d.s.endsWith("USDT")) continue;
+          spotWsLastFrame = Date.now();
+          const price = Number(d.c);
+          if (!(price > 0)) continue;
+          prices.set(d.s, {
+            symbol: d.s,
+            price,
+            change24h: d.o ? ((price - Number(d.o)) / Number(d.o)) * 100 : 0,
+            high24h: Number(d.h) || price,
+            low24h: Number(d.l) || price,
+            volume24h: Number(d.q) || 0,
+            at: d.E || Date.now(),
+          });
+          lastEventAt = Date.now();
+        }
       } catch {
         /* skip */
       }
