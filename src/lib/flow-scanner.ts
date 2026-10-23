@@ -280,7 +280,8 @@ function analyzeTf(symbol: string, tf: ScanTf, raw: FlowCandle[], funding8h: num
 // ── board state ──
 const board = new Map<string, MtfRollup>();
 let boardLoaded = false;
-let scanCursor = 0;
+// (scanCursor removed in v12.10 — the two-speed rotation picks oldest-board-first,
+//  no fixed cursor: hot lane 5/6 + tail 1/6 of every batch)
 let lastScanAt = 0;
 let scanInFlight = false;
 const shiftLastAt = new Map<string, number>();
@@ -348,9 +349,27 @@ export async function maybeFlowScan(symbols: string[]): Promise<void> {
   scanInFlight = true;
   lastScanAt = Date.now();
   try {
-    const batch: string[] = [];
-    for (let i = 0; i < Math.min(BATCH, symbols.length); i++) batch.push(symbols[(scanCursor + i) % symbols.length]!);
-    scanCursor = (scanCursor + batch.length) % symbols.length;
+    // v12.10 TWO-SPEED ROTATION (AUDIT-20261023 root-cause of «سرعت تشخیص»):
+    // the tracked domain grew to ~900 symbols while the rotation budget stayed
+    // at the 64-symbol design (6/call, 20s) → a full cycle takes ~50min against
+    // the 20min board TTL → peekSymbolFlow() returns null (stale-never-gates)
+    // for MOST of the universe → the MTF deploy guard silently blind. Fix: the
+    // caller now passes the domain VOLUME-RANKED (hot deployable universe
+    // first); this lane owns 5/6 of every batch, the long tail 1 slot — both
+    // oldest-board-first so ages self-balance. Hot lane (64 syms) re-scans in
+    // ~4.3min « well under the TTL; the dust tail rotates slowly but is
+    // liquidity-floored out of deploys anyway.
+    const HOT = 64;
+    const boardAge = (s: string) => {
+      const r = board.get(s);
+      return r ? Date.now() - r.at : Number.POSITIVE_INFINITY;
+    };
+    const oldestFirst = (arr: string[], n: number): string[] =>
+      [...arr].sort((a, b) => boardAge(b) - boardAge(a)).slice(0, Math.max(0, Math.min(n, arr.length)));
+    const head = symbols.slice(0, HOT);
+    const tail = symbols.slice(HOT);
+    const batch: string[] = [...oldestFirst(head, tail.length > 0 ? BATCH - 1 : BATCH), ...oldestFirst(tail, tail.length > 0 ? 1 : 0)];
+    if (batch.length === 0) return;
     for (const symbol of batch) {
       const rollup = await scanSymbol(symbol).catch(() => null);
       if (!rollup) continue;

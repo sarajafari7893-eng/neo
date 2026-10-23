@@ -1,5 +1,5 @@
 // ── FlowRadar Neo multi-exchange consensus (server-only) ──
-// Median price across Binance + OKX + Bybit + Hyperliquid (outlier-resistant).
+// Median price across Binance + OKX + Bybit + Hyperliquid + GATE (outlier-resistant).
 // v10.16 P1 FUTURES PRICE UNIFICATION — every venue now quotes the SAME
 // instrument class the engine trades (USDT-M linear perps), not a spot/perp
 // mix: Binance = real futures batch (the null-price BINANCE quote is gone),
@@ -9,6 +9,11 @@
 // v10.24 Task 34-a: ONLY the Binance futures leg goes through the fapi-gate
 // (weight 40 full-universe ticker, critical lane). OKX/Bybit/Hyperliquid are
 // different hosts with different budgets — they keep their direct fetch.
+// v12.10 VENUE-EXPANSION (AUDIT-20261023 follow-up, operator mandate «وتوی یک
+// ارز ... ریشه‌ای احیا و کالیبره شود»): GATE USDT-futures wired as venue #5 —
+// the coverage probe proved JCT/BTW/MAGMA/IRYS list on Gate while being
+// Binance-absent, so the "single-venue" vetoes were a DATA-COVERAGE artifact,
+// not a market fact. One full-tickers GET per sweep (15s shared cache).
 
 import { getFeedStatus } from "./market-feed";
 import { gateFetch } from "./fapi-gate";
@@ -72,6 +77,40 @@ async function bybitBatch(symbols: string[]): Promise<Map<string, number>> {
   const json = (await res.json()) as { result?: { list?: Array<{ symbol: string; lastPrice: string }> } };
   const want = new Set(symbols);
   for (const row of json.result?.list ?? []) if (want.has(row.symbol)) out.set(row.symbol, Number(row.lastPrice));
+  return out;
+}
+
+// v12.10 VENUE-EXPANSION — Gate USDT-M futures batch (one full-tickers GET,
+// shared 30s cache). "BTCUSDT" → Gate contract "BTC_USDT".
+let gateCache: { at: number; data: Map<string, number> } | null = null;
+
+async function gateBatch(symbols: string[]): Promise<Map<string, number>> {
+  if (gateCache && Date.now() - gateCache.at < 30_000) {
+    const out = new Map<string, number>();
+    for (const s of symbols) {
+      const p = gateCache.data.get(s);
+      if (p) out.set(s, p);
+    }
+    return out;
+  }
+  const out = new Map<string, number>();
+  try {
+    const res = await fetchWithTimeout("https://api.gateio.ws/api/v4/futures/usdt/tickers");
+    if (!res.ok) return out;
+    const rows = (await res.json()) as Array<{ contract: string; last: string }>;
+    const all = new Map<string, number>();
+    for (const r of rows) {
+      const p = Number(r.last);
+      if (Number.isFinite(p) && p > 0) all.set(r.contract.replace("_USDT", "USDT"), p);
+    }
+    gateCache = { at: Date.now(), data: all };
+    for (const s of symbols) {
+      const p = all.get(s);
+      if (p) out.set(s, p);
+    }
+  } catch {
+    /* keep stale/empty — honest nulls downstream */
+  }
   return out;
 }
 
@@ -268,11 +307,12 @@ export async function sweepConsensus(symbols: string[]): Promise<Map<string, Con
   if (inFlight) return inFlight;
 
   inFlight = (async () => {
-    const [binance, okx, bybit, hl] = await Promise.allSettled([binanceFuturesBatch(symbols), okxBatch(symbols), bybitBatch(symbols), hyperliquidAll(symbols)]);
+    const [binance, okx, bybit, hl, gate] = await Promise.allSettled([binanceFuturesBatch(symbols), okxBatch(symbols), bybitBatch(symbols), hyperliquidAll(symbols), gateBatch(symbols)]);
     const binanceMap = binance.status === "fulfilled" ? binance.value : new Map<string, number>();
     const okxMap = okx.status === "fulfilled" ? okx.value : new Map<string, number>();
     const bybitMap = bybit.status === "fulfilled" ? bybit.value : new Map<string, number>();
     const hlMap = hl.status === "fulfilled" ? hl.value : new Map<string, number>();
+    const gateMap = gate.status === "fulfilled" ? gate.value : new Map<string, number>();
     const binanceStatus = getFeedStatus();
 
     const now = Date.now();
@@ -280,6 +320,7 @@ export async function sweepConsensus(symbols: string[]): Promise<Map<string, Con
     if (okxMap.size > 0) venueLastOkAt.set("OKX", now);
     if (bybitMap.size > 0) venueLastOkAt.set("BYBIT", now);
     if (hlMap.size > 0) venueLastOkAt.set("HYPERLIQUID", now);
+    if (gateMap.size > 0) venueLastOkAt.set("GATE", now);
 
     const out = new Map<string, Consensus>();
     for (const sym of symbols) {
@@ -288,6 +329,7 @@ export async function sweepConsensus(symbols: string[]): Promise<Map<string, Con
         { venue: "OKX", price: okxMap.get(sym) ?? null, latencyMs: null, ok: okxMap.has(sym) },
         { venue: "BYBIT", price: bybitMap.get(sym) ?? null, latencyMs: null, ok: bybitMap.has(sym) },
         { venue: "HYPERLIQUID", price: hlMap.get(sym) ?? null, latencyMs: null, ok: hlMap.has(sym) },
+        { venue: "GATE", price: gateMap.get(sym) ?? null, latencyMs: null, ok: gateMap.has(sym) },
       ];
       const prices = quotes.map((q) => q.price).filter((p): p is number => typeof p === "number" && p > 0);
       // v10.30: robust median — rejects outlier venues, refuses impossible midpoints
@@ -316,5 +358,6 @@ export function getConsensusHealth(): Array<{ venue: string; ok: boolean; latenc
     { venue: "OKX", ok: fresh("OKX"), latencyMs: null },
     { venue: "BYBIT", ok: fresh("BYBIT"), latencyMs: null },
     { venue: "HYPERLIQUID", ok: fresh("HYPERLIQUID"), latencyMs: null },
+    { venue: "GATE", ok: fresh("GATE"), latencyMs: null },
   ];
 }

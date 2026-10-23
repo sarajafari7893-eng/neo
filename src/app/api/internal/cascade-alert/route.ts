@@ -9,6 +9,9 @@ import { recordCascadeAlert, cascadeFreezes } from "@/lib/cascade-alerts";
 export const dynamic = "force-dynamic";
 
 export async function POST(req: Request) {
+  // External access is already gated by the proxy CONTROL_GATE (mutations need
+  // x-nexus-key / session; loopback peers pass open — same doctrine as every
+  // other mutating route). price-ws posts from localhost, no extra guard here.
   try {
     const body = (await req.json()) as {
       symbol?: string; side?: string; movePct?: number; windowMs?: number; lane?: string; at?: number;

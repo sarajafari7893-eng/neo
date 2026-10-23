@@ -87,6 +87,8 @@ import { relaySignalEvent, relayArmed, ensureAutoDiscover, sendDirect } from "@/
 import { onsetTagFor, onsetGateViewFor } from "@/lib/volOnset";
 import { volCauseBoost } from "@/lib/volCause";
 import { peekSymbolFlow, ensureSymbolFlow, maybeFlowScan, flowShiftTracking, type MtfRollup } from "@/lib/flow-scanner";
+import { cascadeFreezeActive } from "@/lib/cascade-alerts"; // v12.10 — tick-velocity cascade freeze (price-ws plane)
+import { getSingleVenueProbation } from "@/lib/venue-probation"; // v12.10 — calibrated single-venue re-entry lane
 import { featureScaleOn, loadFeatureStats, rescaleCandidate, featureScaleHealth, noteRescale } from "./feature-scale";
 import { engineFlags } from "@/lib/engine-flags"; // v10.18 phased-consolidation flags (operator option A)
 // v8.1 P1/P2 (operator mandate «P1 و P2 رو کامل اجرا کن»): OI/funding board,
@@ -1676,6 +1678,20 @@ export async function deploySignal(symbol?: string, directionHint?: "LONG" | "SH
     // the gate before the flow stage even runs. Measured from the same 15m
     // candles the candidate was scored on — no extra fetches.
     let chaseNote: string | null = null;
+    // ── v12.10 CASCADE-FREEZE — tick-velocity freeze from the price-ws plane ──
+    // The L3_LIQ_CASCADE layer is liquidation-STREAM based and structurally
+    // silent for microcaps (JCT/IRYS: zero forceOrder events through a −40%
+    // flush) — detection fell to the 6min rotation lag (NX-3046 measured 359s
+    // late). The price-ws detector now watches the TICK plane: ≥±5% inside a
+    // 60s sliding window posts a freeze here; BOTH-direction deploys are
+    // refused while it is live (flush-chase AND squeeze-chase), re-fires
+    // extend. Detection latency: 15-60s of tape, not minutes of rotation.
+    const cascadeFreeze = cascadeFreezeActive(asset.symbol);
+    if (cascadeFreeze.active && cascadeFreeze.info) {
+      const cf = cascadeFreeze.info;
+      void recordGateBlock({ gate: "CASCADE-FREEZE", symbol: asset.symbol, direction: conf.direction, reason: `tick-plane cascade ${cf.side} ${cf.movePct}% inside ${Math.round(cf.windowMs / 1000)}s (${cf.lane}) — both-direction deploys frozen ${Math.max(0, Math.round((cf.until - Date.now()) / 60000))}min more (NX-3046: the −40.4%/8.5min flush was invisible to the liquidation-stream layer; this gate sees it at tick speed)` });
+      return;
+    }
     // ── v12.8 CHASE-EXTREME HARD BLOCK (AUDIT-20261023, operator mandate
     // «اصلاح پیشنهادی را کامل و مهندسی اجرا کن») ──
     // NX-3013 forensics: entered LONG IRYSUSDT at RSI 87.4 on a +18.2%/5-bar
@@ -1736,6 +1752,7 @@ export async function deploySignal(symbol?: string, directionHint?: "LONG" | "SH
     //     pre-event ATR cannot survive the realized vol (NX-3046: implied
     //     ~11% vs 17.5% floor → refuse).
     let flushHardBlock: string | null = null;
+    let fxMoveLive = 0; // v12.10 — hoisted for the STALE-BAR gate below
     if (candles.length >= 22) {
       const fxForming = candles[candles.length - 1]!;
       let fxTrSum = 0;
@@ -1746,6 +1763,7 @@ export async function deploySignal(symbol?: string, directionHint?: "LONG" | "SH
       const fxAtrPct = (fxTrSum / 14 / fxForming.close) * 100;
       const fxWin4 = candles.slice(-4);
       const fxMove = ((fxForming.close - fxWin4[0]!.open) / fxWin4[0]!.open) * 100;
+      fxMoveLive = fxMove;
       let fxMax3Range = 0;
       for (let i = candles.length - 3; i < candles.length; i++) {
         const c = candles[i]!;
@@ -1798,13 +1816,52 @@ export async function deploySignal(symbol?: string, directionHint?: "LONG" | "SH
       if (opts?.forced) {
         noBinanceNote = `SINGLE-VENUE-FORCED (operator override — only ONE live venue ${sole?.venue ?? "?"}, cross-venue confirmation impossible)`;
       } else {
-        void recordGateBlock({ gate: "SINGLE-VENUE", symbol: asset.symbol, direction: conf.direction, reason: `only ONE live venue (${sole?.venue ?? "?"}) — cross-venue confirmation impossible, no Binance ticket (JCT treadmill forensics: 12 deploys/48h on BYBIT-only tape, venue-blind dislocation gate, NX-3046 −61.35% in 23.4s)` });
-        return;
+        // v12.10 CALIBRATED RE-ENTRY (operator mandate: «وتوی یک ارز ... ریشه‌ای
+        // احیا و کالیبره شود») — the veto is no longer a blind ban: a symbol on
+        // the operator's rehabilitation list (EngineSetting
+        // "single-venue-probation") re-enters the machine lane at a HIGHER bar
+        // (+8 surcharge, PROBATION tag, every other gate still applies), and
+        // the structural path (wiring a second venue via the coverage probe)
+        // lifts the block entirely once vCount ≥ 2.
+        const probation = await getSingleVenueProbation();
+        if (probation.enabled && probation.symbols.includes(asset.symbol)) {
+          thrAdj += 8;
+          thrParts.venue = (thrParts.venue ?? 0) + 8;
+          noBinanceNote = `SINGLE-VENUE-PROBATION: ${asset.symbol} on the operator rehabilitation list — sole venue ${sole?.venue ?? "?"}, cross-venue confirmation impossible → eff +8 + PROBATION tag (calibrated re-entry, reversible — structural fix = wiring a second venue)`;
+        } else {
+          void recordGateBlock({ gate: "SINGLE-VENUE", symbol: asset.symbol, direction: conf.direction, reason: `only ONE live venue (${sole?.venue ?? "?"}) — cross-venue confirmation impossible, no Binance ticket (JCT treadmill forensics: 12 deploys/48h on BYBIT-only tape, venue-blind dislocation gate, NX-3046 −61.35% in 23.4s) · rehabilitation paths: ② probation list (EngineSetting single-venue-probation) or ① wire a second venue` });
+          return;
+        }
       }
     } else if (vCount >= 2 && !vBinanceLive) {
       thrAdj += 12;
       thrParts.venue = (thrParts.venue ?? 0) + 12;
       noBinanceNote = `NO-BINANCE-CONFIRM: BINANCE quote null (${vCount} live venues) → eff +12 — anchor venue absent, deploy must clear a higher bar (operator mandate)`;
+    }
+    // ── v12.10 STALE-BAR REFUSAL — stale detection inputs × hot tape ──
+    // Root cause measured (AUDIT-20261023): the flow board rotated the ~900-symbol
+    // domain in ~50min against a 20min TTL → the MTF plane was structurally blind
+    // for most of the universe (NX-3046 decided on a 281s-old snapshot, NX-3040 on
+    // 9.7min). Calibrated refusals — staleness alone is harmless on a quiet tape,
+    // so the refuse fires only when dead inputs meet a moving tape:
+    //   · age >240s × |4-bar move| ≥10%  — the NX-3046 signature (281s × −40%)
+    //   · age >420s × |4-bar move| ≥6%   — moderate stale × moving tape
+    //   · age >900s                      — dead inputs refused regardless of tape
+    const mtfStale = peekSymbolFlow(asset.symbol);
+    if (mtfStale) {
+      const staleAgeS = Math.round((Date.now() - mtfStale.at) / 1000);
+      let staleRefuse: string | null = null;
+      if (staleAgeS > 900) {
+        staleRefuse = `STALE-BAR: flow board ${Math.round(staleAgeS / 60)}min old (>15min hard budget) — refusing to deploy on dead detection inputs regardless of tape`;
+      } else if (staleAgeS > 420 && Math.abs(fxMoveLive) >= 6) {
+        staleRefuse = `STALE-BAR: flow board ${Math.round(staleAgeS / 60)}min old while the live 4-bar tape moved ${fxMoveLive.toFixed(1)}% — stale structure × moving tape refused (NX-3040: 9.7min-stale board)`;
+      } else if (staleAgeS > 240 && Math.abs(fxMoveLive) >= 10) {
+        staleRefuse = `STALE-BAR: flow board ${Math.round(staleAgeS / 60)}min old while the live 4-bar tape moved ${fxMoveLive.toFixed(1)}% (≥10% extreme) — the NX-3046 signature (281s-stale board × −40% flush) refused`;
+      }
+      if (staleRefuse) {
+        void recordGateBlock({ gate: "STALE-BAR", symbol: asset.symbol, direction: conf.direction, reason: staleRefuse });
+        return;
+      }
     }
     // ── v8.0 MULTI-TF FLOW BOARD GUARD (EPOCH-2 operator mandate) ──
     // The research doctrine: HTF carries the bias. A candidate fighting a
@@ -3690,7 +3747,12 @@ export async function tick(force = false): Promise<{ ran: boolean; resolved: num
     // MIN_INTERVAL): full 64-symbol board rotates in ~3.5min instead of ~18min.
     // The operator mandate is flow tracking at high precision AND high speed.
     if (tickCount % 5 === 0 && assets.length > 0) {
-      void maybeFlowScan(assets.map((a) => a.symbol)).catch((e) => console.error("[flow-scan]", e));
+      // v12.10 — VOLUME-RANKED scan domain: the flow scanner now splits hot/tail
+      // (64-symbol deployable universe owns 5/6 of every batch, oldest-board-first),
+      // so the hot lane re-scans in ~4.3min « the 20min TTL instead of the old
+      // ~50min full-domain cycle that left the MTF guard blind for most symbols.
+      const scanDomain = [...assets].sort((a, b) => b.volume24h - a.volume24h).map((a) => a.symbol);
+      void maybeFlowScan(scanDomain).catch((e) => console.error("[flow-scan]", e));
     }
     if (tickCount % 50 === 0) {
       void flowShiftTracking().catch((e) => console.error("[flow-shift]", e));
