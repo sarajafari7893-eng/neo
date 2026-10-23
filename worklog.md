@@ -31898,3 +31898,34 @@ Stage Summary:
 ### Stage Summary
 - هر ۴ توصیه اجرا/مستند شد؛ لغو تلگرام فعال؛ آزمون شبیه‌سازی ریست: صفر OOM
 - گام بعد: نوشتن repo.tar طلایی در OSS پس از verify + commit/push + اسنپ‌شات
+
+---
+Task ID: AUDIT-CONN-SIGNALS-20261023
+Agent: Z.ai Code (NEXUS operator session)
+Task: ①بررسی وضعیت اتصال صرافی‌ها (پایداری بایننس حیاتی) ②ممیزی مهندسی NX-3008/3013/3014/3020 + ریشه‌یابی استاپ دکترین
+
+Work Log:
+- healthz: bootAt=10:17:59Z (uptime 169s!) → سیستم امروز دوباره بوت شده؛ ledger=3029 (۲۵ سیگنال جدید بعد از بازیابی دیروز)
+- dmesg: دو OOM-kill جدید — 10:09:35 (next-server RSS 2.14GB) و 10:17:51 (RSS 2.30GB) → همان زنجیرهٔ恶性循环؛ swap هنوز 0B
+- تست مستقیم REST از سرور: fapi.binance.com=418 («Way too many requests; IP 47.57.232.232 banned until 10:52:58Z»)، spot=200 OK، bybit=200 OK
+- تست مستقیم WS: fstream (futures !miniTicker@arr)=SILENT صفر فریم؛ spot stream.binance.com=!miniTicker@arr=ALIVE (۸ فریم/۸ث) → کل پلن futures بایننس از این IP مرده است، پلن spot زنده
+- liq-service: binance !forceOrder@arr متصل ولی ۱۱ ساعت صفر ایونت؛ bybit 560 ایونت سالم؛ bitget DEGRADED (30016)
+- price-ws: source=WS·BYBIT (binance silent)؛ کد نشان داد WS_URL=fstream → آی‌پی-ساپرس؛ ری‌استارت price-ws (pid 6180→اجرا مجدد) وضعیت را تغییر نداد چون fstream در سطح IP خفه است
+- MarketAsset: کوتیشن BINANCE=null روی همه سمبل‌ها (binanceFuturesBatch=fapi بن شده)؛ BTWUSDT devBps=91.89، هشدارهای دیس-لوکیشن ۹۰-۱۰۵ bps در ایونت‌ها
+- trade-service: بن REST تا 11:02:55Z تمدید شونده + PROBE دوباره بن زد → چرخهٔ بن/پروب فعال
+- ممیزی DB چهار سیگنال: فلو-جیسون هر چهار = «fapi starved — flow measured on BYBIT bridge»؛ cvdNetBase/takerRatio/crowdLS=null؛ mtf cvdPct همه null
+- NX-3008: SHORT IRYS@0.020763 13× در CHOP (گارد L2)؛ پامپ ادامه یافت (0.0207→0.0375=+81%)؛ maxPnl+16% بعد SL −63.05% در 43min
+- NX-3013: LONG IRYS@0.027952 در تاپ‌تیک 03:00:54Z؛ RSI 87.4 (فکتور −8.39 مخالف)؛ chase guard هشدار +18.2%/5bar ولی فقط +6 آستانه؛ SL −61.22% در 10min
+- NX-3014: LONG BTW@1.946035؛ فلو CONFIRMS+10 از پل BYBIT ولی MTF خودش NEUTRAL(−2) و 4h+1h DOWN؛ تگ PHANTOM-FEED؛ ۴۸ ثانیه بعد −4.5% سقوط؛ SL −61.2% در ۱۰۳ ثانیه
+- NX-3020: SHORT BTW@1.706345 (MEAN-REVERT کف فلاش −12%)؛ فاندینگ −0.5%/8h (شورت‌ها شلوغ)؛ بانس +5%؛ SL −61.21% در 23min
+- FillLedger هر ۴: slipBps=0 و refSource=none → تأخیر فید مردود؛ ورود=آخرین تیک؛ مشکل venue-متفاوت بودن فلو است نه تأخیر
+- استاپ دکترین: آخرین دیپلوی NX-3029@10:04:14Z → OOM#1@10:09 → OOM#2@10:17 → بوت 10:17:59 + watchdog pause تا 10:27 + RAW-CAL PACE ALARM («issue stall 65min، armed 0/8») + DD-overlay 9.2% (سایز ×0.5) در ساعت‌های قبل
+- swapon probe: SWAP-BLOCKED (کانتینر بدون دسترسی root) → توصیهٔ P1 دیروز (swapfile 2GB) غیرقابل اجرا؛ باید به restart پیشگیرانهٔ RSS>1900MB توسط mem-guard تغییر کند
+- اقدام ترمیمی: ری‌استارت کنترل‌شدهٔ price-ws (watchdog paused بود؛ spawn دستی با nohup bun --hot) → پورت 3003 برگشت، BYBIT fuel سالم
+
+Stage Summary:
+- حکم اتصال: futures بایننس (fapi REST + fstream WS + forceOrder) = مرده از IP 47.57.232.232 (بن 418 تمدیدشونده + WS ساپرس)؛ spot بایننس (REST+WS) = زنده؛ Bybit/OKX = سالم؛ Bitget = degraded
+- حکم ممیزی: هر ۴ باخت روی میکروکپ‌های دیس-لوکیت با فلوِ جایگزین BYBIT (fapi starved) و ورود در extremum (تاپ پامپ/کف فلاش)؛ کیفیت داده پایین=بله؛ تأخیر فید=خیر (ورود هم‌تیک)؛ جریان فیک=جریانvenue اشتباه روی سمبل بدون کوتیشن بایننس + PHANTOM-FEED فعال
+- استاپ دکترین = OOM×۲ + گرم‌شدن پس از بوت + pace-stall + DD-overlay؛ ریشهٔ بزرگ‌تر زنجیرهٔ OOM درمان‌نشده و swap ناممکن در کانتینر
+- نسخهٔ راه‌حل پیشنهادی: P0-A رینگ WS·SPOT-ARR در price-ws (تست شد زنده) · P0-B بهداشت fapi (Retry-After/backoff/stagger) · P1 DISLOCATION-GATE سخت · P1 surrogate-flow cap (فلو غیر-BINANCE حق CONFIRM ندارد) · P1 chase hard-block (RSI>80+1.5×ATR) · P2 cooldown per-symbol · P1-جایگزین OOM: proactive RSS restart
+- FLAT-10 دست‌نخورده؛ Toobit وارد git نشد؛ commit: AUDIT-CONN-SIGNALS-20261023
