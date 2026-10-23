@@ -183,7 +183,29 @@ async function binanceFuturesBatch(symbols: string[]): Promise<Map<string, numbe
   const out = new Map<string, number>();
   // v10.24 Task 34-a: full-universe /fapi/v1/ticker/24hr — weight 40, gated.
   const json = await gateFetch<Array<{ symbol: string; lastPrice: string }>>("/fapi/v1/ticker/24hr", { priority: "critical", weight: 40, timeoutMs: TIMEOUT_MS });
-  if (!json) return out;
+  if (!json) {
+    // v12.8 AUDIT-20261023 — SPOT-POOL MIRROR rung: measured 10:20-10:35Z the
+    // whole fapi plane is 418-banned from this egress while api.binance.com
+    // (spot — SEPARATE pool) answers 200. A banned fapi poll used to leave the
+    // BINANCE venue null → consensus degraded to 2 venues → dislocation
+    // warnings fired while the engine still deployed. The mirror keeps the
+    // reference venue priced (spot ≈ perp within bps on shared tickers);
+    // futures-only tickers stay null (honest). NOT routed through fapi-gate —
+    // this is the spot pool with its own budget and its own soft backoff.
+    const mirrored = await binanceSpotMirrorBatch();
+    if (mirrored.size > 0) {
+      binanceFutCache = { at: Date.now(), data: mirrored };
+      for (const s of symbols) {
+        const p = mirrored.get(s);
+        if (p) out.set(s, p);
+      }
+      if (Date.now() - lastSpotMirrorLogAt > 600_000) {
+        lastSpotMirrorLogAt = Date.now();
+        console.log(`[multi-exchange] v12.8 BINANCE venue fed by SPOT-POOL MIRROR (${mirrored.size} tickers) — fapi plane banned, spot pool alive`);
+      }
+    }
+    return out;
+  }
   const all = new Map<string, number>();
   for (const row of json) {
     const p = Number(row.lastPrice);
@@ -193,6 +215,39 @@ async function binanceFuturesBatch(symbols: string[]): Promise<Map<string, numbe
   for (const s of symbols) {
     const p = all.get(s);
     if (p) out.set(s, p);
+  }
+  return out;
+}
+
+// v12.8 — spot-pool mirror state (separate budget/pool from fapi, by design)
+let binanceSpotMirrorCache: { at: number; data: Map<string, number> } | null = null;
+let binanceSpotMirrorBannedUntil = 0;
+let lastSpotMirrorLogAt = 0;
+
+async function binanceSpotMirrorBatch(): Promise<Map<string, number>> {
+  if (binanceSpotMirrorCache && Date.now() - binanceSpotMirrorCache.at < 30_000) return binanceSpotMirrorCache.data;
+  if (Date.now() < binanceSpotMirrorBannedUntil) return binanceSpotMirrorCache?.data ?? new Map();
+  const out = new Map<string, number>();
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
+    const res = await fetch("https://api.binance.com/api/v3/ticker/24hr", { signal: ctrl.signal, cache: "no-store", headers: { Connection: "close" } });
+    clearTimeout(t);
+    if (res.status === 418 || res.status === 429) {
+      // own pool, own backoff — 10min soft ban (spot pool historically clean)
+      binanceSpotMirrorBannedUntil = Date.now() + 10 * 60_000;
+      console.warn("[multi-exchange] spot-pool mirror rate-limited — backoff 10min (separate pool from fapi)");
+      return out;
+    }
+    if (!res.ok) return out;
+    const rows = (await res.json()) as Array<{ symbol: string; lastPrice: string }>;
+    for (const r of rows) {
+      const p = Number(r.lastPrice);
+      if (Number.isFinite(p) && p > 0) out.set(r.symbol, p);
+    }
+    binanceSpotMirrorCache = { at: Date.now(), data: out };
+  } catch {
+    /* keep stale/empty — honest nulls downstream */
   }
   return out;
 }

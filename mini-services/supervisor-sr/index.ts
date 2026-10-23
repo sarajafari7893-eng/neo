@@ -28,7 +28,7 @@
 import { Database } from "bun:sqlite";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync, readdirSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
-import { ledgerUnknownScopeBanUntil } from "../_shared/ban-ledger";
+import { ledgerUnknownScopeBanUntil, ledgerPoolBanUntil } from "../_shared/ban-ledger";
 
 const VER = "supervisor-sr 1.0.0";
 const ROOT = "/home/z/my-project";
@@ -302,10 +302,13 @@ async function trackBinance(tradeHealth: SvcProbe | null, liqHealth: SvcProbe | 
   // to 60s AFTER the tracked expiry; the spot/WS probes below are unaffected
   // (different rate-limit planes).
   // v1.2 scope split (ban-ledger v1.1): the tracked end + UNKNOWN-SCOPE
-  // ("_pool") ledger bans still defer the fapi probe — a single NAMED pool
-  // member's ban no longer keeps the whole venue reported BANNED (majority-
-  // clean pool measured 2026-10-20; the probe's own 418 handling re-arms).
-  const knownBan = Math.max(binance.fapiBannedUntil ?? 0, ledgerUnknownScopeBanUntil());
+  // ("_pool") ledger bans still defer the fapi probe.
+  // v12.8 AUDIT-20261023 — NAMED-IP ledger bans now defer the probe too:
+  // measured this morning the egress is effectively ONE IP (47.57.232.232 —
+  // direct curl and probe draw the same address), so a named ban IS our ban
+  // and the old “majority-clean pool” exception let this ping re-poke a live
+  // 418 window (extension spiral). Defer while ANY live ledger entry exists.
+  const knownBan = Math.max(binance.fapiBannedUntil ?? 0, ledgerUnknownScopeBanUntil(), ledgerPoolBanUntil());
   if (Date.now() < knownBan + 60_000) {
     st.fapiRest = "BANNED";
     st.fapiBannedUntil = knownBan;

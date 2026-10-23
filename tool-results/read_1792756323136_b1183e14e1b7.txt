@@ -1,0 +1,827 @@
+     1→/**
+     2→ * NEXUS//SIGNALS — MEM-GUARD v2.0 (port 3017)
+     3→ * Operator mandate 2026-10-15 «راه‌حل مهندسی — MEM-GUARD v2 کامل و مهندسی اجرا کن»
+     4→ *
+     5→ * WHY THIS EXISTS (root-cause chain, evidence-logged 2026-10-15):
+     6→ *  1. next-server dev RSS boot-spike reaches 2.4-2.9GB on this 4GB/no-swap box even
+     7→ *     WITH the EQ-98 caps (V8 768MB + turbopackMemoryLimit 384MiB — caps constrain
+     8→ *     steady-state, not the transient compile+hydrate arena). dmesg 2026-10-15:
+     9→ *     "Out of memory: Killed process 9698 (next-server) anon-rss:2874944kB".
+    10→ *  2. Kernel OOM / platform recycle → the platform restores a STALE filesystem
+    11→ *     checkpoint (observed: git layer back to 09-27 era = engine v10.18, DB back to
+    12→ *     09-27 15:50 era — strat-pause + ~1700-row ledger gone; only PolarFS /tmp and
+    13→ *     the live WAL survived). Nothing verified freshness at boot → the box RAN STALE
+    14→ *     for hours (armor even amended the stale git chain + shipped 2 stale zips).
+    15→ *  3. p0-watchdog tick loop froze after boot (ticks frozen at 1, HTTP serving stale
+    16→ *     state) → no self-heal all morning; the app OOMed twice with nobody watching.
+    17→ *
+    18→ * MEM-GUARD v2 = independent guards in one process:
+    19→ *  ── LAYER 1 · MEMORY GUARD ──
+    20→ *     15s RSS sampling of next-server + MemAvailable ring (240 samples = 1h).
+    21→ *     Boot-spike exempt (120s grace per new app pid), then PREEMPTIVE graceful
+    22→ *     restart BEFORE the kernel kill line (~2.8GB observed): snapshot via push-armor
+    23→ *     → pause p0-watchdog (API + pause-until file) → kill app tree → prune
+    24→ *     .next/dev/cache when avail is low (647MB hydrate was the spike driver) →
+    25→ *     detached `bun run dev` spawn (package.json envelope: V8 768MB + tee -a) →
+    26→ *     health gate /api/pulse ≤120s → release watchdog → Telegram notify.
+    27→ *     Circuit breaker: ≤3 preemptive restarts/3600s → quarantine (alert-only).
+    28→*     v2.3 (Task-43): the breaker counts PREEMPTIVE RSS recycles ONLY — reactive
+    29→*     rescue spawns (app died externally: kernel OOM, platform recycle) are
+    30→*     tracked separately, because the 2026-10-18 OOM storm filled the breaker
+    31→*     with rescues and left the guard blind exactly when the preemptive recycle
+    32→*     was needed most. Quarantine now AUTO-RELEASES when the window ages out.
+    33→ *  ── LAYER 2 · FRESHNESS GUARD ──
+    34→ *     Anti-stale ledger persisted OUTSIDE the git layer on PolarFS
+    35→ *     (/tmp/my-project/mem-guard/freshness.json — survives platform recycles) and
+    36→ *  ── LAYER 4 · ROLLBACK SENTINEL (v2.2 — 2026-10-16 incident class) ──
+    37→ *     INCIDENT: platform recycle 09:27 restored a ~19-day-stale tree (engine
+    38→ *     v10.18, DB 767 rows, git history rolled to 09-26/27) WHILE the box kept
+    39→ *     running. The v2.1 date-based freshness check was BLIND because armor
+    40→ *     kept committing fresh-timestamped snapshots on top of the stale base —
+    41→ *     HEAD dates looked current while the CONTENT was 19 days old. mem-guard
+    42→ *     itself was also down (recycle killed it; nothing re-spawned it).
+    43→ *     v2.2 fixes:
+    44→ *      ① engine-version sentinel — the freshness ledger now records
+    45→ *        ENGINE_VERSION read from src/lib/engine.ts; any divergence from the
+    46→ *        ledger version = tree mutation (rollback/corruption) REGARDLESS of
+    47→ *        commit dates → same remote-recovery choreography.
+    48→ *      ② DB-stale branch (Signal count < 80% of ledger) now AUTO-HEALS via the
+    49→ *        same fetch+reset path (operator mandate 2026-10-16 «مهندسی ریکاوری
+    50→ *        و ایمن‌سازی شود») — was alert-only in v2.1. SQLite safely discards a
+    51→ *        mismatched stale WAL, so the tree-restored db+wal pair is coherent.
+    52→ *      ③ boot-spawn contract: watchdog (owned heal) + dev-up.sh both call
+    53→ *        scripts/mem-guard-up.sh — a recycle can never leave this guard dead
+    54→ *        again (the process runs plain bun, no --hot, so its code also
+    55→ *        survives a disk rollback in memory and can heal FROM memory).
+    56→ *     mirrored into .data/mem-guard/ (travels with armor pushes → offsite).
+    57→ *     Every 5min + at boot: compare HEAD vs ledger; if HEAD is OLDER than the
+    58→ *     ledger's last-known head → stale filesystem detected → verify remote tip
+    59→ *     (ls-remote with armor auth) → fetch --depth=6 + reset --hard to remote tip
+    60→ *     → Telegram notify. DB freshness: Signal count shadow — if live count < 80%
+    61→ *     of ledger value → DB-STALE alert with the newest PolarFS zip runbook
+    62→ *     (auto-swap intentionally NOT automatic in v2.0 — swap requires app downtime
+    63→ *     and is operator-visible; the alert carries the exact zip path).
+    64→ *  ── WATCHDOG SUPERVISION (the hole that burned 2026-10-15 morning) ──
+    65→ *     If p0-watchdog /status mem.at freezes >90s while HTTP still answers (tick
+    66→ *     loop frozen), mem-guard restarts the watchdog itself.
+    67→ *  ── LOG HYGIENE ──
+    68→ *     dev.log > 40MB → gzip → logs/archive/ (keep 7) → truncate (tee -a keeps it
+    69→ *     append-only; without rotation it grows unbounded).
+    70→ *  ── LAYER 3 · SCHEMA-CLIENT GUARD (v2.1 — 2026-10-15 incident class) ──
+    71→ *     Task 37 forensics: platform recycle restored a stale node_modules whose
+    72→ *     generated Prisma client predated the v11.2 beBanked* columns → EVERY
+    73→ *     signal.update with those fields threw PrismaClientValidationError → the
+    74→ *     whole lifecycle froze (no arm/TP/SL/expiry persisted) + BE_TRAIL spammed
+    75→ *     every tick, silently. Guard: every 5min + at boot + after every freshness
+    76→ *     recovery, diff the Signal model fields in prisma/schema.prisma against
+    77→ *     node_modules/.prisma/client/schema.prisma (the client's own copy).
+    78→ *     Mismatch → auto `bunx prisma generate` → re-verify → app restart via the
+    79→ *     full choreography (the running process keeps the stale client in memory —
+    80→ *     a restart is the ONLY way it picks the regenerated client up). 30min
+    81→ *     anti-thrash on the heal; restart goes through the existing breaker.
+    82→ *
+    83→ * HONESTY: mem-guard never fabricates state; every action is logged to
+    84→ * .data/mem-guard/actions.jsonl and notified. FLAT-10/engine untouched.
+    85→ */
+    86→
+    87→import { mkdirSync, writeFileSync, readFileSync, renameSync, existsSync, unlinkSync, statSync, readdirSync, appendFileSync } from "node:fs";
+    88→import * as path from "node:path";
+    89→
+    90→const VER = "mem-guard 2.5.0"; // v2.5.0 trace-1a15ddbdbabf84a9 RAM audit: avail-gated cache prune (preemptive-always wipe manufactured its own pressure → 3.3min restart treadmill); v2.4.0: honor shared pause-until contract
+    91→const ROOT = "/home/z/my-project";
+    92→const PORT = 3019; // 3017=stable-feed (watchdog SVCS), 3018=keep-warm — 3019 is the free slot
+    93→const DIR = `${ROOT}/.data/mem-guard`;
+    94→const POLAR = "/tmp/my-project/mem-guard";
+    95→const STATE = `${DIR}/state.json`;
+    96→const ACTIONS = `${DIR}/actions.jsonl`;
+    97→const HEARTBEAT = `${DIR}/heartbeat`;
+    98→const LOCK = `${DIR}/lock.json`;
+    99→const POLAR_FRESH = `${POLAR}/freshness.json`;
+   100→const MIRROR_FRESH = `${DIR}/freshness.json`;
+   101→const WD_PAUSE_FILE = `${ROOT}/.data/p0-watchdog/pause-until`;
+   102→const REPO = "https://github.com/sarajafari7893-eng/neo.git";
+   103→
+   104→const TICK_MS = 15_000;
+   105→const FRESH_EVERY_TICKS = 20; // 5min
+   106→const SAMPLE_CAP = 240; // 1h ring
+   107→
+   108→// memory thresholds (MB) — RECALIBRATED 2026-10-18 live data (ChunkLoadError death-loop fix):
+   109→//   OLD 10-15 calibration caused a permanent restart loop: today's warm plateau is
+   110→//   2.29-2.35GB (v12.0 graph grew) + ambient services ~1.5GB on a 4GB no-swap sandbox
+   111→//   → avail sat at 500-570MB permanently < old AVAIL_FLOOR 600 → governor fired every
+   112→//   cycle → cold-boot spike ~2.8-2.9GB → kernel OOM → rescue → loop (17 rescues/hour).
+   113→//   kernel kill line ~2.8GB anon-rss (dmesg pid 9698: 2874944kB)
+   114→//   warm plateau (v12.0, fresh cache): 2.29-2.35GB; boot spike (chrome closed): < 2.8GB
+   115→const RSS_ACT = 2600;      // sustained → restart (full-route-compiled plateau measured 2.5GB on 10-18; kernel anon kill ≈ RSS 2.9-3.0)
+   116→const RSS_SUSTAIN_TICKS = 4;
+   117→const RSS_HARD = 2700;     // single tick (post grace) → restart now
+   118→const AVAIL_FLOOR = 300;   // with the 2.5GB app, ambient avail legitimately sits 350-500MB — bias to STAY UP; kernel OOM is the real backstop, guard rescues after
+   119→const BOOT_GRACE_MS = 180_000;
+   120→const RESTARTS_PER_HOUR = 3;
+   121→const CACHE_PRUNE_AVAIL = 900; // prune gate for the rescue path (preemptive restarts ALWAYS prune)
+   122→
+   123→const KEY = (() => {
+   124→  try {
+   125→    const m = readFileSync(`${ROOT}/.env`, "utf8").match(/^NEXUS_CONTROL_KEY=(.*)$/m);
+   126→    return (m?.[1] ?? "").trim().replace(/^["']|["']$/g, "");
+   127→  } catch { return ""; }
+   128→})();
+   129→
+   130→let mem: { availableMb: number; level: string; at: number } = { availableMb: -1, level: "ok", at: 0 };
+   131→let app = { pid: 0, rssMb: -1, firstSeenAt: 0, parentPids: [] as number[] };
+   132→let samples: { t: number; rss: number; avail: number }[] = [];
+   133→let highRssTicks = 0;
+   134→let lowAvailTicks = 0;
+   135→let restarting = false; // single-flight
+   136→let quarantined = false;
+   137→let quarantinedAt = 0;
+   138→let ticks = 0;
+   139→let lastFreshCheckAt = 0;
+   140→let wdFrozenSince = 0;
+   141→let schema = { lastCheckAt: 0, lastResult: "not-checked", lastHealAt: 0, missing: [] as string[] };
+   142→let pendingSchemaRestart = false; // healed at boot (app absent) → restart on first sighting
+   143→let lastRotationDay = "";
+   144→// v2.3.1 Task-46 — telegram notify rate-limits: the OOM churn produced restart
+   145→// pairs + quarantine engage/release ping-pong = ~11 TG messages/hour. The
+   146→// LOG stays complete; only the TELEGRAM mirror is rate-limited.
+   147→let lastRestartNotifyAt = 0; // restart notices ≥30min apart
+   148→let lastQuarantineNotifyAt = 0; // quarantine engage/release notices ≥60min apart
+   149→const BOOT = Date.now();
+   150→const restartTimestamps: number[] = []; // PREEMPTIVE recycles only (v2.3 breaker semantics)
+   151→const rescueTimestamps: number[] = [];  // reactive rescues (app died externally) — never feed the breaker
+   152→
+   153→function tehran(): string {
+   154→  return new Intl.DateTimeFormat("fa-IR", { timeZone: "Asia/Tehran", dateStyle: "short", timeStyle: "medium" }).format(new Date());
+   155→}
+   156→function nowS(): number { return Math.floor(Date.now() / 1000); }
+   157→
+   158→// v2.4.0 (trace 1a15bc29d2bb2c29, Task A) — HONOR the shared pause-until contract.
+   159→// dev-up.sh (operator-driven restart, v8.4 Task-73) writes .data/p0-watchdog/
+   160→// pause-until (+120s) BEFORE it touches next-server; p0-watchdog layer-1 and
+   161→// layer-2 both honor it. mem-guard was the ONLY spawner that ignored it → the
+   162→// 2026-10-20 double-spawn race (mem-guard rescue + dev-up fresh wipe) ran two
+   163→// next-server instances on one .next dir = torn SST files = Turbopack
+   164→// "corrupted database" panic = /api/flows outage (the flow-drought incident).
+   165→// From v2.4.0: when an ACTIVE pause exists, mem-guard stands down on BOTH
+   166→// intervention paths (preemptive restart + absent-rescue) until it expires.
+   167→function selfPauseRemainingSec(): number {
+   168→  try {
+   169→    const pf = parseInt(readFileSync(WD_PAUSE_FILE, "utf8").trim(), 10);
+   170→    if (isNaN(pf)) return 0;
+   171→    const rem = pf - nowS();
+   172→    return rem > 0 ? rem : 0; // expired pauses fall through to the stale janitor below
+   173→  } catch { return 0; /* no pause file — never block on guard errors */ }
+   174→}
+   175→
+   176→function log(lvl: "info" | "warn" | "crit", ev: string, det: Record<string, unknown> = {}) {
+   177→  const line = JSON.stringify({ at: new Date().toISOString(), tehran: tehran(), lvl, ev, ...det });
+   178→  try { appendFileSync(ACTIONS, line + "\n"); } catch { /* never die on logging */ }
+   179→  console.log(`[${tehran()}] ${lvl.toUpperCase()} ${ev} ${JSON.stringify(det)}`);
+   180→}
+   181→
+   182→function persistState() {
+   183→  const body = {
+   184→    ver: VER, pid: process.pid, startedAt: new Date(BOOT).toISOString(), tehran: tehran(),
+   185→    uptimeSec: Math.floor((Date.now() - BOOT) / 1000), ticks,
+   186→    app: { ...app, bootGraceLeftMs: app.firstSeenAt ? Math.max(0, BOOT_GRACE_MS - (Date.now() - app.firstSeenAt)) : null },
+   187→    mem, quarantined, quarantinedAt: quarantined ? quarantinedAt : null,
+   188→    restarts1h: restartTimestamps.length,
+   189→    rescues1h: rescueTimestamps.length,
+   190→    samples: {
+   191→      n: samples.length,
+   192→      rssMin: samples.length ? Math.min(...samples.map(s => s.rss)) : null,
+   193→      rssMax: samples.length ? Math.max(...samples.map(s => s.rss)) : null,
+   194→    },
+   195→    lastFreshCheckAt: lastFreshCheckAt ? new Date(lastFreshCheckAt).toISOString() : null,
+   196→  };
+   197→  try { writeFileSync(`${STATE}.tmp`, JSON.stringify(body, null, 1)); renameSync(`${STATE}.tmp`, STATE); } catch { /* best-effort */ }
+   198→  try { writeFileSync(HEARTBEAT, String(nowS())); } catch { /* best-effort */ }
+   199→}
+   200→
+   201→async function notify(text: string, lvl: "info" | "warn" | "crit" = "info") {
+   202→  log(lvl, "notify", { text: text.slice(0, 120) });
+   203→  try {
+   204→    await fetch("http://127.0.0.1:3005/api/send", {
+   205→      method: "POST", headers: { "content-type": "application/json", "x-nexus-key": KEY },
+   206→      body: JSON.stringify({ text: `🛡 MEM-GUARD v2\n${text}` }), signal: AbortSignal.timeout(8000),
+   207→    });
+   208→  } catch { /* bridge down → log only (honest) */ }
+   209→}
+   210→
+   211→// ── single instance ──────────────────────────────────────────────────────────
+   212→function pidAlive(pid: number): boolean {
+   213→  try { process.kill(pid, 0); return true; } catch { return false; }
+   214→}
+   215→function acquireLock(): boolean {
+   216→  try {
+   217→    if (existsSync(LOCK)) {
+   218→      const prev = JSON.parse(readFileSync(LOCK, "utf8")) as { pid?: number };
+   219→      if (prev.pid && prev.pid !== process.pid && pidAlive(prev.pid)) {
+   220→        console.log(`[${tehran()}] another mem-guard alive (pid ${prev.pid}) — exiting`);
+   221→        return false;
+   222→      }
+   223→    }
+   224→  } catch { /* stale lock → take over */ }
+   225→  mkdirSync(DIR, { recursive: true });
+   226→  writeFileSync(LOCK, JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }));
+   227→  return true;
+   228→}
+   229→
+   230→// ── proc sampling ────────────────────────────────────────────────────────────
+   231→function readMemInfo(): number {
+   232→  try {
+   233→    const m = readFileSync("/proc/meminfo", "utf8").match(/^MemAvailable:\s+(\d+)\s+kB/m);
+   234→    return m ? Math.floor(parseInt(m[1], 10) / 1024) : -1;
+   235→  } catch { return -1; }
+   236→}
+   237→function readRssMb(pid: number): number {
+   238→  try {
+   239→    const s = readFileSync(`/proc/${pid}/status`, "utf8").match(/^VmRSS:\s+(\d+)\s+kB/m);
+   240→    return s ? Math.floor(parseInt(s[1], 10) / 1024) : -1;
+   241→  } catch { return -1; }
+   242→}
+   243→function sh(cmd: string, timeoutS = 30): string {
+   244→  try { return Bun.spawnSync(["bash", "-c", cmd], { stdout: "pipe", stderr: "pipe", timeout: timeoutS * 1000 }).stdout.toString().trim(); }
+   245→  catch { return ""; }
+   246→}
+   247→function findApp(): { pid: number; parents: number[] } | null {
+   248→  const out = sh(`ss -tlnp 2>/dev/null | grep ':3000 ' | grep -o 'pid=[0-9]*' | head -1 | cut -d= -f2`, 10);
+   249→  const pid = parseInt(out, 10);
+   250→  if (!pid || !pidAlive(pid)) return null;
+   251→  const parents: number[] = [];
+   252→  let cur = pid;
+   253→  for (let i = 0; i < 4; i++) {
+   254→    try {
+   255→      const stat = readFileSync(`/proc/${cur}/stat`, "utf8").split(" ");
+   256→      const ppid = parseInt(stat[3], 10);
+   257→      if (!ppid || ppid <= 1) break;
+   258→      parents.push(ppid); cur = ppid;
+   259→    } catch { break; }
+   260→  }
+   261→  return { pid, parents };
+   262→}
+   263→
+   264→// ── LAYER 1: restart choreography ────────────────────────────────────────────
+   265→async function armorSnapshot(reason: string): Promise<boolean> {
+   266→  try {
+   267→    const r = await fetch("http://127.0.0.1:3016/cycle", {
+   268→      method: "POST", headers: { "content-type": "application/json", "x-nexus-key": KEY },
+   269→      body: JSON.stringify({ reason: `mem-guard: ${reason}` }), signal: AbortSignal.timeout(45_000),
+   270→    });
+   271→    log(r.ok ? "info" : "warn", "armor-snapshot", { ok: r.ok, status: r.status, reason });
+   272→    return r.ok;
+   273→  } catch (e) { log("warn", "armor-snapshot-failed", { err: String(e).slice(0, 120), reason }); return false; }
+   274→}
+   275→
+   276→async function pauseWatchdog(seconds: number) {
+   277→  try {
+   278→    await fetch("http://127.0.0.1:3020/pause", {
+   279→      method: "POST", headers: { "content-type": "application/json", "x-nexus-key": KEY },
+   280→      body: JSON.stringify({ seconds }), signal: AbortSignal.timeout(5000),
+   281→    });
+   282→  } catch { /* fall through to file */ }
+   283→  try { mkdirSync(path.dirname(WD_PAUSE_FILE), { recursive: true }); writeFileSync(WD_PAUSE_FILE, String(nowS() + seconds)); } catch { /* best-effort */ }
+   284→  log("info", "watchdog-paused", { seconds });
+   285→}
+   286→async function releaseWatchdog() {
+   287→  try { unlinkSync(WD_PAUSE_FILE); } catch { /* already gone */ }
+   288→  try {
+   289→    await fetch("http://127.0.0.1:3020/pause", {
+   290→      method: "POST", headers: { "content-type": "application/json", "x-nexus-key": KEY },
+   291→      body: JSON.stringify({ seconds: 1 }), signal: AbortSignal.timeout(5000),
+   292→    });
+   293→  } catch { /* best-effort */ }
+   294→  log("info", "watchdog-released", {});
+   295→}
+   296→
+   297→function spawnApp(): void {
+   298→  // package.json dev = NODE_OPTIONS=--max-old-space-size=768 + tee -a dev.log (envelope + append-only logs)
+   299→  sh(`setsid bash -c 'cd ${ROOT} && exec nohup bun run dev >> ${ROOT}/logs/mem-guard-restarts.log 2>&1' < /dev/null >/dev/null 2>&1 &`, 5);
+   300→  log("info", "app-spawned", { envelope: "NODE_OPTIONS 768MB", log: "logs/mem-guard-restarts.log" });
+   301→}
+   302→
+   303→function killAppTree(pid: number, parents: number[]): void {
+   304→  sh(`kill ${[pid, ...parents].join(" ")} 2>/dev/null; sleep 2; kill -9 ${[pid, ...parents].join(" ")} 2>/dev/null; true`, 15);
+   305→  log("info", "app-killed", { pid, parents });
+   306→}
+   307→
+   308→function waitPortFree(timeoutMs: number): boolean {
+   309→  const t0 = Date.now();
+   310→  while (Date.now() - t0 < timeoutMs) {
+   311→    if (!findApp()) return true;
+   312→    Bun.sleepSync(1000);
+   313→  }
+   314→  return false;
+   315→}
+   316→
+   317→function pruneCacheIfNeeded(): boolean {
+   318→  const avail = readMemInfo();
+   319→  if (avail >= 0 && avail < CACHE_PRUNE_AVAIL) {
+   320→    const sz = sh(`du -sm ${ROOT}/.next/dev/cache 2>/dev/null | cut -f1`, 20);
+   321→    sh(`rm -rf ${ROOT}/.next/dev/cache`, 30);
+   322→    log("info", "cache-pruned", { availMb: avail, freedDiskMb: sz });
+   323→    return true;
+   324→  }
+   325→  return false;
+   326→}
+   327→
+   328→async function healthGate(timeoutMs: number): Promise<boolean> {
+   329→  const t0 = Date.now();
+   330→  while (Date.now() - t0 < timeoutMs) {
+   331→    try {
+   332→      const r = await fetch("http://127.0.0.1:3000/api/pulse", { signal: AbortSignal.timeout(8000) });
+   333→      if (r.ok) { log("info", "app-healthy", { afterMs: Date.now() - t0 }); return true; }
+   334→    } catch { /* still booting */ }
+   335→    await Bun.sleep(5000);
+   336→  }
+   337→  return false;
+   338→}
+   339→
+   340→// v2.3 — quarantine auto-release: when the preemptive breaker window ages out
+   341→// (no preemptive recycle in the last hour), the guard re-arms itself instead of
+   342→// sitting alert-only forever (the 2026-10-16→18 quarantine left the RSS
+   343→// governor dead through the whole OOM storm — Task-43 root cause).
+   344→async function maybeReleaseQuarantine(): Promise<void> {
+   345→  if (!quarantined) return;
+   346→  const now = Date.now();
+   347→  while (restartTimestamps.length && now - restartTimestamps[0] > 3_600_000) restartTimestamps.shift();
+   348→  if (restartTimestamps.length < RESTARTS_PER_HOUR) {
+   349→    quarantined = false;
+   350→    log("info", "quarantine-released", { note: "preemptive-restart window aged out — RSS governor re-armed (v2.3: rescues no longer feed this breaker)" });
+   351→    if (now - lastQuarantineNotifyAt >= 3_600_000) {
+   352→      lastQuarantineNotifyAt = now;
+   353→      await notify("✅ MEM-GUARD v2.3: قرنطینهٔ حافظه برداشته شد — نگهبان RSS دوباره مسلح است (ریسکیوهای واکنشی دیگر موجب قرنطینه نمی‌شوند).", "info");
+   354→    } else log("info", "notify-throttled", { cls: "quarantine-release" });
+   355→  }
+   356→}
+   357→
+   358→async function memRestart(reason: string): Promise<void> {
+   359→  if (restarting) { log("warn", "restart-suppressed-inflight", { reason }); return; }
+   360→  // v2.4.0 pause-contract: an operator-driven dev-up restart owns the app window —
+   361→  // never race it (double-writer = SST corruption, see selfPauseRemainingSec).
+   362→  const pauseRem = selfPauseRemainingSec();
+   363→  if (pauseRem > 0) { log("info", "self-paused", { scope: "preemptive-restart", reason, remainSec: pauseRem }); return; }
+   364→  const now = Date.now();
+   365→  while (restartTimestamps.length && now - restartTimestamps[0] > 3_600_000) restartTimestamps.shift();
+   366→  await maybeReleaseQuarantine();
+   367→  if (restartTimestamps.length >= RESTARTS_PER_HOUR) {
+   368→    if (!quarantined) {
+   369→      quarantined = true; quarantinedAt = now;
+   370→      log("crit", "quarantine-engaged", { reason, restarts1h: restartTimestamps.length });
+   371→      if (now - lastQuarantineNotifyAt >= 3_600_000) {
+   372→        lastQuarantineNotifyAt = now;
+   373→        await notify(`⛔ قرنطینه: ${restartTimestamps.length} ری‌استارت در یک ساعت — حافظه مزمن است. اکشن اپراتور لازم است (علت: ${reason}).`, "crit");
+   374→      } else log("info", "notify-throttled", { cls: "quarantine-engage" });
+   375→    }
+   376→    return;
+   377→  }
+   378→  restarting = true;
+   379→  try {
+   380→    log("warn", "restart-begin", { reason, rssMb: app.rssMb, availMb: mem.availableMb });
+   381→    if (now - lastRestartNotifyAt >= 1_800_000) {
+   382→      lastRestartNotifyAt = now;
+   383→      await notify(`♻️ ری‌استارت پیش‌دستانهٔ اپ (علت: ${reason}؛ RSS ${app.rssMb}MB / avail ${mem.availableMb}MB) — اسنپ‌شات armor سپس بوت سبک…`, "warn");
+   384→    } else log("info", "notify-throttled", { cls: "restart" });
+   385→    await armorSnapshot(reason);
+   386→    await pauseWatchdog(240);
+   387→    killAppTree(app.pid, app.parentPids);
+   388→    waitPortFree(15_000);
+   389→    // v2.5.0 (trace 1a15ddbdbabf84a9 RAM audit): PREEMPTIVE-ALWAYS prune removed —
+   390→    // it manufactured the very pressure it responds to. Measured treadmill 10-21:
+   391→    // restart every ~3.3min (avail<300 sustained) → wipe .next/dev/cache → next
+   392→    // boot FULLY cold-recompiles every route (GET / = 18-21s compile each boot) →
+   393→    // compiler spike re-eats ~2GB within minutes → avail<300 again → restart…
+   394→    // The double-writer risk that once justified wiping is closed by the v2.4.0
+   395→    // pause contract (single-writer doctrine). Now: keep the Turbopack cache for
+   396→    // a LIGHT WARM BOOT and prune only when post-kill available memory is
+   397→    // genuinely tight (<600MB) — reading taken AFTER the app freed its RSS,
+   398→    // exactly the moment the old comment called "always generous".
+   399→    try {
+   400→      const pk = readFileSync("/proc/meminfo", "utf8").match(/^MemAvailable:\s+(\d+)\s+kB/m);
+   401→      const postKillMb = pk ? Math.round(Number(pk[1]) / 1024) : -1;
+   402→      if (postKillMb >= 0 && postKillMb < 600) {
+   403→        sh(`rm -rf ${ROOT}/.next/dev/cache`, 30);
+   404→        log("info", "cache-pruned", { mode: "avail-gated", postKillMb });
+   405→      } else {
+   406→        log("info", "cache-kept", { mode: "warm-boot", postKillMb });
+   407→      }
+   408→    } catch { /* best-effort — spawn proceeds regardless */ }
+   409→    spawnApp();
+   410→    app = { pid: 0, rssMb: -1, firstSeenAt: 0, parentPids: [] }; // reset boot grace
+   411→    highRssTicks = 0; lowAvailTicks = 0;
+   412→    const ok = await healthGate(120_000);
+   413→    restartTimestamps.push(Date.now());
+   414→    await releaseWatchdog();
+   415→    if (ok) {
+   416→      log("info", "restart-success", { reason });
+   417→      // v2.3.1: success half of the restart pair is LOG-ONLY — the operator got
+   418→      // the restart notice; a second telegram per restart was pure noise.
+   419→    } else {
+   420→      log("crit", "restart-health-failed", { reason });
+   421→      await notify("❌ اپ پس از ری‌استارت سالم نشد (120s بدون پالس 200). نیاز به بررسی دستی.", "crit");
+   422→    }
+   423→  } catch (e) {
+   424→    log("crit", "restart-error", { err: String(e).slice(0, 200), reason });
+   425→    await releaseWatchdog();
+   426→  } finally {
+   427→    restarting = false;
+   428→    persistState();
+   429→  }
+   430→}
+   431→
+   432→// ── LAYER 2: freshness gate ──────────────────────────────────────────────────
+   433→function armorAuthEnv(): Record<string, string> {
+   434→  try {
+   435→    const tok = readFileSync(`${ROOT}/.env`, "utf8").match(/^GITHUB_TOKEN=(.*)$/m)?.[1]?.trim().replace(/^["']|["']$/g, "") ?? "";
+   436→    if (!tok) return {};
+   437→    const b64 = Buffer.from(`x-access-token:${tok}`).toString("base64");
+   438→    return { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "http.https://github.com/.extraheader", GIT_CONFIG_VALUE_0: `Authorization: Basic ${b64}` };
+   439→  } catch { return {}; }
+   440→}
+   441→function git(args: string[], timeoutMs = 60_000): { ok: boolean; out: string } {
+   442→  try {
+   443→    const p = Bun.spawnSync(["git", ...args], { cwd: ROOT, env: { ...process.env, ...armorAuthEnv() }, stdout: "pipe", stderr: "pipe", timeout: timeoutMs });
+   444→    return { ok: p.exitCode === 0, out: (p.stdout.toString() + p.stderr.toString()).trim() };
+   445→  } catch (e) { return { ok: false, out: String(e) }; }
+   446→}
+   447→
+   448→interface Freshness {
+   449→  lastKnownHead: string; lastKnownHeadAt: string; lastKnownHeadSubject: string;
+   450→  lastKnownEngineVer: string; // v2.2 ROLLBACK SENTINEL — content truth, immune to armor commit-date masking
+   451→  lastDbSignalCount: number; lastDbMaxCreatedAt: string | null;
+   452→  lastSeenAt: string; recoveries: { at: string; from: string; to: string }[];
+   453→}
+   454→function readFresh(): Freshness | null {
+   455→  for (const p of [POLAR_FRESH, MIRROR_FRESH]) {
+   456→    try { if (existsSync(p)) return JSON.parse(readFileSync(p, "utf8")) as Freshness; } catch { /* next */ }
+   457→  }
+   458→  return null;
+   459→}
+   460→function writeFresh(f: Freshness) {
+   461→  for (const p of [POLAR_FRESH, MIRROR_FRESH]) {
+   462→    try { mkdirSync(path.dirname(p), { recursive: true }); writeFileSync(p, JSON.stringify(f, null, 1)); } catch { /* best-effort */ }
+   463→  }
+   464→}
+   465→/** v2.2 ROLLBACK SENTINEL — the engine version the TREE currently carries.
+   466→ *  Commit dates lie (armor re-commits the stale base with fresh timestamps);
+   467→ *  the engine version string is content truth. */
+   468→function diskEngineVer(): string {
+   469→  try {
+   470→    const src = readFileSync(`${ROOT}/src/lib/engine.ts`, "utf8");
+   471→    const m = src.match(/ENGINE_VERSION\s*=\s*"([^"]+)"/);
+   472→    return m?.[1] ?? "";
+   473→  } catch { return ""; }
+   474→}
+   475→
+   476→function dbSignalStat(): { count: number; maxCreated: string | null } {
+   477→  try {
+   478→    const { Database } = (require as any)("bun:sqlite") as { Database: new (p: string) => { exec(s: string): void; prepare(s: string): { get(...a: unknown[]): Record<string, unknown> }; close(): void } };
+   479→    const db = new Database(`${ROOT}/db/custom.db`);
+   480→    db.exec("PRAGMA busy_timeout=5000");
+   481→    const c = db.prepare("SELECT COUNT(*) c FROM Signal").get().c as number;
+   482→    const m = db.prepare("SELECT MAX(createdAt) m FROM Signal").get().m as string | null;
+   483→    db.close();
+   484→    return { count: c, maxCreated: m };
+   485→  } catch { return { count: -1, maxCreated: null }; }
+   486→}
+   487→
+   488→/** v2.2 — the shared remote-recovery choreography (used by BOTH the date-based
+   489→ *  staleness path and the new engine-version sentinel + DB-stale auto-heal). */
+   490→async function recoverFromRemote(ledgerHead: string, why: string): Promise<"recovered" | "fetch-failed" | "reset-failed" | "remote-agrees"> {
+   491→  const h0 = git(["rev-parse", "HEAD"]);
+   492→  const sha = h0.ok ? h0.out.split("\n")[0].trim() : "";
+   493→  const remote = git(["ls-remote", REPO, "main"], 45_000);
+   494→  const remoteSha = remote.ok ? remote.out.split("\t")[0].trim() : "";
+   495→  if (!remoteSha || remoteSha === sha) return "remote-agrees";
+   496→  const fetched = git(["fetch", "--depth=6", "origin", remoteSha], 240_000);
+   497→  if (!fetched.ok) { await notify(`⚠️ ROLLBACK-SENTINEL (${why}): stale تشخیص داده شد ولی fetch remote ناموفق بود — دستی بررسی شود.`, "crit"); return "fetch-failed"; }
+   498→  const reset = git(["reset", "--hard", remoteSha], 60_000);
+   499→  if (!reset.ok) { await notify(`❌ ROLLBACK-SENTINEL (${why}): reset شکست خورد: ${reset.out.slice(0, 100)}`, "crit"); return "reset-failed"; }
+   500→  const fresh = readFresh();
+   501→  if (fresh) {
+   502→    fresh.recoveries.push({ at: new Date().toISOString(), from: sha.slice(0, 8), to: remoteSha.slice(0, 8) });
+   503→    if (fresh.recoveries.length > 20) fresh.recoveries = fresh.recoveries.slice(-20);
+   504→    writeFresh(fresh);
+   505→  }
+   506→  const h1 = git(["log", "-1", "--format=%cI|%s", remoteSha]);
+   507→  const headDate = h1.ok ? (h1.out.split("|")[0] ?? "") : "";
+   508→  await notify(`🧬 ROLLBACK-SENTINEL (${why}): درخت به عقب برگشته بود (${why === "engine-version" ? `موتور دیسک ${diskEngineVer() || "?"} ≠ لجر ${fresh?.lastKnownEngineVer ?? "?"}` : `HEAD ${sha.slice(0, 8)} قدیمی‌تر از لجر ${ledgerHead.slice(0, 8)}`}) — به remote ${remoteSha.slice(0, 8)} (${headDate.slice(0, 16)}) بازنشانی شد. regen کلاینت + ری‌استارت اپ در جریان.`, "warn");
+   509→  // tree reset can change prisma/schema.prisma → regenerate the client BEFORE
+   510→  // the app keeps running on it (Task 37 incident class), then restart the app
+   511→  // to load both the new code and the new client. The running app always holds
+   512→  // the OLD code in memory after a rollback → restart is unconditional.
+   513→  await schemaClientGate("post-rollback-recovery");
+   514→  if (app.pid > 0) await memRestart("rollback-sentinel: tree recovered from remote");
+   515→  else pendingSchemaRestart = true;
+   516→  log("info", "rollback-recovered", { to: remoteSha.slice(0, 8), why });
+   517→  return "recovered";
+   518→}
+   519→
+   520→async function freshnessGate(): Promise<void> {
+   521→  lastFreshCheckAt = Date.now();
+   522→  const h0 = git(["rev-parse", "HEAD"]);
+   523→  if (!h0.ok) { log("warn", "fresh-head-unreadable", {}); return; }
+   524→  let sha = h0.out.split("\n")[0].trim();
+   525→  const info = git(["log", "-1", "--format=%cI|%s", sha]);
+   526→  let headDate = info.out.split("|")[0] ?? "";
+   527→  let headSubject = info.out.split("|")[1] ?? "";
+   528→  const fresh = readFresh();
+   529→  const diskVer = diskEngineVer();
+   530→  const dbStat = dbSignalStat();
+   531→  let action = "none";
+   532→
+   533→  // ── v2.2 SENTINEL ①: content truth — engine version divergence = rollback,
+   534→  // even when armor's fresh-timestamped commits make HEAD look current.
+   535→  if (fresh && fresh.lastKnownEngineVer && diskVer && fresh.lastKnownEngineVer !== diskVer) {
+   536→    log("crit", "engine-version-rollback-detected", { disk: diskVer, ledger: fresh.lastKnownEngineVer });
+   537→    const r = await recoverFromRemote(fresh.lastKnownHead, "engine-version");
+   538→    if (r === "recovered") { action = "recovered-from-remote(engine-version)"; }
+   539→    else if (r === "remote-agrees") { await notify("⚠️ نسخهٔ موتور دیسک با لجر فرق دارد ولی remote هم همین نسخه را دارد — لجر به‌روزرسانی می‌شود (احتمالاً deploy عمدی).", "warn"); }
+   540→    // re-read post-recovery state
+   541→    const h1 = git(["rev-parse", "HEAD"]);
+   542→    if (h1.ok) sha = h1.out.split("\n")[0].trim();
+   543→    const i1 = git(["log", "-1", "--format=%cI|%s", sha]);
+   544→    headDate = i1.ok ? (i1.out.split("|")[0] ?? headDate) : headDate;
+   545→    headSubject = i1.ok ? (i1.out.split("|")[1] ?? headSubject) : headSubject;
+   546→  } else if (fresh && fresh.lastKnownHead && fresh.lastKnownHead !== sha) {
+   547→    // ── classic date-based staleness (kept from v2.1) ──
+   548→    const ledgerMs = Date.parse(fresh.lastKnownHeadAt);
+   549→    const headMs = Date.parse(headDate);
+   550→    if (!isNaN(ledgerMs) && !isNaN(headMs) && headMs < ledgerMs - 60_000) {
+   551→      log("warn", "stale-filesystem-detected", { head: sha.slice(0, 8), headDate, ledgerHead: fresh.lastKnownHead.slice(0, 8), ledgerDate: fresh.lastKnownHeadAt });
+   552→      const r = await recoverFromRemote(fresh.lastKnownHead, "head-date");
+   553→      if (r === "recovered") action = "recovered-from-remote";
+   554→      else if (r === "remote-agrees") action = "remote-agrees-stale";
+   555→      const h2 = git(["rev-parse", "HEAD"]);
+   556→      if (h2.ok) sha = h2.out.split("\n")[0].trim();
+   557→    }
+   558→  }
+   559→
+   560→  // ── v2.2 SENTINEL ②: DB-stale AUTO-HEAL (was alert-only in v2.1 — operator
+   561→  // mandate 2026-10-16). Signal rows are never pruned by design, so a >20%
+   562→  // drop is always a rollback artifact, never housekeeping. The same tree
+   563→  // reset restores db/custom.db (+wal) from the remote; SQLite discards a
+   564→  // mismatched stale WAL on next open, so the restored pair is coherent.
+   565→  const prevCount = fresh?.lastDbSignalCount ?? -1;
+   566→  if (prevCount > 0 && dbStat.count >= 0 && dbStat.count < prevCount * 0.8 && action === "none") {
+   567→    log("crit", "db-rollback-detected", { live: dbStat.count, ledger: prevCount });
+   568→    const r = await recoverFromRemote(fresh!.lastKnownHead, "db-count");
+   569→    action = r === "recovered" ? "recovered-from-remote(db-count)" : `db-stale-${r}`;
+   570→    const after = dbSignalStat();
+   571→    if (r !== "recovered") {
+   572→      await notify(`🗄 DB-STALE: سیگنال‌های زنده ${dbStat.count} < ۸۰٪ لجر (${prevCount}) و بازیابی خودکار نشد (${r}) — آخرین zip کامل: /tmp/my-project/backups/ — دستی بررسی شود.`, "crit");
+   573→    } else {
+   574→      await notify(`🗄 بازیابی DB کامل شد: ${dbStat.count} → ${after.count} ردیف.`, "warn");
+   575→    }
+   576→  }
+   577→
+   578→  const finalFresh: Freshness = {
+   579→    lastKnownHead: sha,
+   580→    lastKnownHeadAt: isNaN(Date.parse(headDate)) ? new Date().toISOString() : new Date(Date.parse(headDate)).toISOString(),
+   581→    lastKnownHeadSubject: headSubject,
+   582→    lastKnownEngineVer: diskVer || fresh?.lastKnownEngineVer || "",
+   583→    lastDbSignalCount: Math.max(dbStat.count, 0),
+   584→    lastDbMaxCreatedAt: dbStat.maxCreated,
+   585→    lastSeenAt: new Date().toISOString(),
+   586→    recoveries: fresh?.recoveries ?? [],
+   587→  };
+   588→  writeFresh(finalFresh);
+   589→  log("info", "freshness-ok", { head: sha.slice(0, 8), headDate, engineVer: diskVer, dbSignals: dbStat.count, action });
+   590→}
+   591→
+   592→// ── LAYER 3: schema-client gate (v2.1 — stale-Prisma-client incident class) ──
+   593→function signalModelFields(p: string): Set<string> {
+   594→  try {
+   595→    const src = readFileSync(p, "utf8");
+   596→    const m = src.match(/model Signal \{([\s\S]*?)\n\}/);
+   597→    if (!m) return new Set();
+   598→    const out = new Set<string>();
+   599→    for (const line of m[1].split("\n")) {
+   600→      const t = line.trim();
+   601→      if (!t || t.startsWith("//") || t.startsWith("@@") || t.startsWith("@")) continue;
+   602→      const name = t.split(/\s+/)[0];
+   603→      if (name && /^[a-zA-Z_]\w*$/.test(name)) out.add(name);
+   604→    }
+   605→    return out;
+   606→  } catch { return new Set(); }
+   607→}
+   608→
+   609→/** Diff prisma/schema.prisma vs the generated client's own schema copy.
+   610→ *  Returns true when a heal happened (client was stale, regenerate succeeded)
+   611→ *  and the running app must be restarted to load the fresh client. */
+   612→async function schemaClientGate(reason: string): Promise<boolean> {
+   613→  schema.lastCheckAt = Date.now();
+   614→  const src = signalModelFields(`${ROOT}/prisma/schema.prisma`);
+   615→  const cli = signalModelFields(`${ROOT}/node_modules/.prisma/client/schema.prisma`);
+   616→  if (src.size === 0) { schema.lastResult = "source-unreadable"; log("warn", "schema-source-unreadable", {}); return false; }
+   617→  if (cli.size === 0) { schema.lastResult = "client-unreadable"; }
+   618→  const missing = [...src].filter(f => !cli.has(f));
+   619→  const extra = [...cli].filter(f => !src.has(f));
+   620→  if (missing.length === 0 && extra.length === 0) {
+   621→    schema.lastResult = "match"; schema.missing = [];
+   622→    return false;
+   623→  }
+   624→  schema.missing = missing;
+   625→  schema.lastResult = `mismatch (missing-in-client: ${missing.slice(0, 6).join(",") || "none"} | stale-extra: ${extra.slice(0, 6).join(",") || "none"})`;
+   626→  log("crit", "schema-client-mismatch", { reason, missing: missing.slice(0, 10), extra: extra.slice(0, 10), note: "app update() with these fields throws PrismaClientValidationError → lifecycle freeze + per-tick event spam (2026-10-15 incident)" });
+   627→  if (Date.now() - schema.lastHealAt < 30 * 60_000) {
+   628→    log("warn", "schema-heal-throttled", { lastHealMinAgo: Math.round((Date.now() - schema.lastHealAt) / 60_000) });
+   629→    return false;
+   630→  }
+   631→  schema.lastHealAt = Date.now();
+   632→  sh(`cd ${ROOT} && bunx prisma generate >/dev/null 2>&1`, 240);
+   633→  const cli2 = signalModelFields(`${ROOT}/node_modules/.prisma/client/schema.prisma`);
+   634→  const stillMissing = [...src].filter(f => !cli2.has(f));
+   635→  if (stillMissing.length === 0 && cli2.size > 0) {
+   636→    schema.lastResult = "healed"; schema.missing = [];
+   637→    log("info", "schema-client-healed", { reason, regenerated: missing.length });
+   638→    if (app.pid === 0) pendingSchemaRestart = true; // boot probe: app not up yet → restart on first tick sighting
+   639→    await notify(`🧬 SCHEMA-CLIENT GUARD: کلاینت Prisma stale بود (ستون‌های ${missing.slice(0, 3).join(",")}… نبود) — بازتولید شد (${reason}). اپ برای بارگذاری کلاینت جدید ری‌استارت می‌شود.`, "warn");
+   640→    return true;
+   641→  }
+   642→  schema.lastResult = `heal-failed (${stillMissing.slice(0, 4).join(",")})`;
+   643→  await notify(`❌ SCHEMA-CLIENT: بازتولید کلاینت مشکل را حل نکرد (${stillMissing.slice(0, 3).join(",")}…) — بررسی دستی لازم است.`, "crit");
+   644→  return false;
+   645→}
+   646→
+   647→// ── watchdog frozen supervision ──────────────────────────────────────────────
+   648→async function watchdogSupervise(): Promise<void> {
+   649→  try {
+   650→    const r = await fetch("http://127.0.0.1:3020/status", { signal: AbortSignal.timeout(4000) });
+   651→    if (!r.ok) throw new Error(String(r.status));
+   652→    const st = await r.json() as { mem?: { at?: number } };
+   653→    const at = st.mem?.at ?? 0;
+   654→    if (at && Date.now() - at > 90_000) {
+   655→      if (!wdFrozenSince) { wdFrozenSince = Date.now(); log("warn", "watchdog-tick-frozen-suspected", { memAtAgeMs: Date.now() - at }); }
+   656→      else if (Date.now() - wdFrozenSince > 120_000) {
+   657→        wdFrozenSince = 0;
+   658→        log("crit", "watchdog-frozen-restarting", {});
+   659→        sh(`pid=$(ss -tlnp 2>/dev/null | grep ':3020 ' | grep -o 'pid=[0-9]*' | head -1 | cut -d= -f2); [ -n "$pid" ] && kill $pid; sleep 2; kill -9 $pid 2>/dev/null; true`, 15);
+   660→        sh(`setsid bash -c 'cd ${ROOT}/mini-services/p0-watchdog && exec nohup bun --hot index.ts >> ${ROOT}/logs/p0-watchdog-service.log 2>&1' < /dev/null >/dev/null 2>&1 &`, 5);
+   661→        await notify("🔄 p0-watchdog منجمد بود (tick loop) — توسط MEM-GUARD ری‌استارت شد.", "warn");
+   662→      }
+   663→    } else wdFrozenSince = 0;
+   664→  } catch { wdFrozenSince = 0; /* watchdog fully down → its own heal path handles; do not double-heal */ }
+   665→}
+   666→
+   667→// ── log hygiene ──────────────────────────────────────────────────────────────
+   668→function logHygiene(): void {
+   669→  const day = new Date().toISOString().slice(0, 10);
+   670→  try {
+   671→    const st = statSync(`${ROOT}/dev.log`);
+   672→    if (st.size > 40 * 1024 * 1024) {
+   673→      mkdirSync(`${ROOT}/logs/archive`, { recursive: true });
+   674→      const dest = `${ROOT}/logs/archive/dev-${day}-${nowS()}.log.gz`;
+   675→      writeFileSync(dest, Bun.gzipSync(readFileSync(`${ROOT}/dev.log`)));
+   676→      writeFileSync(`${ROOT}/dev.log`, "");
+   677→      log("info", "devlog-rotated", { bytes: st.size, dest });
+   678→    }
+   679→  } catch { /* no dev.log yet */ }
+   680→  if (day !== lastRotationDay) {
+   681→    lastRotationDay = day;
+   682→    try {
+   683→      const arch = `${ROOT}/logs/archive`;
+   684→      const files = readdirSync(arch).filter(f => f.startsWith("dev-")).sort();
+   685→      while (files.length > 7) { const f = files.shift(); if (f) { unlinkSync(`${arch}/${f}`); log("info", "archive-pruned", { f }); } }
+   686→    } catch { /* best-effort */ }
+   687→  }
+   688→}
+   689→
+   690→// ── main tick (self-reaping chain — one failed tick can never kill the loop) ─
+   691→async function tick(): Promise<void> {
+   692→  ticks++;
+   693→  mem = { availableMb: readMemInfo(), level: "ok", at: Date.now() };
+   694→  mem.level = mem.availableMb < 350 ? "crit" : mem.availableMb < 600 ? "warn" : "ok";
+   695→  await maybeReleaseQuarantine(); // v2.3 — auto-release when the preemptive window ages out
+   696→
+   697→  const found = findApp();
+   698→  if (found) {
+   699→    if (found.pid !== app.pid) {
+   700→      app = { pid: found.pid, rssMb: readRssMb(found.pid), firstSeenAt: Date.now(), parentPids: found.parents };
+   701→      highRssTicks = 0; lowAvailTicks = 0;
+   702→      log("info", "app-pid-seen", { pid: found.pid, parents: found.parents.slice(0, 2) });
+   703→    } else {
+   704→      app.rssMb = readRssMb(found.pid);
+   705→      app.parentPids = found.parents;
+   706→    }
+   707→    samples.push({ t: Date.now(), rss: app.rssMb, avail: mem.availableMb });
+   708→    if (samples.length > SAMPLE_CAP) samples = samples.slice(-SAMPLE_CAP);
+   709→
+   710→    const bootGrace = Date.now() - app.firstSeenAt < BOOT_GRACE_MS;
+   711→    if (!bootGrace && !restarting) {
+   712→      if (app.rssMb >= RSS_HARD) highRssTicks = RSS_SUSTAIN_TICKS;
+   713→      else if (app.rssMb >= RSS_ACT) highRssTicks++; else highRssTicks = 0;
+   714→      if (mem.availableMb >= 0 && mem.availableMb < AVAIL_FLOOR && app.rssMb > 1200) lowAvailTicks++; else lowAvailTicks = 0;
+   715→      if (highRssTicks >= RSS_SUSTAIN_TICKS || lowAvailTicks >= 3) {
+   716→        const why = highRssTicks >= RSS_SUSTAIN_TICKS ? `RSS ${app.rssMb}MB ≥ ${RSS_ACT}MB sustained` : `avail ${mem.availableMb}MB < ${AVAIL_FLOOR}MB sustained`;
+   717→        await memRestart(why);
+   718→      }
+   719→    } else if (bootGrace && (app.rssMb >= RSS_HARD || (mem.availableMb >= 0 && mem.availableMb < 300))) {
+   720→      log("warn", "boot-spike-observed", { rssMb: app.rssMb, availMb: mem.availableMb, note: "grace active — observe only (kernel OOM risk window)" });
+   721→    }
+   722→  } else if (!restarting) {
+   723→    app = { pid: 0, rssMb: -1, firstSeenAt: 0, parentPids: [] };
+   724→    if (ticks % 4 === 0) { // ~1min of app-absence → rescue (watchdog primary, mem-guard secondary)
+   725→      // v2.4.0 pause-contract: during an operator-driven dev-up window the app is
+   726→      // EXPECTED to be absent — spawning here would be the second writer.
+   727→      const pauseRem = selfPauseRemainingSec();
+   728→      if (pauseRem > 0) {
+   729→        log("info", "self-paused", { scope: "absent-rescue", remainSec: pauseRem, note: "external spawner owns the app window (dev-up contract)" });
+   730→      } else {
+   731→      log("warn", "app-absent", { availMb: mem.availableMb });
+   732→      await pauseWatchdog(240);
+   733→      pruneCacheIfNeeded();
+   734→      spawnApp();
+   735→      const ok = await healthGate(120_000);
+   736→      await releaseWatchdog();
+   737→      // v2.3: rescue spawns are REACTIVE (app died externally — kernel OOM,
+   738→      // platform recycle). They must NEVER feed the PREEMPTIVE RSS breaker:
+   739→      // the 2026-10-18 OOM storm kept this guard breaker-blocked exactly when
+   740→      // the preemptive recycle was needed most (Task-43 root cause).
+   741→      rescueTimestamps.push(Date.now());
+   742→      if (rescueTimestamps.length > 20) rescueTimestamps.shift();
+   743→      log(ok ? "info" : "crit", "app-rescue-" + (ok ? "ok" : "failed"), { rescues1h: rescueTimestamps.length });
+   744→      } // v2.4.0 pause-contract else
+   745→    }
+   746→  }
+   747→
+   748→  if (ticks % FRESH_EVERY_TICKS === 0) await freshnessGate();
+   749→  if (ticks % FRESH_EVERY_TICKS === 10) {
+   750→    // LAYER 3 periodic probe (offset from freshness so both never collide)
+   751→    const healed = await schemaClientGate("periodic");
+   752→    if (healed && app.pid > 0) await memRestart("schema-client healed (periodic probe)");
+   753→    else if (pendingSchemaRestart && app.pid > 0) { pendingSchemaRestart = false; await memRestart("schema-client healed (pending restart)"); }
+   754→  }
+   755→  await watchdogSupervise();
+   756→  logHygiene();
+   757→  persistState();
+   758→}
+   759→
+   760→function scheduleTick() {
+   761→  setTimeout(async () => {
+   762→    try { await tick(); } catch (e) { try { log("crit", "tick-error", { err: String(e).slice(0, 200) }); } catch { /* */ } }
+   763→    scheduleTick();
+   764→  }, TICK_MS);
+   765→}
+   766→
+   767→// ── HTTP ─────────────────────────────────────────────────────────────────────
+   768→function keyOk(req: Request): boolean {
+   769→  const k = req.headers.get("x-nexus-key") ?? "";
+   770→  if (!KEY || !k || k.length !== KEY.length) return false;
+   771→  let diff = 0;
+   772→  for (let i = 0; i < KEY.length; i++) diff |= k.charCodeAt(i) ^ KEY.charCodeAt(i);
+   773→  return diff === 0;
+   774→}
+   775→
+   776→Bun.serve({
+   777→  port: PORT,
+   778→  async fetch(req) {
+   779→    const url = new URL(req.url);
+   780→    if (url.pathname === "/health") return Response.json({ ok: true, ver: VER, pid: process.pid, uptimeSec: Math.floor((Date.now() - BOOT) / 1000) });
+   781→    if (url.pathname === "/status") {
+   782→      return Response.json({
+   783→        ok: true, ver: VER, pid: process.pid, uptimeSec: Math.floor((Date.now() - BOOT) / 1000), tehran: tehran(), ticks,
+   784→        app: { ...app, bootGraceLeftMs: app.firstSeenAt ? Math.max(0, BOOT_GRACE_MS - (Date.now() - app.firstSeenAt)) : null },
+   785→        mem, quarantined, quarantinedAt: quarantined ? quarantinedAt : null,
+   786→        restarts1h: restartTimestamps.length,
+   787→        rescues1h: rescueTimestamps.length,
+   788→        samples: { n: samples.length, rssMaxMb: samples.length ? Math.max(...samples.map(s => s.rss)) : null, availMinMb: samples.length ? Math.min(...samples.map(s => s.avail)) : null },
+   789→        freshness: { lastCheckAt: lastFreshCheckAt ? new Date(lastFreshCheckAt).toISOString() : null, ledger: readFresh() },
+   790→        schema: { ...schema, lastCheckAt: schema.lastCheckAt ? new Date(schema.lastCheckAt).toISOString() : null, lastHealAt: schema.lastHealAt ? new Date(schema.lastHealAt).toISOString() : null },
+   791→        watchdogFrozenSuspected: wdFrozenSince > 0,
+   792→        recentActions: (() => { try { return readFileSync(ACTIONS, "utf8").trim().split("\n").slice(-20).map(l => { try { return JSON.parse(l); } catch { return l; } }); } catch { return []; } })(),
+   793→      });
+   794→    }
+   795→    if (req.method === "POST" && !keyOk(req)) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+   796→    if (req.method === "POST" && url.pathname === "/api/restart") {
+   797→      let reason = "manual";
+   798→      try { const b = await req.json() as { reason?: string }; if (b?.reason) reason = String(b.reason).slice(0, 80); } catch { /* default */ }
+   799→      void memRestart(reason);
+   800→      return Response.json({ ok: true, note: "restart choreography started (async)" });
+   801→    }
+   802→    if (req.method === "POST" && url.pathname === "/api/freshness-check") { await freshnessGate(); return Response.json({ ok: true }); }
+   803→    if (req.method === "POST" && url.pathname === "/api/snapshot") { const ok = await armorSnapshot("manual-request"); return Response.json({ ok }); }
+   804→    if (req.method === "POST" && url.pathname === "/api/schema-check") {
+   805→      const healed = await schemaClientGate("manual-request");
+   806→      if (healed && app.pid > 0) void memRestart("schema-client healed (manual probe)");
+   807→      return Response.json({ ok: true, healed, schema });
+   808→    }
+   809→    return new Response("not found", { status: 404 });
+   810→  },
+   811→});
+   812→
+   813→// ── boot ─────────────────────────────────────────────────────────────────────
+   814→if (!acquireLock()) process.exit(0);
+   815→mkdirSync(DIR, { recursive: true }); mkdirSync(POLAR, { recursive: true });
+   816→log("info", "boot", { ver: VER, port: PORT, pid: process.pid });
+   817→void (async () => {
+   818→  try {
+   819→    const pf = parseInt(readFileSync(WD_PAUSE_FILE, "utf8").trim(), 10);
+   820→    if (!isNaN(pf) && pf < nowS() && nowS() - pf > 600) { unlinkSync(WD_PAUSE_FILE); log("info", "stale-pause-file-removed", {}); }
+   821→  } catch { /* absent */ }
+   822→  await freshnessGate();
+   823→  const healedBoot = await schemaClientGate("boot");
+   824→  if (healedBoot && app.pid > 0) await memRestart("schema-client healed (boot probe)");
+   825→})();
+   826→scheduleTick();
+   827→

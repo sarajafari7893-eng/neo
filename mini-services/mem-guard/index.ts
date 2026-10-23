@@ -105,17 +105,24 @@ const TICK_MS = 15_000;
 const FRESH_EVERY_TICKS = 20; // 5min
 const SAMPLE_CAP = 240; // 1h ring
 
-// memory thresholds (MB) — RECALIBRATED 2026-10-18 live data (ChunkLoadError death-loop fix):
-//   OLD 10-15 calibration caused a permanent restart loop: today's warm plateau is
-//   2.29-2.35GB (v12.0 graph grew) + ambient services ~1.5GB on a 4GB no-swap sandbox
-//   → avail sat at 500-570MB permanently < old AVAIL_FLOOR 600 → governor fired every
-//   cycle → cold-boot spike ~2.8-2.9GB → kernel OOM → rescue → loop (17 rescues/hour).
-//   kernel kill line ~2.8GB anon-rss (dmesg pid 9698: 2874944kB)
-//   warm plateau (v12.0, fresh cache): 2.29-2.35GB; boot spike (chrome closed): < 2.8GB
-const RSS_ACT = 2600;      // sustained → restart (full-route-compiled plateau measured 2.5GB on 10-18; kernel anon kill ≈ RSS 2.9-3.0)
+// memory thresholds (MB) — RECALIBRATED 2026-10-23 (AUDIT-20261023, operator
+// mandate «اصلاح پیشنهادی را کامل و مهندسی اجرا کن» — OOM-loop P1 replacement,
+// swap is impossible in this container: swapon probe = SWAP-BLOCKED):
+//   dmesg TODAY: kernel killed next-server at anon-rss 2.14GB (10:09:35Z) and
+//   2.30GB (10:17:51Z) — the kill line has moved DOWN from the 10-18 era
+//   (~2.9-3.0GB) because the 15-service fleet + buffers now consume the rest
+//   of the 4GB box (ambient avail 350-550MB). The old RSS_ACT 2600 / HARD
+//   2700 sat ABOVE today's kill line → the kernel won every race.
+//   Steady-state warm RSS measured 2.05-2.15GB (healthz 10:21Z: rssMB 2113,
+//   heapTotal 415MB — the mass is native, not V8).
+//   NEW line: sustained 2300 (60s) → graceful preemptive recycle BEFORE the
+//   cliff; single-tick hard 2500. AVAIL_FLOOR 300→380 as a second tripwire.
+//   Treadmill guard: steady 2.15 < 2300 with 150MB margin; boot grace 180s
+//   unchanged; RESTARTS_PER_HOUR breaker unchanged.
+const RSS_ACT = 2300;      // sustained (4 ticks = 60s) → preemptive graceful recycle (kill line measured 2.14-2.30GB on 10-23)
 const RSS_SUSTAIN_TICKS = 4;
-const RSS_HARD = 2700;     // single tick (post grace) → restart now
-const AVAIL_FLOOR = 300;   // with the 2.5GB app, ambient avail legitimately sits 350-500MB — bias to STAY UP; kernel OOM is the real backstop, guard rescues after
+const RSS_HARD = 2500;     // single tick (post grace) → restart now (kill line +200MB margin)
+const AVAIL_FLOOR = 380;   // with the ~2.1GB app + fleet, ambient avail sits 350-550MB — today's kills happened inside avail valleys; trip earlier, recycle gracefully instead of feeding the OOM loop
 const BOOT_GRACE_MS = 180_000;
 const RESTARTS_PER_HOUR = 3;
 const CACHE_PRUNE_AVAIL = 900; // prune gate for the rescue path (preemptive restarts ALWAYS prune)

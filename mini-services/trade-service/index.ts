@@ -120,6 +120,15 @@ const REST_BAN_SANITY_MS = 2 * 3600_000; // single reported window never pauses 
 const REST_SOFT_BAN_MS = 60_000; // 418/429 without a "banned until" body — back off anyway
 let restBannedUntil: number | null = null; // ms epoch — ALL REST polling paused until then
 let restProbeConsecutiveFails = 0; // v4.9 — probe streak, resets on a clean 2xx
+// v12.8 AUDIT-20261023 — ESCALATING PROBE BACKOFF. Measured this morning:
+// the egress is effectively ONE IP (47.57.232.232 — direct curl + probe both
+// draw it), so the “majority-clean rotating pool” assumption no longer holds
+// and every ban-end probe re-drew the SAME banned IP → 418 → Binance EXTENDED
+// the ban (10:49→11:02 spiral). Fix: after a ban window clears, the probe
+// waits a 5min end-tail grace + escalating backoff (10→20→40→80→120min cap,
+// jittered) scaled by the consecutive-fail streak; a clean 2xx resets to
+// full-rate polling. One extension per backoff rung instead of every cycle.
+let probeResumeNotBefore = 0;
 
 function stateFor(sym: string): SymbolState {
   let st = symbols.get(sym);
@@ -277,6 +286,7 @@ async function restPollSymbol(sym: string): Promise<void> {
     const rows = (await res.json()) as RestTrade[];
     if (!Array.isArray(rows) || rows.length === 0) return;
     restProbeConsecutiveFails = 0; // clean 2xx — the pool serves us again
+    probeResumeNotBefore = 0; // v12.8 — full-rate polling restored
     for (const r of rows) {
       record({ e: "aggTrade", s: sym, p: r.p, q: r.q, m: r.m, T: r.T }, r.a);
     }
@@ -303,8 +313,18 @@ function restPollTick(): void {
       return;
     }
     restBannedUntil = null;
-    console.log("[tape] REST ban window elapsed — PROBE poll (full resume only on 2xx)");
+    // v12.8 — escalating probe backoff before the first post-ban poke: 5min
+    // end-tail grace (Binance extends on requests landing near the end) +
+    // 2^n escalation on the fail streak (10min→120min cap) + ≤60s jitter.
+    const backoffMin = restProbeConsecutiveFails > 0
+      ? Math.min(10 * Math.pow(2, Math.min(restProbeConsecutiveFails - 1, 4)), 120)
+      : 0;
+    const waitMs = 5 * 60_000 + backoffMin * 60_000 + Math.floor(Math.random() * 60_000);
+    probeResumeNotBefore = Date.now() + waitMs;
+    console.log(`[tape] REST ban window elapsed — probe resume scheduled in +${Math.round(waitMs / 60_000)}min (fail streak ${restProbeConsecutiveFails} → backoff ${backoffMin}min + 5min tail grace, v12.8 escalating probe)`);
   }
+  // v12.8 — while the post-ban probe window has not elapsed yet, stay silent
+  if (restBannedUntil === null && Date.now() < probeResumeNotBefore) return;
   const list = [...watch];
   if (list.length === 0) return;
   for (let i = 0; i < Math.min(REST_BATCH, list.length); i++) {

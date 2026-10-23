@@ -1,17 +1,29 @@
 // ── NEXUS price-ws (:3003, socket.io) — sub-second price push ──────────────
 // Fuel priority (honest labeling, Task 35):
 //   1. WS PUSH     — Binance futures miniTicker combined stream
-//   2. WS·BYBIT    — Bybit v5 public linear tickers WS (SECOND EXCHANGE —
+//   2. WS·SPOT     — Binance SPOT !miniTicker@arr WS (v12.8 AUDIT-20261023:
+//                    measured 10:30Z — fstream (futures) delivers ZERO frames
+//                    from this egress while stream.binance.com (spot) is
+//                    ALIVE (8 frames/8s direct test). Spot lives in a separate
+//                    rate/ban pool — feeding it as rung-2 restores Binance
+//                    price parity while the futures plane is IP-suppressed,
+//                    instead of jumping straight to BYBIT and losing the
+//                    reference venue. Same row shape; spot symbols that have
+//                    no futures twin simply never arrive (BYBIT covers those).
+//   3. WS·BYBIT    — Bybit v5 public linear tickers WS (SECOND EXCHANGE —
 //                    independent IP/rate budget, keeps live data flowing while
 //                    Binance fstream/fapi are IP-suppressed or 418-banned)
-//   3. WS·REST 2.5S— Binance fapi /ticker/24hr poll (ban-aware, v10.7)
-//   4. WS OFFLINE  — everything down; badge never lies
+//   4. WS·REST 2.5S— Binance fapi /ticker/24hr poll (ban-aware, v10.7)
+//   5. WS OFFLINE  — everything down; badge never lies
 // Universe auto-syncs from the terminal pulse every 5min.
 
 import { Server } from "socket.io";
 
 const PORT = 3003;
 const WS_URL = "wss://fstream.binance.com/stream?streams=!miniTicker@arr";
+// v12.8 AUDIT-20261023 — SPOT-ARR ring: raw spot all-market miniTicker WS.
+// ALIVE from this egress while fstream is silent (measured + verified live).
+const SPOT_WS_URL = "wss://stream.binance.com:9443/ws/!miniTicker@arr";
 const REST_URL = "https://fapi.binance.com/fapi/v1/ticker/24hr";
 // v12.2 TASK-52 — SPOT-MIRROR rung: api.binance.com lives in a SEPARATE
 // rate-limit/ban pool from fapi.binance.com. While the fapi pool is banned
@@ -33,8 +45,10 @@ interface PriceRow {
 }
 
 const prices = new Map<string, PriceRow>();
-let source: "WS PUSH" | "WS·BYBIT" | "WS·REST 2.5S" | "WS·REST·SPOT" | "WS OFFLINE" = "WS PUSH";
+let source: "WS PUSH" | "WS·SPOT" | "WS·BYBIT" | "WS·REST 2.5S" | "WS·REST·SPOT" | "WS OFFLINE" = "WS PUSH";
 let lastWsFrame = 0;
+// v12.8 — spot-arr ring state
+let spotWsLastFrame = 0;
 let lastEventAt: number | null = null;
 // v10.7 ban-awareness (2026-09-17 dashboard audit): Binance 418/429 IP bans
 // auto-extend when the REST fallback keeps hammering. Respect retry-after,
@@ -49,6 +63,50 @@ let spotLastOkAt = 0;
 // defer resume while ANY pool IP is still banned (NAT lottery — one banned
 // IP means any request may land on it and re-escalate the expiry).
 import { ledgerUnknownScopeBanUntil, writeLedgerBan } from "../_shared/ban-ledger";
+
+// ── v12.8 SPOT-ARR ring — Binance spot WS (rung 2) ──────────────────────────
+// Raw stream frames arrive as the event object itself (no combined-wrapper):
+// { e:"24hrMiniTicker", E, s, c, o, h, l, v, q }. Symbol parity with futures
+// tickers is 1:1 for USDT pairs that exist on both planes (BTCUSDT…);
+// futures-only tickers simply never arrive here and stay on BYBIT fuel.
+function connectSpotWs(): void {
+  try {
+    const ws = new WebSocket(SPOT_WS_URL);
+    ws.onopen = () => {
+      spotWsLastFrame = Date.now();
+      console.log("[price-ws] spot !miniTicker@arr WS open (v12.8 ring-2)");
+    };
+    ws.onmessage = (ev) => {
+      try {
+        const d = JSON.parse(String(ev.data)) as { e?: string; s?: string; c?: string; o?: string; h?: string; l?: string; q?: string; E?: number };
+        if (d.e !== "24hrMiniTicker" || !d.s || !d.s.endsWith("USDT")) return;
+        spotWsLastFrame = Date.now();
+        const price = Number(d.c);
+        if (!(price > 0)) return;
+        prices.set(d.s, {
+          symbol: d.s,
+          price,
+          change24h: d.o ? ((price - Number(d.o)) / Number(d.o)) * 100 : 0,
+          high24h: Number(d.h) || price,
+          low24h: Number(d.l) || price,
+          volume24h: Number(d.q) || 0,
+          at: d.E || Date.now(),
+        });
+        lastEventAt = Date.now();
+      } catch {
+        /* skip */
+      }
+    };
+    ws.onclose = () => {
+      console.log("[price-ws] spot arr stream closed — reconnect 5s");
+      setTimeout(connectSpotWs, 5000);
+    };
+    ws.onerror = () => {};
+  } catch (err) {
+    console.error("[price-ws] spot connect error", err);
+    setTimeout(connectSpotWs, 5000);
+  }
+}
 
 // ── Bybit tier state (Task 35 — second reputable exchange) ─────────────────
 let bybLastFrame = 0;
@@ -296,20 +354,23 @@ setInterval(() => {
 }, 20_000);
 
 connect();
+connectSpotWs(); // v12.8 — spot ring opens alongside the futures ring (whichever flows, fuels)
 connectBybit();
 
-// stall watchdog → fuel priority (binance WS > bybit WS > REST > OFFLINE)
+// stall watchdog → fuel priority (binance futures WS > binance spot WS > bybit WS > REST > OFFLINE)
 setInterval(() => {
   const wsAlive = Date.now() - lastWsFrame <= STALL_MS;
+  const spotWsAlive = Date.now() - spotWsLastFrame <= STALL_MS;
   const bybAlive = Date.now() - bybLastFrame <= STALL_MS;
   const banned = Date.now() < restBannedUntil;
   let next: typeof source;
   if (wsAlive) next = "WS PUSH";
+  else if (spotWsAlive) next = "WS·SPOT";
   else if (bybAlive) next = "WS·BYBIT";
   else if (banned) next = Date.now() - spotLastOkAt <= 30_000 ? "WS·REST·SPOT" : "WS OFFLINE";
   else next = "WS·REST 2.5S";
   if (source !== next) {
-    console.log(`[price-ws] source → ${next}${!wsAlive && bybAlive ? " (binance silent — bybit fuel)" : ""}${banned && !wsAlive && !bybAlive && next === "WS OFFLINE" ? ` (REST ban until ${new Date(restBannedUntil).toISOString()})` : ""}${next === "WS·REST·SPOT" ? " (SPOT-MIRROR fuel rung, Task-52)" : ""}`);
+    console.log(`[price-ws] source → ${next}${!wsAlive && spotWsAlive ? " (futures fstream silent — spot-arr ring fuel, v12.8)" : ""}${!wsAlive && !spotWsAlive && bybAlive ? " (binance silent — bybit fuel)" : ""}${banned && !wsAlive && !spotWsAlive && !bybAlive && next === "WS OFFLINE" ? ` (REST ban until ${new Date(restBannedUntil).toISOString()})` : ""}${next === "WS·REST·SPOT" ? " (SPOT-MIRROR fuel rung, Task-52)" : ""}`);
     source = next;
   }
 }, 5000);

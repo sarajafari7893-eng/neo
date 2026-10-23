@@ -493,8 +493,26 @@ export async function scoreFlow(symbol: string, direction: "LONG" | "SHORT", pri
 
   // OI-notional weighting (v4.5): deep books trusted more
   const oiWeight = m.oiValueUsd ? Math.max(0.5, Math.min(1.2, Math.sqrt(m.oiValueUsd / 50_000_000))) : 1;
-  const score = Math.round(Math.max(-25, Math.min(25, raw * oiWeight)));
+  let score = Math.round(Math.max(-25, Math.min(25, raw * oiWeight)));
   if (Math.abs(oiWeight - 1) >= 0.15) reasons.push(`flow weighted ×${oiWeight.toFixed(2)} by OI notional ${fmtUsdShort(m.oiValueUsd ?? 0)} — deep-book flow trusted`);
+
+  // ── v12.8 SURROGATE-FLOW CAP (AUDIT-20261023, operator mandate «اصلاح
+  // پیشنهادی را کامل و مهندسی اجرا کن») ──
+  // Forensics NX-3014 (BTWUSDT 03:13Z): the flow bundle read "CONFIRMS +10"
+  // while its source was the BYBIT bridge (fapi banned) on a symbol whose
+  // BINANCE quote was null and whose cross-venue dislocation ran 90-105bps —
+  // the price collapsed −4.5% within 48s of deploy (SL −61.2% in 103s). A
+  // surrogate venue's tape is REAL tape, but it is the WRONG venue's tape for
+  // a Binance-doctrine engine on dislocated micro-caps: it must not be allowed
+  // to CONFIRM a deploy. Cap: when the feeding source is not BINANCE, flow
+  // conviction is clamped to ±6 — below the ±8 CONFIRMS/CONFLICTS line, so a
+  // surrogate bundle can never confirm NOR fully veto; it can still feed the
+  // flowVetoScore ≤−4 soft veto (score −5/−6 survives the clamp) and rides as
+  // honest telemetry. BINANCE-sourced bundles are untouched.
+  if (bridgeSrc && bridgeSrc !== "BINANCE") {
+    score = Math.max(-6, Math.min(6, score));
+    reasons.push(`SURROGATE-FLOW CAP: source ${bridgeSrc} ≠ BINANCE — conviction clamped ±6, surrogate flow cannot CONFIRM a deploy (NX-3014 48s-collapse forensics, v12.8)`);
+  }
 
   const verdict = score >= 8 ? "CONFIRMS" : score <= -8 ? "CONFLICTS" : "NEUTRAL";
   return { verdict, score, reasons, metrics: m, oiWeight: Number(oiWeight.toFixed(2)), calibrated: true, coverage, blind: false, source: bridgeSrc ?? undefined };

@@ -136,7 +136,13 @@ import { buildResearchLadder, journalResearchShadowDeploy, settleResearchShadow 
 // exactly $10 margin; the sizing stack (governor/regime/crowd/short/stratW/
 // probation/probes/dislocation/R6-EDGE) is tag-only. FSB-1.0 scoreboard
 // removed per operator («مارک‌بورد رسمی FLAT-10 رو حذف کن»).
-export const ENGINE_VERSION = "NEXUS-LIVE v12.7"; // v11.8 — TASK-42 (operator mandate «دو توصیه باقی مانده را کامل و مهندسی اجرا کن»): ① anti-chase guards RE-ARMED (onsetRetestGuard 0→1, chaseThrAdj 0→6 = v6.7.2 evidence defaults) + RETEST GATE storm-class fix (latest-eruption anchoring incl. the FORMING bar, pre-eruption-close leg math, CHASE+FADE both gated — the Task-41 AGT fade-stops slipped past the armed gate three ways) ② LIQUIDITY-FLOOR deployability gate (volume24h ≥ $25M + ≥1 real venue quote; scan-pool exclusion + authoritative deploy gate — AGTUSDT sat at sim with 4 null venues and the focusSymbol path short-circuited the sim ban). v11.7 REENTRY-LOCKOUT ladder retained. v11.9 — TASK-43 (operator audit «استاپ‌های امروز»): LIQUIDITY-FLOOR hardening (sim-source veto + engine-price/real-kline divergence — NX-2741 AGTUSDT slipped through at ~+11% drift over the real Binance close on a flickering synthetic tape) + PHANTOM-FEED gate (XMRUSDT tape oscillated 118.7↔607.75 ×5, 314 jumps>10%/24h — NX-2736 −60.84% in 35s and NX-2744 −14.93% in 18s printed on phantom data). v12.0 — TASK-44/45 (operator orders «ترمیم writer فید» + «مدیریت egress/IP برای رفع بن fapi» + «چرا close-all@$20 شلیک نمی‌کند»): ① PRICE-ARMOR write-side (zombie-ticker rejection — measured XMRUSDT spot 118.70 bid=0/ask=0 zombie listing vs perp ~592; cross-plane 10% divergence guard; anchor-locked sim drift on lastLivePrice; TAPE PURITY — sim ticks never written to PricePoint/tick-archive) ② fapi-gate v2 egress manager (ipify sampler, rotation-aware early probe lifts the ban window the moment the NAT pool rotates clean, named-IP ban ledger persisted to .data/fapi-gate/bans.json) ③ open-pnl single source of truth (ACCOUNT bar ≡ close-all breaker — the $20 mandate now reads the same bankable number the bar shows). v12.1 — TASK-48 (operator mandate «پیشنهادها را کامل و مهندسی اجرا کن» — the four Task-47 APR/BRU forensics proposals): ① R6 RADAR LANE — SUCCESS-renom revival (0/119 conversion since 10-09 was a 100% VETO RATE, not dead code: R1 SHORT-GUARD + CHOP + MEMORY + MIN_SCORE dynamic killed every nomination; the lane bypasses ONLY the four cohort-blind mood gates with dailyCap 4 + all physical gates live + auto-demote at n≥30 probation fail) ② FLOW-NO-DATA honest verdict (70% of deploys were blind yet read NEUTRAL; blind-cache 20s TTL; optional flow-gate ships tag-only — blind cohort +$204 WR 57.1% outperformed sighted +$7) ③ BOTTOM-FADE gate (SHORT selling the bottom 30% of ±30m range with RSI≤25 or %B≤0 — replay: blocks NX-2770/2779/2769 = −$18.42, passes 14/14 winners) ④ V-REVERSAL gate (SHORT on a ≥1.5% young bounce off the local low inside a ≥2.5% range — blocks NX-2770's inverse-V; LONG mirror shadow-only). v12.7 — SENTINEL-20261020 (operator mandate «تمام توصیه‌های P1/P2 و مأموریت بعدی پیشنهادی را قابل راستی‌آزمایی کامل و مهندسی شده اجرا کن»): ① RE-ARM BRAKE (same-direction post-stop cooldown 360m, escalating 720m at ≥2 stops/24h — binds auto + RAW-CAL capture + radar/authority lanes, ONLY operator-forced passes tagged; replay .data/audit-rearm-brake.ts: 92 relay deploys/14d, 73 via RAW-CAL bypass incl. NX-2910 APR→NX-2911 6-SECOND relay and NX-2913→NX-2916 68s relay — the capture lane had become a repeat-stop relay) ② AI 429 shield cap 10m→30m + probe tail-gating (failed probes ~2/window → ≤1) ③ P2-b evaluation ledger: REGIME-VOLATILE cell WR 43.9% −$2.8 (n=66) — ×0.6/+6thr KEPT, data-led no-change decision.
+// v12.8 — AUDIT-20261023 (operator mandate «اصلاح پیشنهادی را کامل و مهندسی اجرا کن»):
+//   ① CHASE-EXTREME hard block (evaluate scan gate): ≥1.5×ATR extended burst + RSI ≥80 (LONG) / ≤20 (SHORT) refused — NX-3013 top-tick & NX-3020 hole-chase forensics
+//   ② REENTRY-WHIPSAW: opposite-direction flip on a symbol <240m after its net-negative stop refused for ALL machine lanes — NX-3014→NX-3020 −61.2%×2 ping-pong forensics
+//   ③ SURROGATE-FLOW CAP (flow.ts): bridge-sourced flow (≠BINANCE) clamped ±6 — can never CONFIRM a deploy (NX-3014 CONFIRMS+10 → 48s collapse)
+//   ④ DISLOCATION-GATE skip 150→80bps (evidence: BTWUSDT medians 90-113bps = 2×−61%; IRYS 34-41bps tradeable) — set via EngineSetting gate JSON
+//   ⑤ price-ws WS·SPOT ring + multi-exchange spot-pool mirror (Binance parity while fapi plane is IP-suppressed) + trade-service escalating probe backoff + supervisor-sr named-ban deferral + mem-guard kill-line recalibration 2600/2700→2300/2500
+export const ENGINE_VERSION = "NEXUS-LIVE v12.8"; // v11.8 — TASK-42 (operator mandate «دو توصیه باقی مانده را کامل و مهندسی اجرا کن»): ① anti-chase guards RE-ARMED (onsetRetestGuard 0→1, chaseThrAdj 0→6 = v6.7.2 evidence defaults) + RETEST GATE storm-class fix (latest-eruption anchoring incl. the FORMING bar, pre-eruption-close leg math, CHASE+FADE both gated — the Task-41 AGT fade-stops slipped past the armed gate three ways) ② LIQUIDITY-FLOOR deployability gate (volume24h ≥ $25M + ≥1 real venue quote; scan-pool exclusion + authoritative deploy gate — AGTUSDT sat at sim with 4 null venues and the focusSymbol path short-circuited the sim ban). v11.7 REENTRY-LOCKOUT ladder retained. v11.9 — TASK-43 (operator audit «استاپ‌های امروز»): LIQUIDITY-FLOOR hardening (sim-source veto + engine-price/real-kline divergence — NX-2741 AGTUSDT slipped through at ~+11% drift over the real Binance close on a flickering synthetic tape) + PHANTOM-FEED gate (XMRUSDT tape oscillated 118.7↔607.75 ×5, 314 jumps>10%/24h — NX-2736 −60.84% in 35s and NX-2744 −14.93% in 18s printed on phantom data). v12.0 — TASK-44/45 (operator orders «ترمیم writer فید» + «مدیریت egress/IP برای رفع بن fapi» + «چرا close-all@$20 شلیک نمی‌کند»): ① PRICE-ARMOR write-side (zombie-ticker rejection — measured XMRUSDT spot 118.70 bid=0/ask=0 zombie listing vs perp ~592; cross-plane 10% divergence guard; anchor-locked sim drift on lastLivePrice; TAPE PURITY — sim ticks never written to PricePoint/tick-archive) ② fapi-gate v2 egress manager (ipify sampler, rotation-aware early probe lifts the ban window the moment the NAT pool rotates clean, named-IP ban ledger persisted to .data/fapi-gate/bans.json) ③ open-pnl single source of truth (ACCOUNT bar ≡ close-all breaker — the $20 mandate now reads the same bankable number the bar shows). v12.1 — TASK-48 (operator mandate «پیشنهادها را کامل و مهندسی اجرا کن» — the four Task-47 APR/BRU forensics proposals): ① R6 RADAR LANE — SUCCESS-renom revival (0/119 conversion since 10-09 was a 100% VETO RATE, not dead code: R1 SHORT-GUARD + CHOP + MEMORY + MIN_SCORE dynamic killed every nomination; the lane bypasses ONLY the four cohort-blind mood gates with dailyCap 4 + all physical gates live + auto-demote at n≥30 probation fail) ② FLOW-NO-DATA honest verdict (70% of deploys were blind yet read NEUTRAL; blind-cache 20s TTL; optional flow-gate ships tag-only — blind cohort +$204 WR 57.1% outperformed sighted +$7) ③ BOTTOM-FADE gate (SHORT selling the bottom 30% of ±30m range with RSI≤25 or %B≤0 — replay: blocks NX-2770/2779/2769 = −$18.42, passes 14/14 winners) ④ V-REVERSAL gate (SHORT on a ≥1.5% young bounce off the local low inside a ≥2.5% range — blocks NX-2770's inverse-V; LONG mirror shadow-only). v12.7 — SENTINEL-20261020 (operator mandate «تمام توصیه‌های P1/P2 و مأموریت بعدی پیشنهادی را قابل راستی‌آزمایی کامل و مهندسی شده اجرا کن»): ① RE-ARM BRAKE (same-direction post-stop cooldown 360m, escalating 720m at ≥2 stops/24h — binds auto + RAW-CAL capture + radar/authority lanes, ONLY operator-forced passes tagged; replay .data/audit-rearm-brake.ts: 92 relay deploys/14d, 73 via RAW-CAL bypass incl. NX-2910 APR→NX-2911 6-SECOND relay and NX-2913→NX-2916 68s relay — the capture lane had become a repeat-stop relay) ② AI 429 shield cap 10m→30m + probe tail-gating (failed probes ~2/window → ≤1) ③ P2-b evaluation ledger: REGIME-VOLATILE cell WR 43.9% −$2.8 (n=66) — ×0.6/+6thr KEPT, data-led no-change decision.
 const MIN_TICK_MS = 3500;
 // v6.3: MAX_ACTIVE is now the governor-owned gate.maxActive knob (2–8, default 5)
 // — the static constant only remains as the fallback if the gate read fails.
@@ -1652,7 +1658,18 @@ export async function deploySignal(symbol?: string, directionHint?: "LONG" | "SH
     // the gate before the flow stage even runs. Measured from the same 15m
     // candles the candidate was scored on — no extra fetches.
     let chaseNote: string | null = null;
-    if (gate.chaseThrAdj > 0 && conf.direction === "LONG" && candles.length >= 16) {
+    // ── v12.8 CHASE-EXTREME HARD BLOCK (AUDIT-20261023, operator mandate
+    // «اصلاح پیشنهادی را کامل و مهندسی اجرا کن») ──
+    // NX-3013 forensics: entered LONG IRYSUSDT at RSI 87.4 on a +18.2%/5-bar
+    // extended burst — the old guard only ADDED +6 to the threshold, and a
+    // strong score (60) clears any surcharge; the fill WAS the top tick
+    // (maxPnl 0, SL −61.2% in 10min). NX-3020 mirror: SHORT into a −12% flush
+    // hole bounced +5% (SL −61.2% in 23min). Extremes are now REFUSED
+    // outright, both directions: ≥1.5×ATR extended burst with RSI ≥ 80 (long
+    // top-chase) or ≤ 20 (short hole-chase). Below-extreme chases keep the
+    // v6.7.2 threshold surcharge exactly as before.
+    let chaseHardBlock: string | null = null;
+    if (candles.length >= 16) {
       const b5 = candles.slice(-5);
       const burstPct = ((b5[b5.length - 1]!.close - b5[0]!.open) / b5[0]!.open) * 100;
       let atrSum = 0;
@@ -1661,11 +1678,20 @@ export async function deploySignal(symbol?: string, directionHint?: "LONG" | "SH
         atrSum += Math.max(c.high - c.low, Math.abs(c.high - p.close), Math.abs(c.low - p.close));
       }
       const atrPctQuick = (atrSum / 14 / candles[candles.length - 1]!.close) * 100;
-      if (burstPct >= Math.max(1.5, 1.5 * atrPctQuick)) {
+      const extThreshold = Math.max(1.5, 1.5 * atrPctQuick);
+      const extended = conf.direction === "LONG" ? burstPct >= extThreshold : burstPct <= -extThreshold;
+      const rsiExtreme = conf.direction === "LONG" ? snap.rsi >= 80 : snap.rsi <= 20;
+      if (extended && rsiExtreme) {
+        chaseHardBlock = `${conf.direction} chasing ${burstPct >= 0 ? "+" : ""}${burstPct.toFixed(2)}%/5-bar extended tape (≥${extThreshold.toFixed(2)}% ≈1.5×ATR${atrPctQuick.toFixed(2)}%) with RSI ${snap.rsi.toFixed(1)} ${conf.direction === "LONG" ? "≥80 overbought" : "≤20 oversold"} — extreme-chase entry refused (NX-3013/3020 top-tick & hole-chase forensics, v12.8)`;
+      } else if (gate.chaseThrAdj > 0 && conf.direction === "LONG" && burstPct >= extThreshold) {
         thrAdj += gate.chaseThrAdj;
         thrParts.chase += gate.chaseThrAdj;
         chaseNote = `LONG-chase guard: last-5-bar move +${burstPct.toFixed(2)}% ≥ 1.5×ATR(${atrPctQuick.toFixed(2)}%) → eff threshold +${gate.chaseThrAdj}`;
       }
+    }
+    if (chaseHardBlock) {
+      void recordGateBlock({ gate: "CHASE-EXTREME", symbol: asset.symbol, direction: conf.direction, reason: chaseHardBlock });
+      return;
     }
     // ── v8.0 MULTI-TF FLOW BOARD GUARD (EPOCH-2 operator mandate) ──
     // The research doctrine: HTF carries the bias. A candidate fighting a
@@ -2795,8 +2821,8 @@ export async function deploySignal(symbol?: string, directionHint?: "LONG" | "SH
   // escalateMinutes, escalateAfterStops, windowHours}.
   let reentryLockoutTag: string | null = null;
   {
-    let cfg = { enabled: true, lockoutMinutes: 60, escalateMinutes: 180, escalateAfterStops: 2, windowHours: 24 };
-    let lastStop: { closedAt: Date; pnlPercent: number } | null = null;
+    let cfg = { enabled: true, lockoutMinutes: 60, escalateMinutes: 180, escalateAfterStops: 2, windowHours: 24, whipsawOppositeMinutes: 240 };
+    let lastStop: { closedAt: Date; pnlPercent: number; direction: string } | null = null;
     let stopCount = 0;
     try {
       const row = await db.engineSetting.findUnique({ where: { key: "reentry-lockout" } });
@@ -2807,6 +2833,7 @@ export async function deploySignal(symbol?: string, directionHint?: "LONG" | "SH
         if (typeof p.escalateMinutes === "number") cfg.escalateMinutes = Math.max(10, Math.min(1440, Math.floor(p.escalateMinutes)));
         if (typeof p.escalateAfterStops === "number") cfg.escalateAfterStops = Math.max(1, Math.min(10, Math.floor(p.escalateAfterStops)));
         if (typeof p.windowHours === "number") cfg.windowHours = Math.max(1, Math.min(168, Math.floor(p.windowHours)));
+        if (typeof p.whipsawOppositeMinutes === "number") cfg.whipsawOppositeMinutes = Math.max(0, Math.min(720, Math.floor(p.whipsawOppositeMinutes)));
       }
       if (cfg.enabled) {
         // stop-class close = terminal SL status with negative NET (BE-banked SL
@@ -2814,7 +2841,7 @@ export async function deploySignal(symbol?: string, directionHint?: "LONG" | "SH
         // closed +7.32% and its immediate re-entry was the actual disaster).
         const stops = await db.signal.findMany({
           where: { symbol: asset.symbol, status: "SL", pnlPercent: { lt: 0 }, closedAt: { gte: new Date(Date.now() - cfg.windowHours * 3600_000) } },
-          select: { closedAt: true, pnlPercent: true },
+          select: { closedAt: true, pnlPercent: true, direction: true },
           orderBy: { closedAt: "desc" },
           take: 10,
         });
@@ -2827,18 +2854,31 @@ export async function deploySignal(symbol?: string, directionHint?: "LONG" | "SH
     if (cfg.enabled && lastStop) {
       const minutesSince = (Date.now() - new Date(lastStop.closedAt).getTime()) / 60_000;
       const lockoutMin = stopCount >= cfg.escalateAfterStops ? cfg.escalateMinutes : cfg.lockoutMinutes;
-      if (minutesSince < lockoutMin) {
-        if (!opts?.forced && !bypassQuality) {
-          const lockReason = `re-entry lockout: ${asset.symbol} last stop ${minutesSince.toFixed(1)}m ago (NET ${lastStop.pnlPercent.toFixed(1)}%) — lockout ${lockoutMin}m (${stopCount} stop${stopCount === 1 ? "" : "s"} in ${cfg.windowHours}h) — stop-chain guard v11.7 (Task-41 AGTUSDT storm forensics)`;
-          void recordGateBlock({ gate: "REENTRY-LOCKOUT", symbol: asset.symbol, direction, reason: lockReason });
-          void nearMissCaptureGate({ symbol: asset.symbol, direction, strategy: conf.strategy, reason: `REENTRY-LOCKOUT: ${asset.symbol} ${minutesSince.toFixed(0)}m after stop (${lockoutMin}m window)` }).catch(() => undefined);
+      // ── v12.8 WHIPSAW CLAUSE (AUDIT-20261023) ── NX-3014 LONG BTWUSDT SL
+      // 03:15:11Z → NX-3020 SHORT BTWUSDT 04:43:13Z (88min later, opposite
+      // direction, outside the 60m lockout) → the engine bought the top then
+      // shorted the bottom of the SAME dislocated micro-cap and paid −61.2%
+      // TWICE. A net-negative stop on symbol X proves X's short-horizon tape
+      // is toxic for fresh exposure EITHER way: an OPPOSITE-direction flip
+      // within whipsawOppositeMinutes (default 240m) is refused for ALL
+      // machine lanes (auto+capture+radar) — only the operator's own forced
+      // deploy passes, tagged REENTRY-WHIPSAW (audited cohort). Same-direction
+      // re-entry stays governed by the v12.7 REARM-BRAKE + this lockout.
+      const whipsawFlip = cfg.whipsawOppositeMinutes > 0 && lastStop.direction !== direction && minutesSince < cfg.whipsawOppositeMinutes;
+      if (minutesSince < lockoutMin || whipsawFlip) {
+        if (!opts?.forced) {
+          const lockReason = whipsawFlip && minutesSince >= lockoutMin
+            ? `whipsaw guard: ${asset.symbol} ${lastStop.direction}→${direction} flip ${minutesSince.toFixed(1)}m after opposite-direction stop (NET ${lastStop.pnlPercent.toFixed(1)}%) — flip-refusal ${cfg.whipsawOppositeMinutes}m (NX-3014→NX-3020 ping-pong −61.2%×2 forensics, v12.8)`
+            : `re-entry lockout: ${asset.symbol} last stop ${minutesSince.toFixed(1)}m ago (NET ${lastStop.pnlPercent.toFixed(1)}%) — lockout ${lockoutMin}m (${stopCount} stop${stopCount === 1 ? "" : "s"} in ${cfg.windowHours}h) — stop-chain guard v11.7 (Task-41 AGTUSDT storm forensics)`;
+          void recordGateBlock({ gate: whipsawFlip && minutesSince >= lockoutMin ? "REENTRY-WHIPSAW" : "REENTRY-LOCKOUT", symbol: asset.symbol, direction, reason: lockReason });
+          void nearMissCaptureGate({ symbol: asset.symbol, direction, strategy: conf.strategy, reason: `${whipsawFlip && minutesSince >= lockoutMin ? "REENTRY-WHIPSAW" : "REENTRY-LOCKOUT"}: ${asset.symbol} ${minutesSince.toFixed(0)}m after stop (${whipsawFlip && minutesSince >= lockoutMin ? `${cfg.whipsawOppositeMinutes}m flip window` : `${lockoutMin}m window`})` }).catch(() => undefined);
           if (Date.now() - lastReentryLockoutEventAt > 600_000) {
             lastReentryLockoutEventAt = Date.now();
-            await fireEvent(null, asset.symbol, "ENGINE", "warn", `REENTRY-LOCKOUT BLOCK: ${direction} ${asset.symbol} deploy refused — last stop on this symbol ${minutesSince.toFixed(0)}m ago, lockout ${lockoutMin}m · stop-chain guard v11.7 (Task-41: 6 deploys/21m/4 SL on AGTUSDT = −$23 bleed)`);
+            await fireEvent(null, asset.symbol, "ENGINE", "warn", `${whipsawFlip && minutesSince >= lockoutMin ? "WHIPSAW" : "REENTRY-LOCKOUT"} BLOCK: ${direction} ${asset.symbol} deploy refused — ${whipsawFlip && minutesSince >= lockoutMin ? `opposite-direction flip ${minutesSince.toFixed(0)}m after ${lastStop.direction} stop (flip window ${cfg.whipsawOppositeMinutes}m)` : `last stop on this symbol ${minutesSince.toFixed(0)}m ago, lockout ${lockoutMin}m`} · stop-chain guard v11.7+v12.8 (Task-41: 6 deploys/21m/4 SL on AGTUSDT = −$23 bleed)`);
           }
-          return { error: `reentry-lockout gate: ${direction} ${asset.symbol} refused — last stop ${minutesSince.toFixed(1)}m ago < lockout ${lockoutMin}m (${stopCount} stops/${cfg.windowHours}h)`, status: 409 };
+          return { error: `reentry-lockout gate: ${direction} ${asset.symbol} refused — ${whipsawFlip && minutesSince >= lockoutMin ? `opposite-direction flip ${minutesSince.toFixed(1)}m after ${lastStop.direction} stop < flip window ${cfg.whipsawOppositeMinutes}m` : `last stop ${minutesSince.toFixed(1)}m ago < lockout ${lockoutMin}m (${stopCount} stops/${cfg.windowHours}h)`}`, status: 409 };
         }
-        reentryLockoutTag = "REENTRY-LOCKOUT"; // capture override — audited cohort
+        reentryLockoutTag = whipsawFlip && minutesSince >= lockoutMin ? "REENTRY-WHIPSAW" : "REENTRY-LOCKOUT"; // forced override — audited cohort
       }
     }
   }
