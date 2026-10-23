@@ -116,14 +116,19 @@ const SAMPLE_CAP = 240; // 1h ring
 //   Steady-state warm RSS measured 2.05-2.15GB (healthz 10:21Z: rssMB 2113,
 //   heapTotal 415MB — the mass is native, not V8).
 //   NEW line: sustained 2300 (60s) → graceful preemptive recycle BEFORE the
-//   cliff; single-tick hard 2500. AVAIL_FLOOR 300→380 as a second tripwire.
-//   Treadmill guard: steady 2.15 < 2300 with 150MB margin; boot grace 180s
-//   unchanged; RESTARTS_PER_HOUR breaker unchanged.
-const RSS_ACT = 2300;      // sustained (4 ticks = 60s) → preemptive graceful recycle (kill line measured 2.14-2.30GB on 10-23)
+//   cliff; single-tick hard 2400. AVAIL_FLOOR 300→380 as a second tripwire.
+//   v12.8.1 GRACE FIX (measured 11:48-11:58Z: FOUR kernel kills at RSS
+//   2.07-2.44GB, ALL inside the 180s boot grace — the boot-spike plateau
+//   IS the kill zone, observing it changes nothing). BOOT_GRACE 180→75s and
+//   during grace the HARD line now ACTS (one graceful recycle with cache
+//   prune beats a kernel kill; RESTARTS_PER_HOUR breaker still bounds it).
+//   Treadmill guard: steady 2.15 < 2300 with 150MB margin; RESTARTS_PER_HOUR
+//   breaker unchanged.
+const RSS_ACT = 2300;      // sustained (4 ticks = 60s) → preemptive graceful recycle (kill line measured 2.07-2.44GB on 10-23)
 const RSS_SUSTAIN_TICKS = 4;
-const RSS_HARD = 2500;     // single tick (post grace) → restart now (kill line +200MB margin)
+const RSS_HARD = 2400;     // single tick → restart now — ALSO ACTS DURING BOOT GRACE (kill-line spike zone)
 const AVAIL_FLOOR = 380;   // with the ~2.1GB app + fleet, ambient avail sits 350-550MB — today's kills happened inside avail valleys; trip earlier, recycle gracefully instead of feeding the OOM loop
-const BOOT_GRACE_MS = 180_000;
+const BOOT_GRACE_MS = 75_000; // was 180s — today's kills ALL landed inside grace; 75s covers the warm plateau, then the governor owns the tape
 const RESTARTS_PER_HOUR = 3;
 const CACHE_PRUNE_AVAIL = 900; // prune gate for the rescue path (preemptive restarts ALWAYS prune)
 
@@ -724,7 +729,13 @@ async function tick(): Promise<void> {
         await memRestart(why);
       }
     } else if (bootGrace && (app.rssMb >= RSS_HARD || (mem.availableMb >= 0 && mem.availableMb < 300))) {
-      log("warn", "boot-spike-observed", { rssMb: app.rssMb, availMb: mem.availableMb, note: "grace active — observe only (kernel OOM risk window)" });
+      // v12.8.1 — the hard line now ACTS during grace: today's four kernel
+      // kills (11:48-11:58Z, RSS 2.07-2.44GB) all landed inside the old
+      // observe-only grace window. One graceful recycle (snapshot → pause
+      // watchdog → prune → respawn) beats a kernel kill that loses the
+      // process AND corrupts the incremental cache for the next boot.
+      log("warn", "boot-spike-act", { rssMb: app.rssMb, availMb: mem.availableMb, note: `RSS ≥ hard line ${RSS_HARD}MB during boot grace — graceful recycle instead of kernel kill (v12.8.1)` });
+      await memRestart(`boot-spike ${app.rssMb}MB ≥ ${RSS_HARD}MB hard line (grace-window act, v12.8.1)`);
     }
   } else if (!restarting) {
     app = { pid: 0, rssMb: -1, firstSeenAt: 0, parentPids: [] };
