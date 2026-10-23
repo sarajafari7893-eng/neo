@@ -2,11 +2,11 @@
  "ver": "supervisor-cron 1.6.0",
  "pid": 6187,
  "startedAt": "2026-10-22T23:18:00.186Z",
- "updatedAt": "2026-10-23T22:08:30.878Z",
+ "updatedAt": "2026-10-23T22:13:30.204Z",
  "jobs": {
   "sweep": {
    "lastRunAt": 1792793310187,
-   "nextRunAt": 1792793310186,
+   "nextRunAt": 1792793910186,
    "lastStatus": "ok",
    "lastDurationMs": 691,
    "lastError": null,
@@ -59,12 +59,12 @@
    "failures": 0
   },
   "keepwarm": {
-   "lastRunAt": 1792793310187,
+   "lastRunAt": 1792793610186,
    "nextRunAt": 1792793610186,
-   "lastStatus": "error",
-   "lastDurationMs": 2,
-   "lastError": "HEARTBEAT COLD app:3000 1ms streak=2",
-   "runs": 325,
+   "lastStatus": "ok",
+   "lastDurationMs": 18,
+   "lastError": null,
+   "runs": 326,
    "failures": 30
   }
  },
@@ -159,14 +159,14 @@
   "newN": 2
  },
  "lastKeepwarm": {
-  "at": "2026-10-23T22:08:30.188Z",
-  "ok": false,
-  "ms": 1,
-  "bootAt": null,
-  "gitSha": null,
-  "coldStreak": 2
+  "at": "2026-10-23T22:13:30.204Z",
+  "ok": true,
+  "ms": 18,
+  "bootAt": "2026-10-23T22:11:49.341Z",
+  "gitSha": "39fc84c",
+  "coldStreak": 0
  },
- "coldStreak": 2,
+ "coldStreak": 0,
  "alertLedger": {
   "sentinel-red": 1792793310877,
   "review-llm-unavailable": 1792754373436,
@@ -175,13 +175,6 @@
  "wsDownStreak": 0,
  "staleStreak": 0,
  "history": [
-  {
-   "id": "keepwarm",
-   "at": 1792784010186,
-   "status": "ok",
-   "durationMs": 55,
-   "detail": "HEARTBEAT OK 55ms boot=19:33:11Z sha=ee1306c"
-  },
   {
    "id": "keepwarm",
    "at": 1792784310186,
@@ -524,6 +517,13 @@
    "status": "ok",
    "durationMs": 691,
    "detail": "RED: app :3000 down"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1792793610186,
+   "status": "ok",
+   "durationMs": 18,
+   "detail": "HEARTBEAT OK 18ms boot=22:11:49Z sha=39fc84c"
   }
  ],
  "watchRuns": [
