@@ -31929,3 +31929,30 @@ Stage Summary:
 - استاپ دکترین = OOM×۲ + گرم‌شدن پس از بوت + pace-stall + DD-overlay؛ ریشهٔ بزرگ‌تر زنجیرهٔ OOM درمان‌نشده و swap ناممکن در کانتینر
 - نسخهٔ راه‌حل پیشنهادی: P0-A رینگ WS·SPOT-ARR در price-ws (تست شد زنده) · P0-B بهداشت fapi (Retry-After/backoff/stagger) · P1 DISLOCATION-GATE سخت · P1 surrogate-flow cap (فلو غیر-BINANCE حق CONFIRM ندارد) · P1 chase hard-block (RSI>80+1.5×ATR) · P2 cooldown per-symbol · P1-جایگزین OOM: proactive RSS restart
 - FLAT-10 دست‌نخورده؛ Toobit وارد git نشد؛ commit: AUDIT-CONN-SIGNALS-20261023
+
+---
+Task ID: FIX-V12.8-20261023
+Agent: Z.ai Code (NEXUS operator session)
+Task: اجرای کامل و مهندسی بستهٔ اصلاحی AUDIT-20261023 (دستور: «اصلاح پیشنهادی را کامل و مهندسی اجرا کن»)
+
+Work Log:
+- P0-A price-ws: رینگ WS·SPOT افزوده شد (wss://stream.binance.com:9443/ws/!miniTicker@arr — رینگ-۲ بین fstream و BYBIT)؛ کشف زنده: آرایهٔ بار miniTicker ≠ شیء تکی → پارسر آرایه‌ای (v12.8.1) → «source → WS·SPOT» لایو
+- P0-B multi-exchange: رینگ SPOT-POOL MIRROR برای binanceFuturesBatch (وقتی fapi بن، api.binance.com سرو می‌کند؛ کش ۳۰s + بک‌آف نرم ۱۰min؛ خروج از فapi-gate طبق قرارداد) → BTCUSDT: BINANCE=81518.8 بازگشت
+- P0-B trade-service: ESCALATING PROBE BACKOFF (گریس دم ۵min + 2^n تا سقف ۱۲۰min + جیتر) — شواهد: egress عملاً تک-IP است و هر پروبِ پایان-بن، بن را تمدید می‌کرد (۱۰:۴۹→۱۱:۰۲)؛ بن فعلی تا 14:07:26Z
+- P0-B supervisor-sr: deferral پینگ fapi با بن‌های named هم (ledgerPoolBanUntil) — پینگ دیگر پنجرهٔ بن را نمی‌کَند
+- P1 flow.ts: SURROGATE-FLOW CAP — فلو با منبع ≠ BINANCE روی ±6 کلمپ می‌شود (زیر خط ±8) → جانشین هرگز CONFIRM نمی‌کند (درس NX-3014 CONFIRMS+10 → فروپاشی 48s)
+- P1 engine.ts: گیت سخت CHASE-EXTREME در evaluate() — برست ≥1.5×ATR با RSI≥80 (LONG) یا ≤20 (SHORT) مردود (NX-3013/3020)
+- P1 engine.ts: بند REENTRY-WHIPSAW در REENTRY-LOCKOUT — فلپ مخالف‌جهت روی سمبل <240m پس از SL منفی برای همهٔ لِین‌های ماشینی مردود؛ فقط forced اپراتور با تگ REENTRY-WHIPSAW (NX-3014→3020 پینگ‌پنگ −61.2%×2)
+- P1 knob: DISLOCATION-GATE که OFF بود (dislocationGate=0!) روشن شد با skip 150→80bps و warn 40bps (شواهد: BTW 90-113bps=۲×−۶۱٪، IRYS 34-41bps قابل معامله)
+- OOM جایگزین swap (سواپ در کانتینر BLOCKED): بازکالیبراسیون mem-guard — RSS_ACT 2600→2300، RSS_HARD 2700→2400 (+اقدام در حین گریس بوت)، AVAIL_FLOOR 300→380، BOOT_GRACE 180→75s (۴ کشتار کرنل امروز همه داخل گریس بودند)
+- زنده: OOM پنجم در 12:12:17 (RSS 2.18GB) — خط کشتن 2.07-2.44GB نوسانی؛ اپ دوباره بالا (mem-guard rescue)، نسخهٔ موتور NEXUS-LIVE v12.8 روی سیگنال جدید (NX-3040) ثبت شد
+- سه IP استخر egress بن: 47.57.242.119 / 47.57.232.232 / 8.212.10.159 (یکی تا ~فردا) — fapi عملاً تا بازشدن بن‌ها روی آینهٔ spot می‌چرخد
+- lint: 17 = baseline (صفر خطای جدید)؛ اسنپ‌شات nexus-snapshot-20261023-121334 (off-site طبق دستور DISABLED)
+- FLAT-10 دست‌نخورده؛ Toobit وارد git نشد
+
+Stage Summary:
+- پارتی قیمت: WS·SPOT رینگ-۲ فعال → پاریتی بایننس از پلن spot حتی در سکوت fstream
+- پارتی اجماع: BINANCE venue با آینهٔ spot بازگشت → اجماع ۴-venue کامل شد
+- پارتی گیت‌ها: CHASE-EXTREME + REENTRY-WHIPSAW + SURROGATE-FLOW CAP + DISLOCATION@80bps — هر چهار درسِ NX-3008/3013/3014/3020 به گیت فیزیکی تبدیل شد
+- پارتی OOM: خط کشتن جدید کالیبره شد؛ بازیابی لطیف جایگزین کشتار کرنل در پنجره‌های قابل‌کشف؛ ریسک باقی‌مانده: کشتار در دره‌های لحظه‌ای avail (اصلاح ساختاری گرم‌سازی = نوبت بعدی)
+- commit: FIX-V12.8-20261023
