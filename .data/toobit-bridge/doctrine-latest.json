@@ -1,5 +1,5 @@
 {
-  "at": 1792797016660,
+  "at": 1792797096783,
   "ver": "toobit-bridge 1.3.0",
   "gates": {
     "marginUsdt": 5,
@@ -8,9 +8,12 @@
     "maxConcurrent": 3
   },
   "counters": {
-    "opens": 3,
+    "opens": 29,
     "skipBy": {
-      "STALE-CARD": 1
+      "STALE-CARD": 1,
+      "SYMBOL-ABSENT-ON-TOOBIT": 2,
+      "MAX-CONCURRENT": 16,
+      "ENTRY-DRIFT": 3
     }
   },
   "violations": [
@@ -19,20 +22,41 @@
       "serial": 0,
       "kind": "NOTIONAL-DELTA",
       "detail": "exp=25.00 act=8.20 (6719bps)"
+    },
+    {
+      "at": 1792762189955,
+      "serial": 3041,
+      "kind": "MIRROR-LAG",
+      "detail": "card=TP1 but intent still OPEN 2722s — pollCards transition should have fired"
     }
   ],
   "openIntents": [
     {
-      "serial": 3006,
-      "symbol": "BTRUSDT",
+      "serial": 3048,
+      "symbol": "1000PEPEUSDT",
       "direction": "SHORT",
-      "lev": 12,
+      "lev": 6,
       "levSrc": "card",
-      "expectedNotional": 60,
-      "actualNotional": 59.9573,
-      "entryAgeMs": 2196,
-      "entryDriftBps": 38.55,
-      "cardStatus": "ACTIVE",
+      "expectedNotional": 30,
+      "actualNotional": 29.99551,
+      "entryAgeMs": 1809,
+      "entryDriftBps": 7.16,
+      "cardStatus": "TP2",
+      "status": "OPEN",
+      "mode": "PAPER",
+      "protected": true
+    },
+    {
+      "serial": 3052,
+      "symbol": "ZECUSDT",
+      "direction": "SHORT",
+      "lev": 8,
+      "levSrc": "card",
+      "expectedNotional": 40,
+      "actualNotional": 39.66963,
+      "entryAgeMs": 1836,
+      "entryDriftBps": 79.23,
+      "cardStatus": "TP2",
       "status": "OPEN",
       "mode": "PAPER",
       "protected": true
