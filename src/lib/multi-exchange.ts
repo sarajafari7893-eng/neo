@@ -18,8 +18,8 @@
 import { getFeedStatus } from "./market-feed";
 import { gateFetch } from "./fapi-gate";
 import { HL_KEY_ALLOWLIST } from "./hl-allowlist";
-// v12.11 RUNG 0 — Binance spot !miniTicker@arr WS ring (see binanceFuturesBatch)
-import { ensureSpotWsRing, spotwsFreshQuotes } from "./binance-spotws";
+import { promises as fs } from "fs";
+import path from "path";
 
 const TIMEOUT_MS = 6500;
 
@@ -210,29 +210,64 @@ export function robustMedian(quotes: VenueQuote[]): { median: number | null; deg
 
 // v10.16 (a) REAL Binance futures quote — batch /fapi/v1/ticker/24hr once per
 // sweep (15s cache so concurrent sweeps/venues share one call).
-// v12.11 RUNG 0 — SPOT-ARR WS RING (operator mandate: Binance anchor from a
-// REAL Binance plane while both REST pools are 418-banned). EVIDENCE CHAIN
+// v12.11 RUNG 0 — SPOT-PRINT FILE STORE (operator mandate: Binance anchor from
+// a REAL Binance plane while both REST pools are 418-banned). EVIDENCE CHAIN
 // 2026-10-23: fstream (futures WS) was ATTEMPTED and REFUTED — handshake OK,
 // data MUTED from this egress (sustain probe: 240s ZERO frames on
 // btcusdt@aggTrade with the socket open; the v12.10 p50=30ms reading was a
-// short-window burst artifact — probe kept as re-runnable evidence). The
-// spot WS is the one Binance plane that SUSTAINS here (price-ws runs it for
-// hours as its primary source). Rung 0 = spot-arr prints (real-time, zero
-// REST weight, separate ban pool); REST rungs below fill only what the ring
-// cannot price (futures-only microcaps stay honestly NULL → NO-BINANCE-
-// CONFIRM +12 keeps firing exactly where no Binance ticket exists).
+// short-window burst artifact — probe kept as re-runnable evidence). In-app
+// WS rings were also refuted (dev-mode per-bundle module instances churn
+// connections; compile-ramp OOM budget). FINAL DESIGN: price-ws :3003 — the
+// one process that already holds the SUSTAINED Binance plane (spot
+// !miniTicker@arr WS, hours-proven) — pushes lane-isolated spot prints every
+// 3s to /api/internal/spotws-quotes which persists .data/spotws-quotes.json.
+// Rung 0 reads that file (real-time Binance spot, zero REST weight); REST
+// rungs below fill only what it cannot price; futures-only microcaps are
+// absent from the store → honestly NULL → NO-BINANCE-CONFIRM +12 keeps
+// firing exactly where no Binance ticket exists (market fact, not blindness).
 
+const SPOTWS_FILE = path.resolve(".data/spotws-quotes.json");
+const SPOTWS_FILE_MAX_AGE_MS = 12_000; // pushes every 3s — older means price-ws down
+const SPOTWS_QUOTE_FRESH_MS = 90_000;
 let binanceFutCache: { at: number; data: Map<string, number> } | null = null;
+let spotwsFileCache: { at: number; data: Map<string, { price: number; at: number }> } | null = null;
 let lastSpotwsLogAt = 0;
+
+async function spotwsFileQuotes(): Promise<Map<string, { price: number; at: number }>> {
+  const now = Date.now();
+  if (spotwsFileCache && now - spotwsFileCache.at < 3_000) return spotwsFileCache.data;
+  const out = new Map<string, { price: number; at: number }>();
+  try {
+    const raw = await fs.readFile(SPOTWS_FILE, "utf8");
+    const parsed = JSON.parse(raw) as { at?: number; rows?: Array<{ s?: string; p?: number; t?: number }> };
+    if (parsed.at && now - parsed.at <= SPOTWS_FILE_MAX_AGE_MS && Array.isArray(parsed.rows)) {
+      for (const r of parsed.rows) {
+        const sym = String(r.s ?? "").toUpperCase();
+        const p = Number(r.p);
+        const t = Number(r.t);
+        if (!sym.endsWith("USDT") || !(p > 0) || !(t > 0)) continue;
+        out.set(sym, { price: p, at: t });
+      }
+    }
+  } catch {
+    /* no file yet / unreadable — rung 0 skips honestly, REST rungs cover */
+  }
+  spotwsFileCache = { at: now, data: out };
+  return out;
+}
 
 async function binanceFuturesBatch(symbols: string[]): Promise<Map<string, number>> {
   const out = new Map<string, number>();
-  // RUNG 0 — live spot prints from the sustained Binance WS plane
+  // RUNG 0 — live spot prints from the sustained Binance WS plane (pushed file)
   try {
-    ensureSpotWsRing();
-    for (const [s, q] of spotwsFreshQuotes(symbols)) out.set(s, q.price);
+    const spotws = await spotwsFileQuotes();
+    const now = Date.now();
+    for (const s of symbols) {
+      const q = spotws.get(s);
+      if (q && now - q.at <= SPOTWS_QUOTE_FRESH_MS) out.set(s, q.price);
+    }
   } catch {
-    /* ring never throws — REST rungs below are the safety net */
+    /* rung never throws — REST rungs below are the safety net */
   }
   if (symbols.length > 0 && out.size === symbols.length) {
     if (Date.now() - lastSpotwsLogAt > 600_000) {

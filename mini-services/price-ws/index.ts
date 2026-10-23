@@ -203,6 +203,51 @@ function observeTick(symbol: string, price: number, lane: string, change24h: num
   }).catch(() => {});
 }
 
+// ── v12.11 SPOT-PRINT STORE — Binance spot venue plane for the app ──────────
+// The app must NOT hold WS clients (dev-mode per-bundle module instances churn
+// connections + teardown, and the compile-ramp OOM budget is precious). The
+// ONE sustained Binance plane from this egress is the spot !miniTicker@arr WS
+// ALREADY running here (v12.8 ring-2, hours-proven). This store keeps the
+// last genuine SPOT print per symbol (lane-isolated — bybit/futures lanes can
+// never contaminate it) and pushes a compact snapshot to the app every 3s
+// (POST /api/internal/spotws-quotes → .data/spotws-quotes.json). The app's
+// venue consensus reads that file as rung 0 — real Binance prices, zero REST
+// weight, zero WS in the Next process. Futures-only microcaps are simply
+// absent from the store → honest nulls downstream (+12 surcharge intact).
+const spotPrints = new Map<string, { price: number; at: number }>();
+const SPOT_PRINT_FRESH_MS = 90_000;
+let spotwsPushInFlight = false;
+let lastSpotwsPushLogAt = 0;
+
+async function pushSpotPrints(): Promise<void> {
+  if (spotwsPushInFlight) return;
+  const now = Date.now();
+  const rows: Array<{ s: string; p: number; t: number }> = [];
+  for (const [sym, q] of spotPrints) {
+    if (now - q.at > SPOT_PRINT_FRESH_MS) continue;
+    rows.push({ s: sym, p: q.price, t: q.at });
+  }
+  if (rows.length === 0) return;
+  spotwsPushInFlight = true;
+  try {
+    const res = await fetch("http://localhost:3000/api/internal/spotws-quotes", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      cache: "no-store",
+      body: JSON.stringify({ at: now, rows }),
+    });
+    if (res.ok && Date.now() - lastSpotwsPushLogAt > 600_000) {
+      lastSpotwsPushLogAt = Date.now();
+      console.log(`[price-ws] spot-prints push active — ${rows.length} fresh Binance spot quotes → app venue plane (v12.11)`);
+    }
+  } catch {
+    /* app restarting — file ages out honestly, venue rung 0 skips */
+  } finally {
+    spotwsPushInFlight = false;
+  }
+}
+setInterval(() => void pushSpotPrints(), 3000);
+
 // ── v12.8 SPOT-ARR ring — Binance spot WS (rung 2) ──────────────────────────
 // Raw stream frames arrive as the event object itself (no combined-wrapper):
 // { e:"24hrMiniTicker", E, s, c, o, h, l, v, q }. Symbol parity with futures
@@ -240,6 +285,7 @@ function connectSpotWs(): void {
             volume24h: Number(d.q) || 0,
             at: d.E || Date.now(),
           });
+          spotPrints.set(d.s, { price, at: d.E || Date.now() }); // v12.11 lane-isolated venue plane
           observeTick(d.s, price, "WS·SPOT", d.o ? ((price - Number(d.o)) / Number(d.o)) * 100 : null); // v12.10 tick-velocity cascade detector
           lastEventAt = Date.now();
         }
@@ -378,6 +424,8 @@ async function spotPoll() {
         volume24h: Number(r.quoteVolume),
         at: Date.now(),
       });
+      const sp = Number(r.lastPrice); // v12.11 — spot REST prints are genuine Binance spot too
+      if (sp > 0) spotPrints.set(r.symbol, { price: sp, at: Date.now() });
     }
     lastEventAt = Date.now();
     if (spotLastOkAt === 0) console.log("[price-ws] SPOT-MIRROR fuel active — spot ticker/24hr feeding prices (fapi banned, WS lanes dead)");
