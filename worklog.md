@@ -31985,3 +31985,25 @@ Stage Summary:
 - کیفیت داده: پایین (تک-ونو، فلو surrogate، CVR/takerRatio/crowdLS=null)؛ تأخیر فید ورود: خیر (هم‌تیک) — تأخیرِ **تشخیص**: بله ۶ دقیقه
 - گیت‌های پیشنهادی جدید (نوبت اجرای بعدی): FLUSH-EXHAUSTION GATE (منع دپلوی SHORT بعد از -15٪/10m یا >2.5×ATR فراتر از اکسترمم 20-bar → الزام retest) · STALE-BAR REFUSAL (اختلاف قیمت لایو با ساختار آخرین بار >X٪ → refuse) · SINGLE-VENUE OBSERVE-ONLY در پنجرهٔ ایونت-ول · LIQ-HEAT ساین‌فلیپ برای شورتِ تازه پس از کسکید · EVENT-VOL STOP FLOOR (ATR%>15 → دپلوی ممنوع چون R:R نمی‌سازد) · CASCADE-ALERT تیک-محور روی بریج (۳ لگ متوالی 60s با <-2٪ → فریز)
 - FLAT-10 دست‌نخورده؛ commit: AUDIT-NX3046-20261023
+
+---
+Task ID: AUDIT-IRYS-V129-20261023
+Agent: Z.ai Code (NEXUS operator session)
+Task: سه‌بخشی اپراتور — ①ممیزی ردیابی جریانات روز IRYSUSDT (تأخیر ورود/زمان‌بندی؟) ②ریشه‌یابی «چرا تاییدیه فقط BYBIT بود در حالی که باید از همهٔ صرافی‌ها مخصوصاً BINANCE گرفته شود» ③اجرای کامل و مهندسی نسخهٔ اصلاحی
+
+Work Log:
+- ممیزی IRYS (۱۲ سیگنال امروز تهران): 10×SL (شش‌تای آن BE-bank مثبت)، 1×TP3، خالص ≈ +93.6٪ ولی الگوی ورود بیمار: NX-3013 LONG@0.027952 دقیقاً تیک‌تاپ (RSI 87.4، maxPnl 0٪، SL -61.2٪ در 10min، 12min پس از SL قبلیِ همان سمبل)؛ NX-3045 LONG@0.137893 وسط whipsaw بلوآف (±10٪/2min)؛ MTF تا 9.7min کهنه (NX-3040)؛ ۵ LONG با CVD مخالف و فلو NEUTRAL دپلوی شدند؛ 9/12 فلو سورس BYBIT
+- کشف فورنزیک بزرگ: VolCause روزِ پامپ +565٪ فقط ONE ایونت ثبت کرد — 19:22:43Z @ 0.33654 یعنی «روی تیک‌تاپ، ۱۶ ساعت بعد از شروع پامپ» — و سقوط -77.4٪ بعدی (0.3405→0.0771 در 40min) هیچ سیگنالی نگرفت؛ تشخیص ایونت = پس‌افتاده، نه پیشرو
+- پاسخ سؤال ② (ریشه‌یابی): Binance spot REST زنده تست شد → JCTUSDT/BTWUSDT/MAGMAUSDT «Invalid symbol» = اصلاً در بایننس لیست نیستند؛ IRYSUSDT هم spot ندارد (فقط فیوچرز؛ با بن fapi بی‌دسترس) → بایننس برای این دنیای میکروکپ «ونوی غایب» است؛ لدر فلو (fapi→SPOT-MIRROR→BYBIT) اولین رانگِ جواب‌ده را برمی‌دارد و برچسب می‌زند؛ SURROGATE-FLOW CAP فقط جلوی CONFIRM فلو را می‌گرفت، نه دپلوی تک‌نیکال را؛ DISLOCATION-GATE روی کوین تک‌ونو ساختاراً کور بود (maxDevBps=0)
+- اصلاح گزارش قبلی (صداقت مهندسی): LIQ-HEAT-ABOVE «+4» یک جریمهٔ آستانه بود (ورود را سخت‌تر می‌کرد) نه پاداش فرصت — تحلیل قبلی من اشتباه خوانده بود؛ مشکلات واقعی: گیت‌های chase/flush + دپلوی تک‌نیکال
+- اجرای v12.9 (کامل و مهندسی): ①FLUSH-EXHAUSTION سخت (move 4-bar ≥max(12٪,1.2×ATR) هم‌جهت → refuse؛ NX-3046 -40.4٪/NX-3020/NX-3013 را می‌گرفت) ②KNIFE-CATCH (SHORT زیر کف 20-bar با بافر 0.25×ATR در واترفال زندهٔ ≥-6٪ → refuse؛ نامتقارن — آینهٔ LONG نصب نشد چون بریک‌اوت‌های روز پامپ برنده بودند و تیک‌تاپ‌لانگ‌ها را CHASE-EXTREME می‌گیرد) ③EVENT-VOL STOP-FLOOR (SL ضمنی slMult×2.5×ATR < 0.5×max-3-bar-range → refuse؛ SL سایز‌شده با ATR پیشایونت زنده نمی‌ماند) ④SINGLE-VENUE DEPLOY BLOCK (venueCount==1 → دپلوی ماشینی ممنوع؛ فقط forced اپراتور با تگ SINGLE-VENUE-FORCED) ⑤NO-BINANCE-CONFIRM surcharge +12 (≥2 ونو ولی کوتیشن BINANCE null) ⑥MULTI-VENUE CONSENSUS در flow.ts (رانگ دوم مستقل: OKX swap ↔ BYBIT ↔ Binance؛ اختلاف جهت >1.5٪ در پنجرهٔ 15m → کلمپ ±6، هرگز CONFIRM نمی‌کند؛ کش 60s + dedupe + fail-open) ⑦ثبت CHASE-EXTREME/REENTRY-WHIPSAW/FLUSH-EXHAUSTION/SINGLE-VENUE در رجیستری GateName + رفع تایپ Date|null بریک‌ها
+- راستی‌آزمایی زنده: lint=17=baseline؛ tsc روی فایل‌های ویرایش‌شده پاک؛ SINGLE-VENUE بلافاصله شلیک کرد (BIRBUSDT/JCTUSDT/BTRUSDT SHORT بلاک @20:49Z)؛ رانگ OKX برای IRYS-USDT-SWAP دیتای واقعی داد و برای JCT کد 51001 (تشخیص صحیح تک-ونو)؛ healthz GREEN
+- حین استقرار: OOM#6 (RSS 2.15GB) و OOM#7 (1.98GB) توسط کرنل — بخشی به‌خاطر دو اجرای tsc هم‌زمان با اپِ 2GB (درس: tsc فقط وقتی اپ down)؛ dev-up هر دو بار rescue کرد (pid 16101، boot 20:52:08Z)
+- FLAT-10 دست‌نخورده؛ Toobit وارد git نشد
+
+Stage Summary:
+- IRYS: تأخیر ورود تأیید شد اما با دو امضای متفاوت از JCT — تیک‌تاپ‌چیس (NX-3013) و بلوآف-ویپ‌ساو (NX-3045) به‌علاوهٔ کوری کامل تشخیص ایونت (ثبت LIQ-CASCADE فقط روی تیک‌تاپ)
+- ریشهٔ BYBIT-only: ترکیب «لیست‌نبودن در بایننس» (ساختاری) + «بن IP فapi» (عملیاتی) + «لدر بدون اجماع» (معماری) — هر سه با v12.9 پوشش داده شد
+- نسخهٔ اصلاحی ۷ قطعه‌ای زنده و شلیک‌کننده؛ نسخهٔ موتور NEXUS-LIVE v12.9
+- ریسک باقی‌مانده: OOM کرنلی زیر خط mem-guard در اسپایک بوت (اصلاح ساختاری گرم‌سازی = نوبت بعدی)
+- commit: AUDIT-IRYS-V129-20261023
