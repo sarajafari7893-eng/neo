@@ -357,3 +357,39 @@ export async function bybitTickerMap(): Promise<Map<string, BybitTicker>> {
 export async function bybitTickerRow(symbol: string): Promise<BybitTicker | null> {
   return (await bybitTickerMap().catch(() => new Map<string, BybitTicker>())).get(symbol) ?? null;
 }
+
+// ── v12.9 MULTI-VENUE CONSENSUS rungs (AUDIT-NX3046-20261023, operator
+//    mandate «باید از تمام صرافی‌ها مخصوصاً BINANCE تیکت گرفته بشه») ──
+// The flow bundle rides ONE venue's tape and the engine treated that single
+// venue as gospel. NX-3046 forensics: JCTUSDT trades on exactly ONE venue
+// (BYBIT — no Binance/OKX/Hyperliquid listing exists), its bundle was stamped
+// source BYBIT, and the deploy fired on tech-only confluence while the
+// surrogate cap was the only line of defense. These rungs hand the flow
+// scorer an INDEPENDENT second venue's 15m-window direction so cross-venue
+// disagreement clamps conviction at the SOURCE instead of at the gate.
+// Both rungs return the last-4×5m-bar % move (same window as the primary
+// bridgeKlines("5m",4) leg) or null when the venue does not list the symbol
+// (fail-open — consensus simply does not run).
+
+/** OKX rung — v5 swap candles, BASE-USDT-SWAP. */
+export async function okx5mMove(symbol: string): Promise<number | null> {
+  const inst = symbol.replace(/USDT$/, "-USDT-SWAP");
+  const j = await jfetch<{ data?: string[][] }>(`https://www.okx.com/api/v5/market/candles?instId=${inst}&bar=5m&limit=4`);
+  const d = j?.data;
+  if (!d || d.length < 4) return null;
+  const rows = [...d].reverse(); // OKX v5 is DESC (newest first) → ASC
+  const open = Number(rows[0]![1]);
+  const close = Number(rows[rows.length - 1]![4]);
+  if (!(open > 0) || !(close > 0)) return null;
+  return ((close - open) / open) * 100;
+}
+
+/** BYBIT rung — linear perp kline 5m, same math. */
+export async function bybit5mMove(symbol: string): Promise<number | null> {
+  const rows = await bybitKlines(symbol, "5m", 4);
+  if (!rows || rows.length < 4) return null;
+  const open = rows[0]!.open;
+  const close = rows[rows.length - 1]!.close;
+  if (!(open > 0) || !(close > 0)) return null;
+  return ((close - open) / open) * 100;
+}

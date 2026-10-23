@@ -8,7 +8,7 @@
 
 import { gateFetch } from "./fapi-gate";
 import { liquidationPressure } from "./liquidations";
-import { bridgeOiHist, bridgeTape, bybitTickerRow, type FlowSource } from "./flow-bridge";
+import { bridgeOiHist, bridgeTape, bridgeKlines, bybit5mMove, bybitTickerRow, okx5mMove, type FlowSource } from "./flow-bridge";
 
 const TIMEOUT_MS = 6500;
 const CACHE_TTL = 150_000; // 2.5min
@@ -87,6 +87,35 @@ const flowSrcMap = new Map<string, FlowSource | "MIXED">();
 /** Honest sourcing readout — which market the current flow numbers came from. */
 export function getFlowSource(symbol: string): FlowSource | "MIXED" | null {
   return flowSrcMap.get(symbol) ?? null;
+}
+
+// v12.9 MULTI-VENUE CONSENSUS — per-key 60s cache + in-flight dedupe so the
+// second-venue cross-check costs at most ONE fetch per venue per minute per
+// symbol on the hot path. Fail-soft: any throw → cached null → consensus
+// skips (never blocks, never invents).
+const consensusCache = new Map<string, { at: number; val: unknown }>();
+const consensusInFlight = new Map<string, Promise<unknown>>();
+async function cachedConsensusVal<T>(key: string, ttlMs: number, fn: () => Promise<T>): Promise<T | null> {
+  const hit = consensusCache.get(key);
+  if (hit && Date.now() - hit.at < ttlMs) return (hit.val as T | null) ?? null;
+  const inflight = consensusInFlight.get(key);
+  if (inflight) return (await inflight as T | null) ?? null;
+  const p = (async () => {
+    let val: T | null = null;
+    try {
+      val = await fn();
+    } catch {
+      val = null;
+    }
+    consensusCache.set(key, { at: Date.now(), val });
+    if (consensusCache.size > 800) {
+      const oldest = consensusCache.keys().next().value;
+      if (oldest) consensusCache.delete(oldest);
+    }
+    return val;
+  })().finally(() => consensusInFlight.delete(key));
+  consensusInFlight.set(key, p);
+  return (await p as T | null) ?? null;
 }
 
 interface AggTrade {
@@ -495,6 +524,53 @@ export async function scoreFlow(symbol: string, direction: "LONG" | "SHORT", pri
   const oiWeight = m.oiValueUsd ? Math.max(0.5, Math.min(1.2, Math.sqrt(m.oiValueUsd / 50_000_000))) : 1;
   let score = Math.round(Math.max(-25, Math.min(25, raw * oiWeight)));
   if (Math.abs(oiWeight - 1) >= 0.15) reasons.push(`flow weighted ×${oiWeight.toFixed(2)} by OI notional ${fmtUsdShort(m.oiValueUsd ?? 0)} — deep-book flow trusted`);
+
+  // ── v12.9 MULTI-VENUE CONSENSUS (AUDIT-NX3046-20261023, operator mandate
+  // «باید از تمام صرافی‌ها مخصوصاً BINANCE تیکت گرفته بشه») ──
+  // The bundle rode ONE venue's tape; nothing ever asked a SECOND venue
+  // whether the tape agrees. NX-3046: BYBIT-only JCT showed CVD +18.5%
+  // OPPOSING the short and OI unwinding — the bundle still rode neutral, and
+  // no other venue was consulted. Now: the primary venue's 15m-window
+  // (4×5m-bar) direction is compared against an INDEPENDENT second venue
+  // (BYBIT-tape → OKX cross-check; Binance/SPOT-MIRROR-tape → BYBIT
+  // cross-check). Sign-opposed moves diverging >1.5% clamp conviction to ±6
+  // (below the ±8 CONFIRMS/CONFLICTS line) — cross-venue conflict can never
+  // confirm a deploy. 60s per-symbol caches + in-flight dedupe keep the hot
+  // path cheap; any fetch failure fails OPEN (consensus simply does not run,
+  // no numbers invented). Single-venue coins (second rung null) are handled
+  // by the engine-side SINGLE-VENUE deploy block.
+  const consensusSrc = bridgeSrc ?? null;
+  if (consensusSrc) {
+    try {
+      const pri = await cachedConsensusVal(`PRI5M|${symbol}`, 60_000, async () => {
+        const r = await bridgeKlines(symbol, "5m", 4).catch(() => null);
+        if (!r || r.rows.length < 4) return null;
+        const o = r.rows[0]!.open, c = r.rows[r.rows.length - 1]!.close;
+        return { move: o > 0 && c > 0 ? ((c - o) / o) * 100 : null, source: r.source as string };
+      });
+      const priMove = pri?.move ?? null;
+      let secondName: string | null = null;
+      let secondMove: number | null = null;
+      if (consensusSrc === "BYBIT") {
+        secondName = "OKX";
+        secondMove = await cachedConsensusVal(`OKX5M|${symbol}`, 60_000, () => okx5mMove(symbol));
+      } else if (consensusSrc === "BINANCE" || consensusSrc === "SPOT-MIRROR" || consensusSrc === "MIXED") {
+        secondName = "BYBIT";
+        secondMove = await cachedConsensusVal(`BYB5M|${symbol}`, 60_000, () => bybit5mMove(symbol));
+      }
+      if (priMove !== null && secondName && secondMove !== null) {
+        const disagree = Math.sign(priMove) !== Math.sign(secondMove) && Math.abs(priMove - secondMove) > 1.5;
+        if (disagree) {
+          score = Math.max(-6, Math.min(6, score));
+          reasons.push(`MULTI-VENUE DISAGREE: primary ${consensusSrc} 15m-window ${priMove >= 0 ? "+" : ""}${priMove.toFixed(2)}% vs ${secondName} ${secondMove >= 0 ? "+" : ""}${secondMove.toFixed(2)}% — cross-venue tapes conflict, conviction clamped ±6, cannot CONFIRM (operator mandate: confirmation from all venues, especially Binance — v12.9)`);
+        } else if (Math.sign(priMove) === Math.sign(secondMove) && Math.abs(priMove - secondMove) <= 1.5) {
+          reasons.push(`MULTI-VENUE AGREE: primary ${consensusSrc} ${priMove >= 0 ? "+" : ""}${priMove.toFixed(2)}% ≈ ${secondName} ${secondMove >= 0 ? "+" : ""}${secondMove.toFixed(2)}% over 15m — cross-venue tape concordant (v12.9)`);
+        }
+      }
+    } catch {
+      /* fail-open — consensus is telemetry, never a wedging gate */
+    }
+  }
 
   // ── v12.8 SURROGATE-FLOW CAP (AUDIT-20261023, operator mandate «اصلاح
   // پیشنهادی را کامل و مهندسی اجرا کن») ──

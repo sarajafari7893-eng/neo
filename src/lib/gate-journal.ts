@@ -32,6 +32,7 @@ export interface ThrBreakdown {
   mtf: number; // v8.0 multi-TF flow board ± (conflict +5 / aligned −4)
   liq: number; // v8.1 liq-heat proximity ± (flush risk +4 / squeeze fuel −3)
   lesson?: number; // v9.3 deep-learn lesson injection (deterministic, operator mandate ب)
+  venue?: number; // v12.9 NO-BINANCE-CONFIRM surcharge (operator mandate: multi-venue confirmation, especially Binance)
 }
 
 export interface GateFactor {
@@ -88,7 +89,11 @@ export type GateName =
   | "BOTTOM-FADE" // v12.1 Task-48 ③ — SHORT refused when entry sells the bottom X% of the ±30m range into oversold/stretch (NX-2770 RSI 18 / NX-2779 %B −0.01 / NX-2769 %B −0.25)
   | "V-REVERSAL" // v12.1 Task-48 ④ — SHORT refused while a young violent bounce runs off the local low (NX-2770 bounced +3.71% at entry → +21% pump); LONG mirror shadow-only
   | "FLOW-GATE" // v12.1 Task-48 ② — optional gate on flow-blind deploys (EngineSetting "flow-gate"; default tag-only — 10d ledger: blind cohort +$204.20/n=553 WR 57.1% OUTPERFORMED sighted +$7.11/n=235)
-  | "ENTRY-LEVER"; // v11.3 late-entry shield — evidence-gated deterministic levers (EXT/FLOW/CAUSE/STALE/SCALP/LEVCAP/MOMENTUM)
+  | "ENTRY-LEVER" // v11.3 late-entry shield — evidence-gated deterministic levers (EXT/FLOW/CAUSE/STALE/SCALP/LEVCAP/MOMENTUM)
+  | "CHASE-EXTREME" // v12.8 AUDIT-20261023 — ≥1.5×ATR extended burst + RSI extreme refused outright (NX-3013 top-tick RSI 87.4 / NX-3020 hole-chase)
+  | "REENTRY-WHIPSAW" // v12.8 AUDIT-20261023 — opposite-direction flip <240m after a net-negative stop refused for all machine lanes (NX-3014→NX-3020 −61.2%×2)
+  | "FLUSH-EXHAUSTION" // v12.9 AUDIT-NX3046 — deploying WITH a ≥max(12%,1.2×ATR%) 4-bar cascade / SHORT below 20-bar low in a live waterfall / implied SL < 0.5×max-3-bar-range (NX-3046 −40.4% terminal-tick, dead in 23.4s)
+  | "SINGLE-VENUE"; // v12.9 AUDIT-NX3046 — only ONE live venue: cross-venue confirmation impossible, machine deploy refused (JCT 12 deploys/48h on BYBIT-only tape); operator-forced passes tagged
 
 export interface GateBlock {
   at: number;
