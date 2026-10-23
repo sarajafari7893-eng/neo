@@ -206,10 +206,15 @@ export async function captureTopVolCauses(): Promise<number> {
     const since = new Date(Date.now() - DEDUPE_WINDOW_MS);
     const recent = await db.volCauseEvent.findMany({
       where: { detectedAt: { gte: since }, symbol: { in: ranked.map((r) => r.symbol) } },
-      select: { symbol: true },
+      select: { symbol: true, direction: true },
     });
-    const recentSet = new Set(recent.map((r) => r.symbol));
-    const todo = ranked.filter((r) => !recentSet.has(r.symbol));
+    // v12.11 — DIRECTION-AWARE dedupe (IRYS forensics): the old per-symbol 6h
+    // key meant a captured +565% pump BLACKED OUT the following −77.4% collapse
+    // (zero DOWN events for 6h). Dedupe is now (symbol, direction) — an UP
+    // regime and a DOWN regime are separate events; rank-0 tick-plane rows
+    // (TICK-ONSET) participate equally so the slow plane doesn't duplicate them.
+    const recentSet = new Set(recent.map((r) => `${r.symbol}|${r.direction}`));
+    const todo = ranked.filter((r) => !recentSet.has(`${r.symbol}|${r.change24h >= 0 ? "UP" : "DOWN"}`));
     if (todo.length === 0) return 0;
 
     // onset radar is cached (90s) — read once

@@ -18,6 +18,8 @@
 import { getFeedStatus } from "./market-feed";
 import { gateFetch } from "./fapi-gate";
 import { HL_KEY_ALLOWLIST } from "./hl-allowlist";
+// v12.11 RUNG 0 — Binance futures aggTrade WS ring (see binanceFuturesBatch)
+import { ensureFstreamSubs, fstreamFreshQuotes } from "./binance-fstream";
 
 const TIMEOUT_MS = 6500;
 
@@ -208,18 +210,42 @@ export function robustMedian(quotes: VenueQuote[]): { median: number | null; deg
 
 // v10.16 (a) REAL Binance futures quote — batch /fapi/v1/ticker/24hr once per
 // sweep (15s cache so concurrent sweeps/venues share one call).
+// v12.11 RUNG 0 — FSTREAM aggTrade WS ring (operator mandate: futures-only
+// Binance anchor). BOTH Binance REST planes are 418-banned from this egress
+// while the per-symbol futures TRADE TAPE flows (~214 frames/s on IRYSUSDT,
+// ttfb 186ms — probe 2026-10-23). The ring is rung 0: real-time prints,
+// zero fapi weight, separate ban pool — REST rungs below only fill symbols
+// the ring cannot (not subscribed / no trade in 90s). A fully ring-fed sweep
+// touches ZERO Binance REST — ban-escalation risk structurally removed
+// (Task-50 law).
+
 let binanceFutCache: { at: number; data: Map<string, number> } | null = null;
+let lastFstreamLogAt = 0;
 
 async function binanceFuturesBatch(symbols: string[]): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  // RUNG 0 — live trade prints from the futures tape (fresher than any REST cache)
+  try {
+    ensureFstreamSubs(symbols);
+    for (const [s, q] of fstreamFreshQuotes(symbols)) out.set(s, q.price);
+  } catch {
+    /* ring never throws — REST rungs below are the safety net */
+  }
+  if (symbols.length > 0 && out.size === symbols.length) {
+    if (Date.now() - lastFstreamLogAt > 600_000) {
+      lastFstreamLogAt = Date.now();
+      console.log(`ulti-exchange] v12.11 BINANCE venue fully ring-fed (${out.size}/${symbols.length} aggTrade prints ≤90s) — zero Binance REST contact this sweep`);
+    }
+    return out;
+  }
+  const miss = symbols.filter((s) => !out.has(s));
   if (binanceFutCache && Date.now() - binanceFutCache.at < CACHE_TTL) {
-    const out = new Map<string, number>();
-    for (const s of symbols) {
+    for (const s of miss) {
       const p = binanceFutCache.data.get(s);
       if (p) out.set(s, p);
     }
     return out;
   }
-  const out = new Map<string, number>();
   // v10.24 Task 34-a: full-universe /fapi/v1/ticker/24hr — weight 40, gated.
   const json = await gateFetch<Array<{ symbol: string; lastPrice: string }>>("/fapi/v1/ticker/24hr", { priority: "critical", weight: 40, timeoutMs: TIMEOUT_MS });
   if (!json) {
@@ -234,7 +260,9 @@ async function binanceFuturesBatch(symbols: string[]): Promise<Map<string, numbe
     const mirrored = await binanceSpotMirrorBatch();
     if (mirrored.size > 0) {
       binanceFutCache = { at: Date.now(), data: mirrored };
-      for (const s of symbols) {
+      // v12.11 — fill ONLY the ring's misses: a 15s-old spot REST quote must
+      // never overwrite a live aggTrade print (fresher wins, always).
+      for (const s of miss) {
         const p = mirrored.get(s);
         if (p) out.set(s, p);
       }
@@ -251,7 +279,7 @@ async function binanceFuturesBatch(symbols: string[]): Promise<Map<string, numbe
     if (Number.isFinite(p) && p > 0) all.set(row.symbol, p);
   }
   binanceFutCache = { at: Date.now(), data: all };
-  for (const s of symbols) {
+  for (const s of miss) {
     const p = all.get(s);
     if (p) out.set(s, p);
   }

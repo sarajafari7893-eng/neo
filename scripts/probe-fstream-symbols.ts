@@ -2,7 +2,7 @@
 // v12.10 venue probe measured: fstream !miniTicker@arr SILENT from this egress
 // while DIRECT per-symbol streams answered p50=30ms. This probe re-verifies
 // RIGHT NOW before we wire the venue ring — read-only, 25s, no credentials.
-import { WebSocket } from "ws";
+// Run: bun scripts/probe-fstream-symbols.ts
 
 const RUN_MS = 25_000;
 const lanes: Array<{ name: string; url: string; parse: (d: string) => string | null }> = [
@@ -47,16 +47,16 @@ for (const lane of lanes) {
   counts.set(lane.name, 0);
   try {
     const ws = new WebSocket(lane.url);
-    ws.on("open", () => console.log(`[probe] open  — ${lane.name}`));
-    ws.on("message", (raw) => {
-      const sym = lane.parse(String(raw));
+    ws.onopen = () => console.log(`[probe] open  — ${lane.name}`);
+    ws.onmessage = (ev) => {
+      const sym = lane.parse(String(ev.data));
       if (!sym) return;
       counts.set(lane.name, (counts.get(lane.name) ?? 0) + 1);
       if (!firstAt.has(lane.name)) firstAt.set(lane.name, Date.now());
       lastAt.set(lane.name, Date.now());
-    });
-    ws.on("error", (e) => console.log(`[probe] error — ${lane.name}: ${String(e).slice(0, 80)}`));
-    ws.on("close", () => console.log(`[probe] close — ${lane.name}`));
+    };
+    ws.onerror = () => console.log(`[probe] error — ${lane.name}`);
+    ws.onclose = () => console.log(`[probe] close — ${lane.name}`);
   } catch (e) {
     console.log(`[probe] throw — ${lane.name}: ${String(e).slice(0, 120)}`);
   }

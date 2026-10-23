@@ -83,10 +83,104 @@ const cascadeRing = new Map<string, Array<{ at: number; price: number }>>();
 const cascadeLastAlert = new Map<string, number>();
 const cascadeLastPrice = new Map<string, number>();
 
-function observeTick(symbol: string, price: number, lane: string): void {
+// ── v12.11 TICK-ONSET — leading VolCause event plane (trace 1a16ac1614…) ────
+// Root cause (IRYS forensics): the slow capture plane (|Δ24h| board, 6h
+// per-symbol dedupe) recorded ONE event 16h into the +565% pump (at the
+// tick-top) and ZERO for the following −77.4%/40min collapse — events were
+// LAGGING, never LEADING. This detector watches the same tick plane as
+// CASCADE with calibrated pump/flush-onset thresholds and posts IMMEDIATELY
+// to /api/internal/onset-event → a VolCauseEvent row (rank 0 = tick-plane
+// origin) that volCauseBoost / the board / the daily report read in seconds.
+// Calibration (from the measured microcap forensics):
+//   FAST tier (90s window): ±3/6/12/25% — burst onsets (MAGMA-style waves,
+//     JCT −40%/8.5min flash legs trip within seconds-to-a-minute)
+//   SLOW tier (300s window): ±5/10/20/35% — sustained regimes; IRYS
+//     −1.94%/min average trips the 5% level ~155s into a 40min flush
+// Each (symbol, side, level) fires once per 6h → a big regime produces a
+// STAGED ladder (3→6→12→25), not one late event. CASCADE alerts also emit
+// an onset event tagged CASCADE-FREEZE so the vol-cause book never misses a
+// freeze. DB-side 90s dedupe on the route guards reload re-fires.
+const ONSET_RING_MS = 300_000;
+const ONSET_RING_MAX = 240;
+const ONSET_FAST_MS = 90_000;
+const ONSET_FAST_MIN_SPAN_MS = 2_000;
+const ONSET_SLOW_MIN_SPAN_MS = 30_000;
+const ONSET_LEVELS_FAST = [3, 6, 12, 25];
+const ONSET_LEVELS_SLOW = [5, 10, 20, 35];
+const ONSET_LEVEL_DEDUPE_MS = 6 * 3600_000;
+const onsetRing = new Map<string, Array<{ at: number; price: number }>>();
+const onsetFired = new Map<string, number>(); // `sym|side|tier+lvl` → fired at
+const onsetPostAt = new Map<string, number>(); // `sym|side` → last post (60s pacing)
+
+function postOnset(symbol: string, side: "UP" | "DOWN", movePct: number, windowMs: number, lane: string, tier: "FAST" | "SLOW" | "CASCADE", level: number | null, price: number, change24h: number | null): void {
+  const now = Date.now();
+  if (tier !== "CASCADE") {
+    const paceKey = `${symbol}|${side}`;
+    if (now - (onsetPostAt.get(paceKey) ?? 0) < 60_000) return;
+    onsetPostAt.set(paceKey, now);
+  }
+  console.log(`[price-ws] TICK-ONSET ${symbol} ${side} ${tier}${level ? `-lvl${level}` : ""} ${movePct.toFixed(2)}% in ${Math.round(windowMs / 1000)}s (${lane}) — onset event posted`);
+  void fetch("http://localhost:3000/api/internal/onset-event", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    cache: "no-store",
+    body: JSON.stringify({ symbol, side, movePct: Number(movePct.toFixed(2)), windowMs, lane, tier, level, price, change24h, at: now }),
+  }).catch(() => {});
+}
+
+function highestUnfiredLevel(symbol: string, side: string, tier: string, levels: number[], moveAbs: number, now: number): number | null {
+  let best: number | null = null;
+  for (const lvl of levels) {
+    if (moveAbs < lvl) break;
+    if (now - (onsetFired.get(`${symbol}|${side}|${tier}${lvl}`) ?? 0) >= ONSET_LEVEL_DEDUPE_MS) best = lvl;
+  }
+  return best;
+}
+function markLevelsFired(symbol: string, side: string, tier: "FAST" | "SLOW", top: number, now: number): void {
+  for (const lvl of tier === "FAST" ? ONSET_LEVELS_FAST : ONSET_LEVELS_SLOW) {
+    if (lvl > top) break;
+    onsetFired.set(`${symbol}|${side}|${tier}${lvl}`, now);
+  }
+}
+
+function observeOnset(symbol: string, price: number, lane: string, change24h: number | null): void {
+  const now = Date.now();
+  const ring = onsetRing.get(symbol) ?? [];
+  ring.push({ at: now, price });
+  while (ring.length > ONSET_RING_MAX || (ring.length > 1 && now - ring[0]!.at > ONSET_RING_MS)) ring.shift();
+  onsetRing.set(symbol, ring);
+  if (ring.length < 2) return;
+  // FAST ref = oldest tick still inside the 90s window; SLOW ref = oldest ≤300s
+  let fi = 0;
+  while (fi < ring.length - 1 && now - ring[fi]!.at > ONSET_FAST_MS) fi++;
+  const fastRef = ring[fi]!;
+  const slowRef = ring[0]!;
+  const fastMove = fastRef.price > 0 ? ((price - fastRef.price) / fastRef.price) * 100 : 0;
+  const slowMove = slowRef.price > 0 ? ((price - slowRef.price) / slowRef.price) * 100 : 0;
+  let fired: { tier: "FAST" | "SLOW"; level: number; move: number; span: number } | null = null;
+  const fastSpan = now - fastRef.at;
+  const slowSpan = now - slowRef.at;
+  if (fastSpan >= ONSET_FAST_MIN_SPAN_MS && Math.abs(fastMove) >= ONSET_LEVELS_FAST[0]!) {
+    const side = fastMove < 0 ? "DOWN" : "UP";
+    const lvl = highestUnfiredLevel(symbol, side, "FAST", ONSET_LEVELS_FAST, Math.abs(fastMove), now);
+    if (lvl !== null) fired = { tier: "FAST", level: lvl, move: fastMove, span: fastSpan };
+  }
+  if (!fired && slowSpan >= ONSET_SLOW_MIN_SPAN_MS && Math.abs(slowMove) >= ONSET_LEVELS_SLOW[0]!) {
+    const side = slowMove < 0 ? "DOWN" : "UP";
+    const lvl = highestUnfiredLevel(symbol, side, "SLOW", ONSET_LEVELS_SLOW, Math.abs(slowMove), now);
+    if (lvl !== null) fired = { tier: "SLOW", level: lvl, move: slowMove, span: slowSpan };
+  }
+  if (!fired) return;
+  const side = fired.move < 0 ? "DOWN" : "UP";
+  markLevelsFired(symbol, side, fired.tier, fired.level, now);
+  postOnset(symbol, side, fired.move, fired.span, lane, fired.tier, fired.level, price, change24h);
+}
+
+function observeTick(symbol: string, price: number, lane: string, change24h: number | null = null): void {
   if (!(price > 0)) return;
   if (cascadeLastPrice.get(symbol) === price) return; // unchanged-tick dedupe (bybit heartbeats)
   cascadeLastPrice.set(symbol, price);
+  observeOnset(symbol, price, lane, change24h); // v12.11 leading onset plane
   const now = Date.now();
   const ring = cascadeRing.get(symbol) ?? [];
   ring.push({ at: now, price });
@@ -100,6 +194,7 @@ function observeTick(symbol: string, price: number, lane: string): void {
   cascadeLastAlert.set(symbol, now);
   const side = movePct < 0 ? "DOWN" : "UP";
   console.log(`[price-ws] CASCADE-ALERT ${symbol} ${side} ${movePct.toFixed(2)}% in ${(now - first.at) / 1000}s (${lane}) — freeze posted to engine (both-direction deploys 10min)`);
+  postOnset(symbol, side, movePct, now - first.at, lane, "CASCADE", null, price, change24h); // v12.11 — the vol-cause book records every freeze (leading LIQ-CASCADE evidence)
   void fetch("http://localhost:3000/api/internal/cascade-alert", {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -145,7 +240,7 @@ function connectSpotWs(): void {
             volume24h: Number(d.q) || 0,
             at: d.E || Date.now(),
           });
-          observeTick(d.s, price, "WS·SPOT"); // v12.10 tick-velocity cascade detector
+          observeTick(d.s, price, "WS·SPOT", d.o ? ((price - Number(d.o)) / Number(d.o)) * 100 : null); // v12.10 tick-velocity cascade detector
           lastEventAt = Date.now();
         }
       } catch {
@@ -315,7 +410,7 @@ function connect() {
           volume24h: Number(d.q),
           at: d.E || Date.now(),
         });
-        observeTick(d.s, Number(d.c), "WS PUSH"); // v12.10 tick-velocity cascade detector
+        observeTick(d.s, Number(d.c), "WS PUSH", d.o ? ((Number(d.c) - Number(d.o)) / Number(d.o)) * 100 : null); // v12.10 tick-velocity cascade detector
         lastEventAt = Date.now();
       } catch {
         /* skip */
@@ -385,7 +480,7 @@ function connectBybit() {
               volume24h: p.volume24h ?? 0,
               at: Date.now(),
             });
-            observeTick(sym, p.price, "WS·BYBIT"); // v12.10 tick-velocity cascade detector
+            observeTick(sym, p.price, "WS·BYBIT", p.change24h ?? null); // v12.10 tick-velocity cascade detector
             lastEventAt = Date.now();
           }
         }
