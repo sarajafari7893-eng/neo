@@ -32269,3 +32269,21 @@ Stage Summary:
 - حلقه fwd-settle از «کورِ یک‌ماهه» به «زندهٔ سرور-ساید» رسید: کادنس 15min مستقل از کلاینت + بک‌فیل کامل بدهی تاریخی؛ substrate یادگیری (volcause.study و لایه learning تکسونومی) دوباره تغذیه می‌شود — ورودیِ لازم برای ممیزی‌های کیفیت‌دادهٔ بعدی.
 - محدودیت صادقانه: چرخه recycle مکرر اپ (فشار 4GB، پیش از این session هم موجود) ران‌های کادنس را فعلاً به ران‌های +90s بوت تبدیل می‌کند — رفتار خودجبران است (هر بوت یک ران کامل) و پس از ثبات RAM-SHED round-2 ریتم واقعی 15min برمی‌گردد.
 - commit: P0-b FWD-SETTLE-20261025 (نسخهٔ اول instrumentation + ماژول توسط چرخهٔ خودکار armor در 5abd4b40 سواپ شده بود؛ این commit دلتای نهایی + اسکریپت backfill + تله‌متری + worklog است)
+
+---
+Task ID: P1-c
+Agent: general-purpose (P1-c وزن‌های استراتژی داده‌محور از ممیزی تازه 2026-10-25، trace اپراتور 1a16ff36143328fd)
+
+Work Log:
+- خواندن worklog (۱۲۰ خط آخر) + strategy-weights.ts کامل + مسیر POST /api/strategy-weights و مصرف‌کنندهٔ engine.ts:3352 (strategyWeightFor per-deploy). کشف کلیدی پیش از اعمال: ردیف EngineSetting «strategy.weights» از 2026-09-15 فعال (enabled=true) با پیشنهاد قدیمی و دقیقاً وارونه‌ی داده‌ی تازه — AI-SWING (اسب بارکش، native +$104.07) ×0.5 خفه، AI-SCALP شکسته (WR30%) ×1.5 تغذیه، BREAKOUT بهترین کلاس بومی ×0.5 زیرسایز — یعنی سایزینگ زندهٔ سیستم ~۴۰ روز برخلاف شواهد عمل می‌کرد
+- مسیر اعمال: POST /api/strategy-weights اول امتحان شد ولی :3000 در ابتدای مأموریت و در پنجره‌های بعدی پاسخ نمی‌داد (connection refused در سطح سرور، نه 401 NextAuth — سرور در گپ recycle فرماندار RAM بود؛ طبق مأموریت ریست نکردم) → مسیر مجاز جایگزین: اسکریپت scripts/apply-strategy-weights-20261025.ts — Prisma upsert دقیقاً به شکل sanitize کتابخانه (کلید uppercase، کلمپ [0.25,2.0]، رُند 2dp، updatedAt ISO، updatedBy ≤80) با updatedBy «operator-mandate-1a16ff36143328fd» + ردیف audit SignalEvent (type ENGINE، level ai) با همان قالب پیام route + پسوند شواهد ممیزی
+- وزن‌های اعمال‌شده (پنجره 10/10→25/10، 974 سیگنال CLEAN، ممیزی DOCTRINE-PEAK-QA-20261025): AI-SCALP 0.25 (n=64، WR30% حتی روی native، خالص −$11.34 — کف کلمپ = توقف-با-سایزینگ، هیچ گیت/هندسه‌ای دست نخورد) · MEAN-REVERT 0.5 (n=90، WR38%، −$13.98) · BREAKOUT 1.25 (پنجره +$77.38؛ native n=188 WR64% +$110.45 — کوهورت سورجیت WR35% با گیت جدید P0-a وتو می‌شود) · AI-SWING 1.0 (کار اصلی، native +$104.07 — از ×0.5 احیا) · MOMENTUM 1.0 (n=6 ناکافی، خنثی)
+- راستی‌آزمایی: خواندن مجدد readonly bun:sqlite → enabled:true و ۵ وزن درست با updatedBy مأموریت؛ GET /api/strategy-weights زنده پس از بوت 22:42Z → describe «ACTIVE AI-SCALP:×0.25 MEAN-REVERT:×0.5 MOMENTUM:×1 BREAKOUT:×1.25 AI-SWING:×1»؛ healthz در همان پنجره ok:true (uptime 4s، watchdog لایه ۱+۲ فعال)؛ ردیف audit: cmvmzhqfe0001r8l5gr05v5uz
+- یافتهٔ کش: strategyWeightFor → getStrategyWeights با کش درون-پروسه‌ای TTL=15s (CACHE_TTL=15_000 در خط 52 strategy-weights.ts)؛ مسیر API کش را در همان فراخوانی تازه می‌کند؛ نوشتهٔ اسکریپت از پروسهٔ جدا حداکثر ≤15s بعد در اولین فراخوانی per-deploy خوانده می‌شود — بدون هیچ ریستارتی. چون سرور چند ثانیه پس از اعمال بوت تازه داشت، اولین خوانش موتور همان وزن‌های تازه بود
+- کامنت فقط-توضیحی انگلیسی در strategy-weights.ts (ثبت فعال‌سازی/تخصیص 2026-10-25 + تصریح اینکه STAGED_PROPOSAL قدیمی 09-15 فقط تاریخچه است و هنگام OFF رندر می‌شود)؛ منطق کد صفر تغییر؛ اسکریپت جدید صفر خطای lint
+- یادداشت صادقانه: در انتهای مأموریت سرور در یک گپ recycle طولانی‌تر بود (healthz چندبار بی‌پاسخ) — ریتم شناخته‌شدهٔ فشار 4GB که پیش از این session هم وجود داشت و بی‌ربط به این تغییر است (تغییر من فقط یک ردیف DB + اسکریپت جدا بود؛ سرور از اولین لحظهٔ مأموریت down بود و زنجیرهٔ watchdog مالک بازگشت است)؛ ok:true در پنجرهٔ 22:42Z مستند شد
+
+Stage Summary:
+- سایزینگ per-strategy از «وارونهٔ داده» به «داده‌محورِ تازه» چرخید: خونریز AI-SCALP به کف کلمپ، MEAN-REVERT نصف، BREAKOUT بهترین کلاس بومی ۱.۲۵× (در هم‌افزایی با گیت سورجیت P0-a)، اسب بارکش AI-SWING به ۱.۰ احیا — بدون دست‌زدن به هیچ گیت/هندسه/سقف ریسک؛ اثر کامل از دیپلوی بعدی (کش ≤15s)
+- commit: P1-c STRATEGY-WEIGHTS-20261025 (اسکریپت اعمال + کامنت کتابخانه + این worklog)
+- گام بعدی پیشنهادی: پایش تگ‌های STRATW-x0.25/x1.25 و STRR-CAP/SURR-BREAKOUT در لجر پس از ≥۱۰۰ ستل بعدی برای ارزیابی اثر ترکیب وزن+گیت؛ سپس P2 (بازکالیبراسیون confidence و سیاست ساعتی)

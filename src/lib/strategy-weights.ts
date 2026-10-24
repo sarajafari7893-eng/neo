@@ -14,6 +14,16 @@
 // EngineSetting "strategy.weights"; while enabled=false every weight reads 1.0
 // (mechanism deployed, activation = one explicit operator decision).
 //
+// ACTIVATED + REALLOCATED (operator mandate trace 1a16ff36143328fd, applied
+// 2026-10-25 via audited script scripts/apply-strategy-weights-20261025.ts)
+// from the FRESH 15-day audit (window 2026-10-10→25, n=974 CLEAN signals):
+// AI-SCALP ×0.25 (n=64 WR30% net −$11.34 — pause-by-sizing at clamp floor),
+// MEAN-REVERT ×0.5 (n=90 WR38% −$13.98), BREAKOUT ×1.25 (native n=188 WR64%
+// +$110.45; surrogate cohort vetoed by the P0-a SURROGATE-BREAKOUT gate),
+// AI-SWING ×1.0 (workhorse, native +$104.07), MOMENTUM ×1.0 (n=6 insufficient).
+// The STAGED_PROPOSAL below is the superseded 2026-09-15 draft (kept for
+// history only — it is NOT live and only renders when the module is OFF).
+//
 // Invariants: weight ∈ [0.25, 2.0] per strategy (clamped), unknown strategies
 // read 1.0, disabled module reads 1.0, every activation change auditable via
 // /api/strategy-weights POST (ENGINE event).
