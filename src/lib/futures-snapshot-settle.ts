@@ -143,6 +143,7 @@ export class KlineCache {
       this.egressCalls++;
       if (!page || page.candles.length === 0) break; // graceful — keep what we have
       source = page.source;
+      this.note(source);
       acc = acc.concat(page.candles);
       const lastOpen = page.candles[page.candles.length - 1]!.openTime;
       const step = INTERVAL_MS[interval] ?? 3_600_000;
@@ -153,7 +154,7 @@ export class KlineCache {
     // de-dupe + sort
     const seen = new Set<number>();
     acc = acc.filter((c) => (seen.has(c.openTime) ? false : (seen.add(c.openTime), true))).sort((a, b) => a.openTime - b.openTime);
-    this.spans.set(key, { from: span ? Math.min(span.from, startMs) : startMs, to: Math.max(span?.to ?? 0, cursor), candles: acc, source });
+    this.spans.set(key, { from: span ? span.from : startMs, to: Math.max(span?.to ?? 0, cursor), candles: acc, source });
   }
 
   // price AT tMs — same containment convention as volCause.priceAt (open ≤ t < open+period → that candle's close)
@@ -172,10 +173,9 @@ export class KlineCache {
 }
 
 // ── sibling rung — same-venue snapshot price (egress-free) ──────────────────
-async function siblingPrice(symbol: string, tMs: number, horizon: FwdHorizon): Promise<number | null> {
-  const [minAhead, maxAhead] = HORIZON_WINDOW[horizon];
+async function siblingPrice(symbol: string, tMs: number, winMinMs: number, winMaxMs: number): Promise<number | null> {
   const row = await db.futuresSnapshot.findFirst({
-    where: { symbol, ts: { gte: new Date(tMs + minAhead), lte: new Date(tMs + maxAhead) } },
+    where: { symbol, ts: { gte: new Date(tMs + winMinMs), lte: new Date(tMs + winMaxMs) } },
     orderBy: { ts: "asc" },
     select: { price: true },
   });
@@ -183,10 +183,9 @@ async function siblingPrice(symbol: string, tMs: number, horizon: FwdHorizon): P
 }
 
 // ── PricePoint rung — the app's own WS price archive (price-ws :3003) ───────
-async function pricePointAt(symbol: string, tMs: number, horizon: FwdHorizon): Promise<number | null> {
-  const [minAhead, maxAhead] = HORIZON_WINDOW[horizon];
+async function pricePointAt(symbol: string, tMs: number, winMinMs: number, winMaxMs: number): Promise<number | null> {
   const row = await db.pricePoint.findFirst({
-    where: { symbol, createdAt: { gte: new Date(tMs + minAhead), lte: new Date(tMs + maxAhead) } },
+    where: { symbol, createdAt: { gte: new Date(tMs + winMinMs), lte: new Date(tMs + winMaxMs) } },
     orderBy: { createdAt: "asc" },
     select: { price: true },
   });
@@ -196,43 +195,65 @@ async function pricePointAt(symbol: string, tMs: number, horizon: FwdHorizon): P
 export interface HorizonResolution {
   pct: number | null;
   source: string; // SIBLING | PRICEPOINT | FAPI | SPOT-MIRROR | BYBIT | NONE
+  rungNotes: string; // honest per-rung audit trail, e.g. "sibling:miss pricepoint:miss kit:BYBIT"
 }
 
-// Resolve ONE horizon: sibling snapshot → PricePoint → kline ladder.
+// tick-rung tolerance window for a horizon: canonical horizons use the exact
+// windows futures-taxonomy's own settle already uses; arbitrary horizons (the
+// VolCauseEvent 2h/6h pair) get a proportional [0.9h, 1.4h] band.
+export function horizonWindowMs(horizonMs: number): [number, number] {
+  const canonical: Record<number, [number, number]> = {
+    [FWD_HORIZONS.m15]: HORIZON_WINDOW.m15,
+    [FWD_HORIZONS.h1]: HORIZON_WINDOW.h1,
+    [FWD_HORIZONS.h4]: HORIZON_WINDOW.h4,
+  };
+  return canonical[horizonMs] ?? [Math.round(horizonMs * 0.9), Math.round(horizonMs * 1.4)];
+}
+
+// Resolve ONE horizon (canonical FwdHorizon key OR raw horizon ms, e.g. 2h/6h
+// for VolCauseEvent): sibling snapshot → PricePoint → kline ladder.
 export async function resolveHorizonPrice(
   basePrice: number,
   symbol: string,
   tMs: number,
-  horizon: FwdHorizon,
+  horizon: FwdHorizon | number,
   opts: { useSibling?: boolean; usePricePoint?: boolean; kit?: KlineCache } = {},
 ): Promise<HorizonResolution> {
-  const out = (price: number | null, source: string): HorizonResolution =>
-    price !== null && basePrice > 0 ? { pct: pct3(basePrice, price), source } : { pct: null, source: "NONE" };
+  const horizonMs = typeof horizon === "number" ? horizon : FWD_HORIZONS[horizon];
+  const [winMin, winMax] = horizonWindowMs(horizonMs);
+  const none = (notes: string): HorizonResolution => ({ pct: null, source: "NONE", rungNotes: notes });
+  const out = (price: number | null, source: string, notes: string): HorizonResolution =>
+    price !== null && basePrice > 0 ? { pct: pct3(basePrice, price), source, rungNotes: notes } : none(`${notes} ${source}:bad-base`);
+  const notes: string[] = [];
   try {
     if (opts.useSibling) {
-      const p = await siblingPrice(symbol, tMs, horizon).catch(() => null);
-      if (p !== null) return out(p, "SIBLING");
+      const p = await siblingPrice(symbol, tMs, winMin, winMax).catch(() => null);
+      notes.push(`sibling:${p !== null ? "hit" : "miss"}`);
+      if (p !== null) return out(p, "SIBLING", notes.join(" "));
     }
     if (opts.usePricePoint) {
-      const p = await pricePointAt(symbol, tMs, horizon).catch(() => null);
-      if (p !== null) return out(p, "PRICEPOINT");
+      const p = await pricePointAt(symbol, tMs, winMin, winMax).catch(() => null);
+      notes.push(`pricepoint:${p !== null ? "hit" : "miss"}`);
+      if (p !== null) return out(p, "PRICEPOINT", notes.join(" "));
     }
     const kit = opts.kit;
     if (kit) {
       // 1h candles for EVERY horizon — a 1h candle containing t+h closes within
       // (h, h+1h]; 4h candles would smear the 4h horizon by up to 4h.
       const interval = "1h";
-      await kit.ensure(symbol, interval, tMs, tMs + FWD_HORIZONS[horizon] + INTERVAL_MS[interval]!);
-      const hit = kit.priceAt(symbol, interval, tMs + FWD_HORIZONS[horizon]);
-      if (hit) return out(hit.price, hit.source);
-      return { pct: null, source: "NONE" };
+      await kit.ensure(symbol, interval, tMs, tMs + horizonMs + INTERVAL_MS[interval]!);
+      const hit = kit.priceAt(symbol, interval, tMs + horizonMs);
+      notes.push(`kit:${hit ? hit.source : "miss"}`);
+      if (hit) return out(hit.price, hit.source, notes.join(" "));
+      return none(notes.join(" "));
     }
     // no cache provided (one-off callers) — reuse volCause's exact fetch helper
-    const recent = await klinePriceRecent(symbol, tMs + FWD_HORIZONS[horizon], FWD_HORIZONS[horizon]);
-    if (recent) return out(recent.price, recent.source);
-    return { pct: null, source: "NONE" };
-  } catch {
-    return { pct: null, source: "NONE" };
+    const recent = await klinePriceRecent(symbol, tMs + horizonMs, horizonMs);
+    notes.push(`recent:${recent ? recent.source : "miss"}`);
+    if (recent) return out(recent.price, recent.source, notes.join(" "));
+    return none(notes.join(" "));
+  } catch (e) {
+    return none(`${notes.join(" ")} error:${e instanceof Error ? e.message : String(e)}`);
   }
 }
 

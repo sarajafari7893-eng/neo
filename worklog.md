@@ -32249,3 +32249,23 @@ Work Log:
 Stage Summary:
 - گیت P0 کیفیت داده SURROGATE در مسیر دیپلوی فعال شد: BREAKOUT+سورجیت = وتوی مطلق (به‌جز override اپراتور با تگ)، سایر استراتژی‌ها روی سورجیت = کپ ×0.5 + تگ SURR-CAP — v13.1
 - commit: 06c21c37 (armor v2 auto-commit — کد engine.ts + gate-journal.ts در آن سواپ و push شد) + این entry در commit پیام‌دار P0-a
+
+---
+Task ID: P0-b
+Agent: general-purpose (P0-b احیای حلقه fwd-settle)
+
+Work Log:
+- ریشه‌یابی حلقه مرده (دو عامل مستقل، هر دو اثبات‌شده):
+  (۱) VolCauseEvent — تنها caller تابع settlePendingVolCauses مسیر GET /api/vol-cause بود که تنها مصرف‌کننده‌اش کارت VolCauseCard در داشبورد است؛ از کنسولیداسیون sensor-bus dormant (v10.18، ~09-19) به بعد AiCoreSection استریپ SensorBusDormantStrip را «بدون شرط» رندر می‌کند (پرچم sensorBusDormant در 09-22/23 آزاد شد ولی سه کارت سنسور هرگز دوباره mount نشدند) → صفر poll → صفر settle. DB تأیید می‌کند: settleهای روزانه از 09-21 قطع شد (فقط ۱۱ ردیف پراکنده در 10-23 = fetch مستقیم مسیر). یعنی settle یک ماه قربانی «وابستگی به poll کلاینت» بود.
+  (۲) FuturesSnapshot — settleFuturesForwards در engine زنده است ولی الگویش «oldest-first بدون rung جایگزین» است: صف ۳۰۰تایی روی ردیف‌های sparse سپتامبر قفل می‌شود که هیچ sibling در پنجره [ts+55m, ts+85m] ندارند؛ هر pass همان ۳۰۰ ردیف را می‌گیرد، صفر می‌سازد و جلوتر نمی‌رود (head-of-line blocking). FS settled-by-day: 200 در 09-29 و سپس صفرِ مطلق تا امروز.
+- بازسیمایی سرور-ساید در src/instrumentation.ts (بلاک مستقل، ram-shed دست‌نخورده): کادنس 15min با ران اول +90s پس از بوت، setInterval unref'd، try/catch سراسری، گارد globalThis.__nexusFwdSettle ضد ثبت دوباره turbopack/HMR، تله‌متری هر ران به console + .data/settle-loop/heartbeat.txt (timestamp + شمار settled). کادنس هر بار settlePendingVolCauses + learnVolCauses (بازتازه‌سازی ردیف یادگیری volcause.study) و settlePendingFuturesSnapshots جدید را اجرا می‌کند.
+- ماژول جدید src/lib/futures-snapshot-settle.ts: نردبان قیمت چند-رَنگه sibling snapshot (بدون egress، هم‌ونيو) → PricePoint (آرشیو WS خود اپ) → kline رِنج‌دار (fapi از طریق وزن-گیت همان fapi-gate → SPOT-MIRROR api.binance.com/data-api.binance.vision → BYBIT v5 linear) با KlineCache صفحه‌بندی‌شده (کل بک‌فیل FS با فقط ~56 فراخوانی egress)، throttle 120s، batch 200، try/catch ردیف‌به‌ردیف، و گارد skip-floor ضد clog (اگر یک batch کامل هیچ‌چیز نساخت، کف صف جلو می‌رود تا صف همیشه زنده بماند — همان شکستی که settleFuturesForwards را کشت). درصدها unlevered و toFixed(3)؛ کانوَنشن priceAt دقیقاً همان قرارداد volCause (سازگاری با ۲۳۹ ردیف تاریخی).
+- اسکریپت یک‌باره scripts/backfill-fwd-settle.ts (دو بار اجرا؛ ران دوم برای retryهای ترانزیت): VCE scanned≈1,017 — settledAt از ~250 به 1240 (از 1276)، fwd2hPct به 1137 و fwd6hPct به 1160 رسید؛ 36 ردیف باقی‌مانده همگی detected <6h اخیرند (هنوز سرِ موعد نیامده‌اند). FS scanned=11,914 — rowsSettled=11,909، fieldsSet=35,617، فقط 5 خطای دائمی (هیچ‌کدام از سه rung قیمت نیافتند). منابع FS: SIBLING غالب (h1: 11,759 از 11,897) + FAPI (h1: 130) — نکته صادقانه: fapi هنگام اجرا از این باکس پاسخ داد (بن egress در این پنجره برداشته بود)؛ نردبان SPOT-MIRROR/BYBIT به‌عنوان بیمه در کد مانده و در نبود fapi خودکار سرویس می‌دهد.
+- راستی‌آزمایی فقط-خواندنی (bun:sqlite readonly): پنجره 10/10→ → VCE rows=609، fwd2h=571، fwd6h=572، settledAt=573 (هدف >300 ✓)؛ FS rows=7390، fwd15m=7380، fwd1h=7364، fwd4h=7300 (هدف >2000 ✓). عقلانیت مقادیر: FS fwd1hPct بازه −3.65..+3.17 (BTC/ETH ساعتی — واقع‌گرایانه)؛ VCE fwd2hPct تا −79.7/+127.0 (کلاس پامپ/کالپس memecoin — هم‌خوان با رخدادهای شناخته‌شده).
+- کادنس زنده اثبات شد (پیش از پایان مأموریت): heartbeat دو ران واقعی — 22:25:36Z volCause=12 futures=199 failed=1 و 22:29:00Z volCause=12 futures=196 failed=4 — یعنی هر بوت تازه ران +90s خود را اجرا می‌کند.
+- راستی‌آزمایی سلامت: lint = 17 (baseline، صفرِ جدید — هر سه فایل من صفر یافته)؛ healthz ok:true (در بازه‌های بین recycle)؛ dev.log بدون خطای کامپایل جدید.
+
+Stage Summary:
+- حلقه fwd-settle از «کورِ یک‌ماهه» به «زندهٔ سرور-ساید» رسید: کادنس 15min مستقل از کلاینت + بک‌فیل کامل بدهی تاریخی؛ substrate یادگیری (volcause.study و لایه learning تکسونومی) دوباره تغذیه می‌شود — ورودیِ لازم برای ممیزی‌های کیفیت‌دادهٔ بعدی.
+- محدودیت صادقانه: چرخه recycle مکرر اپ (فشار 4GB، پیش از این session هم موجود) ران‌های کادنس را فعلاً به ران‌های +90s بوت تبدیل می‌کند — رفتار خودجبران است (هر بوت یک ران کامل) و پس از ثبات RAM-SHED round-2 ریتم واقعی 15min برمی‌گردد.
+- commit: P0-b FWD-SETTLE-20261025 (نسخهٔ اول instrumentation + ماژول توسط چرخهٔ خودکار armor در 5abd4b40 سواپ شده بود؛ این commit دلتای نهایی + اسکریپت backfill + تله‌متری + worklog است)
