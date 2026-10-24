@@ -152,7 +152,8 @@ import { buildResearchLadder, journalResearchShadowDeploy, settleResearchShadow 
 //   ④ SINGLE-VENUE DEPLOY BLOCK: only ONE live venue → machine deploy refused, operator-forced passes tagged SINGLE-VENUE-FORCED (JCT/MAGMA class — 12 deploys/48h on BYBIT-only tape)
 //   ⑤ NO-BINANCE-CONFIRM surcharge +12 (≥2 live venues but BINANCE quote null — anchor absent, higher bar; IRYS/BTW/NEAR during fapi outage)
 //   ⑥ MULTI-VENUE CONSENSUS (flow.ts): independent second-venue 15m-window direction (OKX↔BYBIT↔Binance) — cross-venue tape conflict clamps conviction ±6, can never CONFIRM
-export const ENGINE_VERSION = "NEXUS-LIVE v13.0"; // v13.0 — CORE-REVERT (operator mandate 2026-10-24 «پیشنهاد من سیستم به همان وضعیت برگردد و با دیتای موجود نقاط ضعف را فیلتر کند», W42 performance audit): v12.7 era measured +$39.74 / WR 60.4% / med event→entry 13.2m vs v12.9 era −$8.70 with 7× hard SL −61.2% and med delay 27.4m — the confirmation stack DOUBLED latency and starved the board behind a 200+ veto wall. Therefore: v12.8+ hard gates (CHASE-EXTREME, FLUSH-EXHAUSTION/KNIFE-CATCH/EVENT-VOL STOP-FLOOR, SINGLE-VENUE refuse + probation +8, NO-BINANCE +12, STALE-BAR, SURROGATE-FLOW cap, MULTI-VENUE clamp) → ADVISORY journal-only behind EngineSetting "core-revert" {enabled} (flip false = exact v12.9). Weaknesses filtered from EXISTING data instead: ① STALE-CHASE gate — trigger-event age >20m or |move since event| >4.5% refuses (W42 buckets: 0-10m +$1.71, 10-20m 5/5 SL −$7.52, >35m 1/1 SL; moveAtEntry +10.63% BIRB 14:54 / +5.13% JCT 15:06 both SL) ② REARM-BRAKE-BE — BE-banked SL re-entry window 45m (BIRB 15:22 +4.67% BE-SL → 15:34 re-entry SL −61.2% 12m later). KEPT HARD (the successful v12.7 core + zero-cost protectors): FLAT-10, minScore, REARM-BRAKE, REENTRY-LOCKOUT, SHORT-GUARD, REGIME/EQ-100, MEMORY, LIQUIDITY-FLOOR, PHANTOM-FEED, PRICE-ARMOR, VOL-ONSET-RETEST, BOTTOM-FADE, V-REVERSAL, DISLOCATION, STABLE-REGIME, tick-plane CASCADE-FREEZE (only sub-bar guard, 4 blocks/day ≈ zero drought cost). // v11.8 — TASK-42 (operator mandate «دو توصیه باقی مانده را کامل و مهندسی اجرا کن»): ① anti-chase guards RE-ARMED (onsetRetestGuard 0→1, chaseThrAdj 0→6 = v6.7.2 evidence defaults) + RETEST GATE storm-class fix (latest-eruption anchoring incl. the FORMING bar, pre-eruption-close leg math, CHASE+FADE both gated — the Task-41 AGT fade-stops slipped past the armed gate three ways) ② LIQUIDITY-FLOOR deployability gate (volume24h ≥ $25M + ≥1 real venue quote; scan-pool exclusion + authoritative deploy gate — AGTUSDT sat at sim with 4 null venues and the focusSymbol path short-circuited the sim ban). v11.7 REENTRY-LOCKOUT ladder retained. v11.9 — TASK-43 (operator audit «استاپ‌های امروز»): LIQUIDITY-FLOOR hardening (sim-source veto + engine-price/real-kline divergence — NX-2741 AGTUSDT slipped through at ~+11% drift over the real Binance close on a flickering synthetic tape) + PHANTOM-FEED gate (XMRUSDT tape oscillated 118.7↔607.75 ×5, 314 jumps>10%/24h — NX-2736 −60.84% in 35s and NX-2744 −14.93% in 18s printed on phantom data). v12.0 — TASK-44/45 (operator orders «ترمیم writer فید» + «مدیریت egress/IP برای رفع بن fapi» + «چرا close-all@$20 شلیک نمی‌کند»): ① PRICE-ARMOR write-side (zombie-ticker rejection — measured XMRUSDT spot 118.70 bid=0/ask=0 zombie listing vs perp ~592; cross-plane 10% divergence guard; anchor-locked sim drift on lastLivePrice; TAPE PURITY — sim ticks never written to PricePoint/tick-archive) ② fapi-gate v2 egress manager (ipify sampler, rotation-aware early probe lifts the ban window the moment the NAT pool rotates clean, named-IP ban ledger persisted to .data/fapi-gate/bans.json) ③ open-pnl single source of truth (ACCOUNT bar ≡ close-all breaker — the $20 mandate now reads the same bankable number the bar shows). v12.1 — TASK-48 (operator mandate «پیشنهادها را کامل و مهندسی اجرا کن» — the four Task-47 APR/BRU forensics proposals): ① R6 RADAR LANE — SUCCESS-renom revival (0/119 conversion since 10-09 was a 100% VETO RATE, not dead code: R1 SHORT-GUARD + CHOP + MEMORY + MIN_SCORE dynamic killed every nomination; the lane bypasses ONLY the four cohort-blind mood gates with dailyCap 4 + all physical gates live + auto-demote at n≥30 probation fail) ② FLOW-NO-DATA honest verdict (70% of deploys were blind yet read NEUTRAL; blind-cache 20s TTL; optional flow-gate ships tag-only — blind cohort +$204 WR 57.1% outperformed sighted +$7) ③ BOTTOM-FADE gate (SHORT selling the bottom 30% of ±30m range with RSI≤25 or %B≤0 — replay: blocks NX-2770/2779/2769 = −$18.42, passes 14/14 winners) ④ V-REVERSAL gate (SHORT on a ≥1.5% young bounce off the local low inside a ≥2.5% range — blocks NX-2770's inverse-V; LONG mirror shadow-only). v12.7 — SENTINEL-20261020 (operator mandate «تمام توصیه‌های P1/P2 و مأموریت بعدی پیشنهادی را قابل راستی‌آزمایی کامل و مهندسی شده اجرا کن»): ① RE-ARM BRAKE (same-direction post-stop cooldown 360m, escalating 720m at ≥2 stops/24h — binds auto + RAW-CAL capture + radar/authority lanes, ONLY operator-forced passes tagged; replay .data/audit-rearm-brake.ts: 92 relay deploys/14d, 73 via RAW-CAL bypass incl. NX-2910 APR→NX-2911 6-SECOND relay and NX-2913→NX-2916 68s relay — the capture lane had become a repeat-stop relay) ② AI 429 shield cap 10m→30m + probe tail-gating (failed probes ~2/window → ≤1) ③ P2-b evaluation ledger: REGIME-VOLATILE cell WR 43.9% −$2.8 (n=66) — ×0.6/+6thr KEPT, data-led no-change decision.
+// v13.1 — P0 SURROGATE data-quality gate (BREAKOUT veto + ×0.5 cap, operator mandate trace 1a16ff36143328fd)
+export const ENGINE_VERSION = "NEXUS-LIVE v13.1"; // v13.0 — CORE-REVERT (operator mandate 2026-10-24 «پیشنهاد من سیستم به همان وضعیت برگردد و با دیتای موجود نقاط ضعف را فیلتر کند», W42 performance audit): v12.7 era measured +$39.74 / WR 60.4% / med event→entry 13.2m vs v12.9 era −$8.70 with 7× hard SL −61.2% and med delay 27.4m — the confirmation stack DOUBLED latency and starved the board behind a 200+ veto wall. Therefore: v12.8+ hard gates (CHASE-EXTREME, FLUSH-EXHAUSTION/KNIFE-CATCH/EVENT-VOL STOP-FLOOR, SINGLE-VENUE refuse + probation +8, NO-BINANCE +12, STALE-BAR, SURROGATE-FLOW cap, MULTI-VENUE clamp) → ADVISORY journal-only behind EngineSetting "core-revert" {enabled} (flip false = exact v12.9). Weaknesses filtered from EXISTING data instead: ① STALE-CHASE gate — trigger-event age >20m or |move since event| >4.5% refuses (W42 buckets: 0-10m +$1.71, 10-20m 5/5 SL −$7.52, >35m 1/1 SL; moveAtEntry +10.63% BIRB 14:54 / +5.13% JCT 15:06 both SL) ② REARM-BRAKE-BE — BE-banked SL re-entry window 45m (BIRB 15:22 +4.67% BE-SL → 15:34 re-entry SL −61.2% 12m later). KEPT HARD (the successful v12.7 core + zero-cost protectors): FLAT-10, minScore, REARM-BRAKE, REENTRY-LOCKOUT, SHORT-GUARD, REGIME/EQ-100, MEMORY, LIQUIDITY-FLOOR, PHANTOM-FEED, PRICE-ARMOR, VOL-ONSET-RETEST, BOTTOM-FADE, V-REVERSAL, DISLOCATION, STABLE-REGIME, tick-plane CASCADE-FREEZE (only sub-bar guard, 4 blocks/day ≈ zero drought cost). // v11.8 — TASK-42 (operator mandate «دو توصیه باقی مانده را کامل و مهندسی اجرا کن»): ① anti-chase guards RE-ARMED (onsetRetestGuard 0→1, chaseThrAdj 0→6 = v6.7.2 evidence defaults) + RETEST GATE storm-class fix (latest-eruption anchoring incl. the FORMING bar, pre-eruption-close leg math, CHASE+FADE both gated — the Task-41 AGT fade-stops slipped past the armed gate three ways) ② LIQUIDITY-FLOOR deployability gate (volume24h ≥ $25M + ≥1 real venue quote; scan-pool exclusion + authoritative deploy gate — AGTUSDT sat at sim with 4 null venues and the focusSymbol path short-circuited the sim ban). v11.7 REENTRY-LOCKOUT ladder retained. v11.9 — TASK-43 (operator audit «استاپ‌های امروز»): LIQUIDITY-FLOOR hardening (sim-source veto + engine-price/real-kline divergence — NX-2741 AGTUSDT slipped through at ~+11% drift over the real Binance close on a flickering synthetic tape) + PHANTOM-FEED gate (XMRUSDT tape oscillated 118.7↔607.75 ×5, 314 jumps>10%/24h — NX-2736 −60.84% in 35s and NX-2744 −14.93% in 18s printed on phantom data). v12.0 — TASK-44/45 (operator orders «ترمیم writer فید» + «مدیریت egress/IP برای رفع بن fapi» + «چرا close-all@$20 شلیک نمی‌کند»): ① PRICE-ARMOR write-side (zombie-ticker rejection — measured XMRUSDT spot 118.70 bid=0/ask=0 zombie listing vs perp ~592; cross-plane 10% divergence guard; anchor-locked sim drift on lastLivePrice; TAPE PURITY — sim ticks never written to PricePoint/tick-archive) ② fapi-gate v2 egress manager (ipify sampler, rotation-aware early probe lifts the ban window the moment the NAT pool rotates clean, named-IP ban ledger persisted to .data/fapi-gate/bans.json) ③ open-pnl single source of truth (ACCOUNT bar ≡ close-all breaker — the $20 mandate now reads the same bankable number the bar shows). v12.1 — TASK-48 (operator mandate «پیشنهادها را کامل و مهندسی اجرا کن» — the four Task-47 APR/BRU forensics proposals): ① R6 RADAR LANE — SUCCESS-renom revival (0/119 conversion since 10-09 was a 100% VETO RATE, not dead code: R1 SHORT-GUARD + CHOP + MEMORY + MIN_SCORE dynamic killed every nomination; the lane bypasses ONLY the four cohort-blind mood gates with dailyCap 4 + all physical gates live + auto-demote at n≥30 probation fail) ② FLOW-NO-DATA honest verdict (70% of deploys were blind yet read NEUTRAL; blind-cache 20s TTL; optional flow-gate ships tag-only — blind cohort +$204 WR 57.1% outperformed sighted +$7) ③ BOTTOM-FADE gate (SHORT selling the bottom 30% of ±30m range with RSI≤25 or %B≤0 — replay: blocks NX-2770/2779/2769 = −$18.42, passes 14/14 winners) ④ V-REVERSAL gate (SHORT on a ≥1.5% young bounce off the local low inside a ≥2.5% range — blocks NX-2770's inverse-V; LONG mirror shadow-only). v12.7 — SENTINEL-20261020 (operator mandate «تمام توصیه‌های P1/P2 و مأموریت بعدی پیشنهادی را قابل راستی‌آزمایی کامل و مهندسی شده اجرا کن»): ① RE-ARM BRAKE (same-direction post-stop cooldown 360m, escalating 720m at ≥2 stops/24h — binds auto + RAW-CAL capture + radar/authority lanes, ONLY operator-forced passes tagged; replay .data/audit-rearm-brake.ts: 92 relay deploys/14d, 73 via RAW-CAL bypass incl. NX-2910 APR→NX-2911 6-SECOND relay and NX-2913→NX-2916 68s relay — the capture lane had become a repeat-stop relay) ② AI 429 shield cap 10m→30m + probe tail-gating (failed probes ~2/window → ≤1) ③ P2-b evaluation ledger: REGIME-VOLATILE cell WR 43.9% −$2.8 (n=66) — ×0.6/+6thr KEPT, data-led no-change decision.
 const MIN_TICK_MS = 3500;
 // v6.3: MAX_ACTIVE is now the governor-owned gate.maxActive knob (2–8, default 5)
 // — the static constant only remains as the fallback if the gate read fails.
@@ -206,6 +207,7 @@ let lastLiquidityFloorEventAt = 0; // v11.8 liquidity/feed-integrity floor event
 let lastPhantomFeedEventAt = 0; // v11.9 phantom-feed (corrupted-tape) gate event throttle
 let lastQuadShortEventAt = 0; // v11.6 Q2_SQUEEZE short-guard gate event throttle
 let lastFlowGateEventAt = 0; // v12.1 flow-gate (block mode) event throttle
+let lastSurrogateGateEventAt = 0; // v13.1 SURROGATE-BREAKOUT data-quality gate event throttle
 let lastBottomFadeEventAt = 0; // v12.1 bottom-fade guard event throttle
 let lastVRevEventAt = 0; // v12.1 V-reversal guard event throttle
 let lastPruneAt = 0;
@@ -2989,6 +2991,40 @@ export async function deploySignal(symbol?: string, directionHint?: "LONG" | "SH
     }
   }
 
+  // ── v13.1 P0 SURROGATE DATA-QUALITY GATE (operator mandate, trace
+  // 1a16ff36143328fd) ──
+  // 15-day ledger forensics (audit 2026-10-25, verified readonly): signals
+  // riding a SURROGATE flow tape (source ≠ BINANCE — the BYBIT bridge / SPOT
+  // rung while Binance fapi is egress-banned) lose money as a class —
+  // surrogate n=186 net −$36.63 vs Binance-native n=788 net +$197.88 — and
+  // the damage is strategy-specific: BREAKOUT on native tape WR 64% +$110.45
+  // (n=188) but BREAKOUT on surrogate tape WR 35% −$33.07 (n=31). The v12.8
+  // SURROGATE-FLOW cap in flow.ts (clamp ±6) went advisory under core-revert,
+  // so single-technical BREAKOUT deploys still passed on surrogate tape —
+  // this NEW hard gate closes that hole. Deliberately NOT behind EngineSetting
+  // "core-revert" (that setting owns the retired v12.8 stack only; this is a
+  // new operator-mandated P0 gate, independent of that flip).
+  //  ① VETO — BREAKOUT + surrogate tape → machine deploy refused (k='b'
+  //     journal gate SURROGATE-BREAKOUT, near-miss paper-tracked).
+  //  ② CAP — surrogate tape on ANY other strategy → final strategy weight
+  //     multiplier clamped ×0.5 (tag-only under FLAT-10) + SURR-CAP tag.
+  //  Operator-forced deploys bypass the veto (audited-override doctrine,
+  //  same as every hard gate) and carry the SURR-BREAKOUT-FORCED tag so the
+  //  override cohort stays sliceable in the ledger.
+  const surrogateFlowSrc = chosenFlow.source && chosenFlow.source !== "BINANCE" ? chosenFlow.source : null;
+  const surrogateCap = surrogateFlowSrc !== null && conf.strategy !== "BREAKOUT";
+  const surrogateForcedTag = surrogateFlowSrc !== null && conf.strategy === "BREAKOUT" && opts?.forced ? "SURR-BREAKOUT-FORCED" : null;
+  if (surrogateFlowSrc && conf.strategy === "BREAKOUT" && !opts?.forced) {
+    const sgReason = `SURROGATE-BREAKOUT: ${direction} ${asset.symbol} deploy refused — flow tape is surrogate (source ${surrogateFlowSrc}, fapi egress-banned bridge), not Binance-native · 15-day ledger (2026-10-25 audit): BREAKOUT native WR 64% +$110.45 (n=188) vs surrogate WR 35% −$33.07 (n=31); surrogate flow overall n=186 −$36.63 vs native n=788 +$197.88 · P0 data-quality gate, operator mandate trace 1a16ff36143328fd`;
+    void recordGateBlock({ gate: "SURROGATE-BREAKOUT", symbol: asset.symbol, direction, reason: sgReason });
+    void nearMissCaptureGate({ symbol: asset.symbol, direction, strategy: conf.strategy, reason: "SURROGATE-BREAKOUT: BREAKOUT on surrogate (non-BINANCE) flow tape" }).catch(() => undefined);
+    if (Date.now() - lastSurrogateGateEventAt > 600_000) {
+      lastSurrogateGateEventAt = Date.now();
+      await fireEvent(null, asset.symbol, "ENGINE", "warn", `SURROGATE-BREAKOUT BLOCK: ${direction} ${asset.symbol} deploy refused — flow tape surrogate (source ${surrogateFlowSrc} ≠ BINANCE) · BREAKOUT on surrogate tape WR 35% −$33.07 vs native WR 64% +$110.45 (15-day ledger, 2026-10-25 audit) · P0 data-quality gate v13.1`);
+    }
+    return { error: `surrogate-breakout gate: ${direction} ${asset.symbol} refused — BREAKOUT on surrogate flow tape (source ${surrogateFlowSrc} ≠ BINANCE) is a measured losing class (P0 data-quality gate v13.1)`, status: 409 };
+  }
+
   // ── v12.7 RE-ARM BRAKE — same-direction post-stop cooldown (SENTINEL-20261020
   // operator mandate, acceptance: صفر ورود تکراری هم‌جهت پس از استاپ) ──
   // Forensics (2026-10-20): NX-2910 APRUSDT LONG SL closed 12:41:16 → NX-2911
@@ -3313,7 +3349,14 @@ export async function deploySignal(symbol?: string, directionHint?: "LONG" | "SH
   // those cohorts remain TAG-ONLY for audit. pnlPercent stays margin-relative
   // (the percent book is unchanged); dollars scale linearly with the fixed
   // unit: +100% pnlPercent ≡ +$10.
-  const stratW = await strategyWeightFor(conf.strategy);
+  let stratW = await strategyWeightFor(conf.strategy);
+  // v13.1 P0 SURROGATE ×0.5 strategy-weight cap (branch ② of the gate above,
+  // operator mandate trace 1a16ff36143328fd): a surrogate tape (≠BINANCE) on a
+  // non-BREAKOUT strategy keeps the deploy but the FINAL strategy weight
+  // multiplier is clamped to ×0.5 — surrogate flow overall measured n=186 net
+  // −$36.63 vs Binance-native n=788 +$197.88 (15-day ledger, 2026-10-25
+  // audit). FLAT-10 untouched: this multiplier is tag-only sizing telemetry.
+  if (surrogateCap && stratW > 0.5) stratW = 0.5;
   const probF = await probationFactorFor(conf.strategy);
   const mgProbe = mgProbeKeys.has(`${asset.symbol}:${conf.strategy}`);
   let margin = 10; // FLAT-10 — fixed unit margin (operator mandate)
@@ -3484,6 +3527,12 @@ export async function deploySignal(symbol?: string, directionHint?: "LONG" | "SH
     // v10.6 per-strategy sizing cohort — rows under an ACTIVE strategy weight
     // carry the weight so the ledger can A/B the cohort (FLAT-10: tag-only).
     ...(stratW !== 1 ? [`STRATW-x${stratW.toFixed(2)}`] : []),
+    // v13.1 P0 SURROGATE data-quality cohorts — SURR-CAP: deploy riding a
+    // surrogate (non-BINANCE) flow tape with the strategy weight clamped ×0.5;
+    // SURR-BREAKOUT-FORCED: operator-forced override of the SURROGATE-BREAKOUT
+    // veto (audited override cohort, same doctrine as SINGLE-VENUE-FORCED).
+    ...(surrogateCap ? ["SURR-CAP"] : []),
+    ...(surrogateForcedTag ? [surrogateForcedTag] : []),
     // v11.7 (EQ-99, operator minScore 12→17 counterfactual mandate, EQ-94②):
     // persist the deploy-time gate evidence ON THE ROW — the gate-journal
     // rotates in ~8h, which made the TIGHTEN counterfactual uncomputable from

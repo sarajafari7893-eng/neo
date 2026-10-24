@@ -1,0 +1,599 @@
+     1→// ── FlowRadar Neo order-flow module (server-only) ──
+     2→// Real Binance USDT-M flow metrics: OI delta, taker CVD, crowd L/S, funding.
+     3→// scoreFlow → ±25 along candidate direction · OI-notional weighting (v4.5)
+     4→// · in-memory per-symbol history ring for sparklines (R17).
+     5→// v10.24 Task 34-a: fapi REST now goes through the process-wide fapi-gate
+     6→// (weight budget + global ban awareness + single-flight). Telemetry lane —
+     7→// sheddable under pressure; every caller is throw/null-tolerant already.
+     8→
+     9→import { gateFetch } from "./fapi-gate";
+    10→import { liquidationPressure } from "./liquidations";
+    11→import { bridgeOiHist, bridgeTape, bridgeKlines, bybit5mMove, bybitTickerRow, okx5mMove, type FlowSource } from "./flow-bridge";
+    12→import { getCoreRevert } from "./core-revert"; // v13.0 CORE-REVERT — operator revert mandate
+    13→
+    14→const TIMEOUT_MS = 6500;
+    15→const CACHE_TTL = 150_000; // 2.5min
+    16→const STALE_GRACE = 600_000; // 10min
+    17→
+    18→export interface WhalePrint5m {
+    19→  count: number;
+    20→  totalUsd: number;
+    21→  maxUsd: number;
+    22→  buyUsd: number;
+    23→  sellUsd: number;
+    24→}
+    25→
+    26→export interface FlowMetrics {
+    27→  oiDelta10m: number | null;
+    28→  oiDelta1h: number | null;
+    29→  oiValueUsd: number | null;
+    30→  cvdNetBase: number | null;
+    31→  cvdNetPctOfVol: number | null;
+    32→  takerRatio: number | null;
+    33→  takerMean: number | null;
+    34→  crowdLongShort: number | null;
+    35→  crowdLongPct: number | null;
+    36→  // v6.7 SMC: topLongShortPositionRatio — POSITION sizing of the top-20% most
+    37→  // profitable trader cohort (Binance futures/data). Unlike the retail account
+    38→  // ratio (crowdLongShort), this is where size actually sits — the whale-
+    39→  // positioning read the research flagged as the missing feed.
+    40→  topLongShort: number | null;
+    41→  funding8h: number | null;
+    42→  // v6.7 SMART-MONEY (operator-approved SMC package): real USD taker flow from
+    43→  // aggTrades (side-flag m) + single-fill whale prints ≥$250K in 5m.
+    44→  cvdUsd60s: number | null;
+    45→  whalePrint5m: WhalePrint5m | null;
+    46→}
+    47→
+    48→export interface FlowAssessment {
+    49→  verdict: "CONFIRMS" | "CONFLICTS" | "NEUTRAL" | "UNAVAILABLE" | "NO-DATA";
+    50→  score: number; // -25..+25 along candidate direction
+    51→  reasons: string[];
+    52→  metrics: FlowMetrics;
+    53→  oiWeight: number;
+    54→  calibrated: boolean;
+    55→  // v12.1 Task-48 ② — honest blindness telemetry: "NO-DATA" ≠ "NEUTRAL".
+    56→  // 48h audit (Task-47): 70% of deploys were flow-blind yet labelled NEUTRAL
+    57→  // as if the book said "neutral" — data absence is not a neutral read.
+    58→  coverage: number; // non-null count of the decision-relevant metrics
+    59→  blind: boolean; // coverage === 0
+    60→  /** v12.2 TASK-52 — venue that actually fed this bundle (BINANCE | SPOT-MIRROR | BYBIT | MIXED) when fapi starved. */
+    61→  source?: FlowSource | "MIXED";
+    62→}
+    63→
+    64→/** Decision-relevant metric keys — cvdNetBase is structurally null in the
+    65→ *  current pipeline and excluded from coverage on purpose. */
+    66→const COVERAGE_KEYS: Array<keyof FlowMetrics> = [
+    67→  "oiDelta10m", "oiDelta1h", "oiValueUsd", "cvdNetPctOfVol", "takerRatio", "takerMean",
+    68→  "crowdLongShort", "topLongShort", "funding8h", "cvdUsd60s",
+    69→];
+    70→
+    71→export function flowCoverageOf(m: FlowMetrics): number {
+    72→  return COVERAGE_KEYS.reduce((a, k) => a + (m[k] != null ? 1 : 0), 0);
+    73→}
+    74→
+    75→const BLIND_CACHE_TTL = 20_000; // v12.1: all-null metrics are a STARVATION state,
+    76→// not a sample — 20s TTL instead of 2.5min so flow recovers within seconds of
+    77→// the fapi-gate ban window lifting (Task-47: blindness rode 516 ban-drops/48h).
+    78→
+    79→interface FlowCacheEntry {
+    80→  at: number;
+    81→  metrics: FlowMetrics;
+    82→  blind?: boolean; // all-null starvation sample — short TTL
+    83→}
+    84→
+    85→// v12.2 TASK-52 — venue that fed the last metrics bundle per symbol
+    86→const flowSrcMap = new Map<string, FlowSource | "MIXED">();
+    87→
+    88→/** Honest sourcing readout — which market the current flow numbers came from. */
+    89→export function getFlowSource(symbol: string): FlowSource | "MIXED" | null {
+    90→  return flowSrcMap.get(symbol) ?? null;
+    91→}
+    92→
+    93→// v12.9 MULTI-VENUE CONSENSUS — per-key 60s cache + in-flight dedupe so the
+    94→// second-venue cross-check costs at most ONE fetch per venue per minute per
+    95→// symbol on the hot path. Fail-soft: any throw → cached null → consensus
+    96→// skips (never blocks, never invents).
+    97→const consensusCache = new Map<string, { at: number; val: unknown }>();
+    98→const consensusInFlight = new Map<string, Promise<unknown>>();
+    99→async function cachedConsensusVal<T>(key: string, ttlMs: number, fn: () => Promise<T>): Promise<T | null> {
+   100→  const hit = consensusCache.get(key);
+   101→  if (hit && Date.now() - hit.at < ttlMs) return (hit.val as T | null) ?? null;
+   102→  const inflight = consensusInFlight.get(key);
+   103→  if (inflight) return (await inflight as T | null) ?? null;
+   104→  const p = (async () => {
+   105→    let val: T | null = null;
+   106→    try {
+   107→      val = await fn();
+   108→    } catch {
+   109→      val = null;
+   110→    }
+   111→    consensusCache.set(key, { at: Date.now(), val });
+   112→    if (consensusCache.size > 800) {
+   113→      const oldest = consensusCache.keys().next().value;
+   114→      if (oldest) consensusCache.delete(oldest);
+   115→    }
+   116→    return val;
+   117→  })().finally(() => consensusInFlight.delete(key));
+   118→  consensusInFlight.set(key, p);
+   119→  return (await p as T | null) ?? null;
+   120→}
+   121→
+   122→interface AggTrade {
+   123→  p: number;
+   124→  q: number;
+   125→  T: number;
+   126→  m: boolean; // isBuyerMaker → m=false means the TAKER bought
+   127→}
+   128→
+   129→export const WHALE_PRINT_MIN_USD = 250_000;
+   130→
+   131→const flowCache = new Map<string, FlowCacheEntry>();
+   132→const flowInFlight = new Map<string, Promise<FlowMetrics | null>>();
+   133→
+   134→// per-symbol history ring: 1 point per FRESH sample, cap 60 (~2.5h)
+   135→const HISTORY_CAP = 60;
+   136→const flowHistory = new Map<string, Array<{ at: number; oiDelta1h: number }>>();
+   137→
+   138→export function getFlowStatus(): { covered: number; lastOkAt: number | null; lastError: string | null } {
+   139→  let lastOkAt: number | null = null;
+   140→  let lastError: string | null = null;
+   141→  let covered = 0;
+   142→  for (const [, e] of flowCache) {
+   143→    if (Date.now() - e.at < STALE_GRACE) covered++;
+   144→    lastOkAt = Math.max(lastOkAt ?? 0, e.at) || null;
+   145→  }
+   146→  return { covered, lastOkAt, lastError };
+   147→}
+   148→
+   149→async function fapi<T>(path: string): Promise<T> {
+   150→  const v = await gateFetch<T>(path, { priority: "telemetry", timeoutMs: TIMEOUT_MS });
+   151→  if (v === null) throw new Error(`fapi ${path} → unavailable`); // preserved throw semantics — allSettled callers treat it as partial absence
+   152→  return v;
+   153→}
+   154→
+   155→export async function fetchFlowMetrics(symbol: string): Promise<FlowMetrics | null> {
+   156→  const cached = flowCache.get(symbol);
+   157→  const cachedTtl = cached?.blind ? BLIND_CACHE_TTL : CACHE_TTL;
+   158→  if (cached && Date.now() - cached.at < cachedTtl) return cached.metrics;
+   159→  if (cached && Date.now() - cached.at < STALE_GRACE && flowInFlight.has(symbol)) return cached.metrics;
+   160→
+   161→  const existing = flowInFlight.get(symbol);
+   162→  if (existing) return existing;
+   163→
+   164→  const p = (async (): Promise<FlowMetrics | null> => {
+   165→    try {
+   166→      const base = symbol.replace("USDT", "");
+   167→      const [oiHist, takerLS, crowd, premium, aggTrades, topPos] = await Promise.allSettled([
+   168→        fapi<Array<{ symbol: string; sumOpenInterest: string; sumOpenInterestValue: string; timestamp: number }>>(`/futures/data/openInterestHist?symbol=${symbol}&period=5m&limit=13`),
+   169→        fapi<Array<{ symbol: string; buySellRatio: string; timestamp: number }>>(`/futures/data/takerlongshortRatio?symbol=${symbol}&period=5m&limit=13`),
+   170→        fapi<Array<{ symbol: string; longShortRatio: string; longAccount: string; shortAccount: string; timestamp: number }>>(`/futures/data/globalLongShortAccountRatio?symbol=${symbol}&period=5m&limit=2`),
+   171→        fapi<{ lastFundingRate: string; markPrice: string }>(`/fapi/v1/premiumIndex?symbol=${symbol}`),
+   172→        fapi<AggTrade[]>(`/fapi/v1/aggTrades?symbol=${symbol}&limit=1000`),
+   173→        fapi<Array<{ symbol: string; longShortRatio: string; timestamp: number }>>(`/futures/data/topLongShortPositionRatio?symbol=${symbol}&period=5m&limit=2`),
+   174→      ]);
+   175→
+   176→      // v12.2 TASK-52 — FLOW BRIDGE: when a fapi lane starves (ban/pool silence),
+   177→      // recover the recoverable lanes over the bridge instead of sliding into
+   178→      // blindness. Honest sourcing: the bundle records the venue that fed it.
+   179→      let flowSrc: FlowSource | "MIXED" = "BINANCE";
+   180→      const srcNote = (s: FlowSource): void => {
+   181→        if (flowSrc === "BINANCE") flowSrc = s;
+   182→        else if (flowSrc !== s) flowSrc = "MIXED";
+   183→      };
+   184→
+   185→      let oi = oiHist.status === "fulfilled" ? oiHist.value : [];
+   186→      if (oi.length === 0) {
+   187→        const b = await bridgeOiHist(symbol, "5m", 13).catch(() => null);
+   188→        if (b && b.rows.length > 0) {
+   189→          oi = b.rows.map((r) => ({ symbol, sumOpenInterest: String(r.sumOpenInterest), sumOpenInterestValue: String(r.sumOpenInterestValue ?? 0), timestamp: r.timestamp }));
+   190→          srcNote(b.source);
+   191→          if (b.source === "BYBIT") {
+   192→            // bybit OI history is base-denominated only — notional from the
+   193→            // batched tickers call (measured, not invented)
+   194→            const t = await bybitTickerRow(symbol).catch(() => null);
+   195→            const lastOi = Number(oi[oi.length - 1]!.sumOpenInterest);
+   196→            const notional = t?.openInterestValue ?? (t && lastOi > 0 ? t.lastPrice * lastOi : 0);
+   197→            if (notional > 0) oi[oi.length - 1]!.sumOpenInterestValue = String(Math.round(notional));
+   198→          }
+   199→        }
+   200→      }
+   201→
+   202→      const taker = takerLS.status === "fulfilled" ? takerLS.value : [];
+   203→      const crowdArr = crowd.status === "fulfilled" ? crowd.value : [];
+   204→      // crowd/top-trader L/S ratios have NO public equivalent on any other
+   205→      // venue — during a fapi starvation they stay null (honest absence).
+   206→
+   207→      let prem = premium.status === "fulfilled" ? premium.value : null;
+   208→      if (!prem) {
+   209→        const t = await bybitTickerRow(symbol).catch(() => null);
+   210→        if (t && t.fundingRate !== null) {
+   211→          prem = { lastFundingRate: String(t.fundingRate), markPrice: String(t.markPrice ?? t.lastPrice) };
+   212→          srcNote("BYBIT");
+   213→        }
+   214→      }
+   215→
+   216→      let oiDelta10m: number | null = null;
+   217→      let oiDelta1h: number | null = null;
+   218→      let oiValueUsd: number | null = null;
+   219→      if (oi.length >= 3) {
+   220→        const last = oi[oi.length - 1]!;
+   221→        const first = oi[0]!;
+   222→        const cur = Number(last.sumOpenInterest);
+   223→        oiValueUsd = Number(last.sumOpenInterestValue);
+   224→        oiDelta10m = first ? ((cur - Number(oi[Math.max(0, oi.length - 3)]!.sumOpenInterest)) / Number(oi[Math.max(0, oi.length - 3)]!.sumOpenInterest)) * 100 : null;
+   225→        oiDelta1h = Number(first.sumOpenInterest) > 0 ? ((cur - Number(first.sumOpenInterest)) / Number(first.sumOpenInterest)) * 100 : null;
+   226→      }
+   227→
+   228→      // CVD proxy from taker ratio series: (ratio−1) averaged, weighted by recency
+   229→      let takerMean: number | null = null;
+   230→      let takerRatio: number | null = null;
+   231→      if (taker.length >= 2) {
+   232→        const ratios = taker.map((t) => Number(t.buySellRatio));
+   233→        takerRatio = ratios[ratios.length - 1]!;
+   234→        takerMean = ratios.reduce((a, b) => a + b, 0) / ratios.length;
+   235→      }
+   236→
+   237→      const crowdLongShort = crowdArr.length > 0 ? Number(crowdArr[crowdArr.length - 1]!.longShortRatio) : null;
+   238→      const crowdLongPct = crowdArr.length > 0 ? Number(crowdArr[crowdArr.length - 1]!.longAccount) * 100 : null;
+   239→      const topPosArr = topPos.status === "fulfilled" ? topPos.value : [];
+   240→      const topLongShort = topPosArr.length > 0 ? Number(topPosArr[topPosArr.length - 1]!.longShortRatio) : null;
+   241→      const funding8h = prem ? Number(prem.lastFundingRate) * 100 : null;
+   242→
+   243→      // v6.7: real USD taker flow + whale prints from the same aggTrades pull
+   244→      // (trades ≤1000 ≈ last minutes on liquid symbols; windows clipped by T).
+   245→      // v12.2 TASK-52: tape ladder — fapi aggTrades → BYBIT recent-trade →
+   246→      // SPOT-MIRROR trades (spot = last resort: spot flow ≠ perp flow).
+   247→      let agg = aggTrades.status === "fulfilled" ? aggTrades.value : [];
+   248→      if (agg.length === 0) {
+   249→        const b = await bridgeTape(symbol).catch(() => null);
+   250→        if (b && b.trades.length > 0) {
+   251→          agg = b.trades.map((t) => ({ p: t.price, q: t.qty, T: t.time, m: t.isBuyerMaker }));
+   252→          srcNote(b.source);
+   253→        }
+   254→      }
+   255→      const t60 = Date.now() - 60_000;
+   256→      const t300 = Date.now() - 300_000;
+   257→      let buy60 = 0;
+   258→      let sell60 = 0;
+   259→      const wp = { count: 0, totalUsd: 0, maxUsd: 0, buyUsd: 0, sellUsd: 0 };
+   260→      for (const t of agg) {
+   261→        const usd = t.p * t.q;
+   262→        if (t.T >= t60) {
+   263→          if (t.m) sell60 += usd;
+   264→          else buy60 += usd;
+   265→        }
+   266→        if (t.T >= t300 && usd >= WHALE_PRINT_MIN_USD) {
+   267→          wp.count++;
+   268→          wp.totalUsd += usd;
+   269→          if (usd > wp.maxUsd) wp.maxUsd = usd;
+   270→          if (t.m) wp.sellUsd += usd;
+   271→          else wp.buyUsd += usd;
+   272→        }
+   273→      }
+   274→      const cvdUsd60s = agg.length > 0 ? Math.round(buy60 - sell60) : null;
+   275→      const whalePrint5m: WhalePrint5m | null = wp.count > 0 ? { count: wp.count, totalUsd: Math.round(wp.totalUsd), maxUsd: Math.round(wp.maxUsd), buyUsd: Math.round(wp.buyUsd), sellUsd: Math.round(wp.sellUsd) } : null;
+   276→
+   277→      // v12.2 TASK-52: when the fapi taker-ratio series is absent but a REAL
+   278→      // tape exists (bridge), the net-buy % of volume is measured from that
+   279→      // same tape — window-capped at 10min (a 1000-trade slice spanning hours
+   280→      // on an illiquid symbol is a stale read, not a flow read).
+   281→      const winStart = agg.length > 0 ? agg[0]!.T : 0;
+   282→      let buyWin = 0;
+   283→      let sellWin = 0;
+   284→      for (const t of agg) {
+   285→        const usd = t.p * t.q;
+   286→        if (t.m) sellWin += usd;
+   287→        else buyWin += usd;
+   288→      }
+   289→      const cvdFromTape = agg.length > 0 && buyWin + sellWin > 0 && winStart > 0 && Date.now() - winStart <= 600_000 ? ((buyWin - sellWin) / (buyWin + sellWin)) * 100 : null;
+   290→      const cvdNetPctOfVol = takerMean !== null ? (takerMean - 1) * 100 : cvdFromTape; // % of taker volume net buys
+   291→
+   292→      const metrics: FlowMetrics = {
+   293→        oiDelta10m: oiDelta10m === null ? null : Number(oiDelta10m.toFixed(3)),
+   294→        oiDelta1h: oiDelta1h === null ? null : Number(oiDelta1h.toFixed(3)),
+   295→        oiValueUsd,
+   296→        cvdNetBase: null,
+   297→        cvdNetPctOfVol: cvdNetPctOfVol === null ? null : Number(cvdNetPctOfVol.toFixed(3)),
+   298→        takerRatio,
+   299→        takerMean,
+   300→        crowdLongShort,
+   301→        crowdLongPct,
+   302→        topLongShort: topLongShort === null ? null : Number(topLongShort.toFixed(3)),
+   303→        funding8h: funding8h === null ? null : Number(funding8h.toFixed(4)),
+   304→        cvdUsd60s,
+   305→        whalePrint5m,
+   306→      };
+   307→      const blind = flowCoverageOf(metrics) === 0;
+   308→      flowCache.set(symbol, { at: Date.now(), metrics, blind });
+   309→      flowSrcMap.set(symbol, flowSrc);
+   310→
+   311→      // history ring (fresh samples only)
+   312→      if (metrics.oiDelta1h !== null) {
+   313→        const ring = flowHistory.get(symbol) ?? [];
+   314→        ring.push({ at: Date.now(), oiDelta1h: metrics.oiDelta1h });
+   315→        if (ring.length > HISTORY_CAP) ring.shift();
+   316→        flowHistory.set(symbol, ring);
+   317→      }
+   318→      return metrics;
+   319→    } catch {
+   320→      return null;
+   321→    } finally {
+   322→      flowInFlight.delete(symbol);
+   323→    }
+   324→  })();
+   325→
+   326→  flowInFlight.set(symbol, p);
+   327→  return p;
+   328→}
+   329→
+   330→export async function ensureFlow(symbols: string[], concurrency = 3): Promise<void> {
+   331→  const queue = [...symbols];
+   332→  const workers = Array.from({ length: Math.min(concurrency, queue.length) }, async () => {
+   333→    while (queue.length > 0) {
+   334→      const s = queue.shift();
+   335→      if (s) await fetchFlowMetrics(s);
+   336→    }
+   337→  });
+   338→  await Promise.all(workers);
+   339→}
+   340→
+   341→export function getFlowHistory(symbol: string): Array<{ at: number; oiDelta1h: number }> {
+   342→  return flowHistory.get(symbol) ?? [];
+   343→}
+   344→
+   345→function fmtUsdShort(v: number): string {
+   346→  if (v >= 1e9) return `$${(v / 1e9).toFixed(2)}B`;
+   347→  if (v >= 1e6) return `$${(v / 1e6).toFixed(1)}M`;
+   348→  return `$${(v / 1e3).toFixed(0)}K`;
+   349→}
+   350→
+   351→/**
+   352→ * v6.7 SMC-lite liquidity-sweep detector (operator-approved package item ⑥):
+   353→ * the last CLOSED bar trades through the prior 24-bar swing high/low but closes
+   354→ * back inside with a ≥50% rejection wick — the classic liquidity-grab print.
+   355→ * `supportive` marks whether the sweep aligns with the candidate direction.
+   356→ */
+   357→export function detectLiquiditySweep(
+   358→  candles: Array<{ high: number; low: number; close: number }> | undefined | null,
+   359→  direction: "LONG" | "SHORT"
+   360→): { swept: boolean; supportive: boolean; detail: string } {
+   361→  if (!candles || candles.length < 26) return { swept: false, supportive: false, detail: "" };
+   362→  const c = candles[candles.length - 1]!;
+   363→  const prior = candles.slice(candles.length - 25, candles.length - 1);
+   364→  const swingHigh = Math.max(...prior.map((k) => k.high));
+   365→  const swingLow = Math.min(...prior.map((k) => k.low));
+   366→  const range = c.high - c.low;
+   367→  if (range <= 0) return { swept: false, supportive: false, detail: "" };
+   368→  if (c.high > swingHigh && c.close < swingHigh && (c.high - c.close) / range >= 0.5) {
+   369→    const detail = `SMC sweep: bar traded ${(((c.high - swingHigh) / swingHigh) * 100).toFixed(2)}% above the 24-bar swing high then closed back inside (${Math.round(((c.high - c.close) / range) * 100)}% rejection wick) — buy-side liquidity grabbed`;
+   370→    return { swept: true, supportive: direction === "SHORT", detail: supportive_(detail, direction === "SHORT") };
+   371→  }
+   372→  if (c.low < swingLow && c.close > swingLow && (c.close - c.low) / range >= 0.5) {
+   373→    const detail = `SMC sweep: bar pierced ${(((swingLow - c.low) / swingLow) * 100).toFixed(2)}% below the 24-bar swing low then closed back inside (${Math.round(((c.close - c.low) / range) * 100)}% rejection wick) — sell-side liquidity grabbed`;
+   374→    return { swept: true, supportive: direction === "LONG", detail: supportive_(detail, direction === "LONG") };
+   375→  }
+   376→  return { swept: false, supportive: false, detail: "" };
+   377→}
+   378→
+   379→function supportive_(detail: string, ok: boolean): string {
+   380→  return ok ? `${detail}, supports the candidate direction` : detail;
+   381→}
+   382→
+   383→/** Score flow along the candidate direction → ±25 (v4.5 OI-notional weighted). */
+   384→export async function scoreFlow(symbol: string, direction: "LONG" | "SHORT", price1hAgoPct: number | null): Promise<FlowAssessment> {
+   385→  const m = await fetchFlowMetrics(symbol);
+   386→  if (!m) {
+   387→    return { verdict: "UNAVAILABLE", score: 0, reasons: ["flow metrics unavailable — no numbers invented"], metrics: { oiDelta10m: null, oiDelta1h: null, oiValueUsd: null, cvdNetBase: null, cvdNetPctOfVol: null, takerRatio: null, takerMean: null, crowdLongShort: null, crowdLongPct: null, topLongShort: null, funding8h: null, cvdUsd60s: null, whalePrint5m: null }, oiWeight: 1, calibrated: false, coverage: 0, blind: true };
+   388→  }
+   389→  const coverage = flowCoverageOf(m);
+   390→  const dir = direction === "LONG" ? 1 : -1;
+   391→  const reasons: string[] = [];
+   392→  // v12.1 Task-48 ② — HONEST NO-DATA: a fetch that completed with every
+   393→  // decision metric null (fapi ban window / budget shed) is BLINDNESS, not a
+   394→  // neutral book. The 48h census showed 70% of deploys rode this state while
+   395→  // the card read "FLOW-NEUTRAL". Blind flow never votes (score 0) but now
+   396→  // carries the NO-DATA verdict so cards, journals and gates can tell the
+   397→  // difference. (Gate on blindness = EngineSetting "flow-gate", default
+   398→  // tag-only: 10d ledger blind +$204.20 WR 57.1% vs sighted +$7.11 WR 52.8% —
+   399→  // blocking the blind cohort would have CUT +$204 of net.)
+   400→  if (coverage === 0) {
+   401→    return { verdict: "NO-DATA", score: 0, reasons: ["flow-blind — every decision metric null (fapi-gate starvation/ban window); no numbers invented, no neutral read claimed"], metrics: m, oiWeight: 1, calibrated: true, coverage: 0, blind: true };
+   402→  }
+   403→  // v12.2 TASK-52 — honest sourcing: when the bundle rode the bridge, say so
+   404→  // on the card/journal instead of silently mixing venues.
+   405→  const bridgeSrc = getFlowSource(symbol);
+   406→  if (bridgeSrc && bridgeSrc !== "BINANCE") {
+   407→    reasons.push(`flow source: ${bridgeSrc} bridge (fapi starved — flow numbers measured on the bridge venue, not Binance)`);
+   408→  }
+   409→  let raw = 0;
+   410→
+   411→  // 1. CVD imbalance ±9
+   412→  if (m.cvdNetPctOfVol !== null) {
+   413→    const aligned = m.cvdNetPctOfVol * dir;
+   414→    const v = Math.max(-9, Math.min(9, aligned * 1.8));
+   415→    raw += v;
+   416→    const usdCtx = m.cvdUsd60s !== null ? ` (${m.cvdUsd60s >= 0 ? "+" : ""}$${(m.cvdUsd60s / 1000).toFixed(0)}K net taker USD/60s)` : "";
+   417→    reasons.push(`taker CVD ${m.cvdNetPctOfVol >= 0 ? "+" : ""}${m.cvdNetPctOfVol.toFixed(2)}% of taker volume ${aligned > 1 ? "agrees" : aligned < -1 ? "opposes" : "is neutral"}${usdCtx}`);
+   418→  }
+   419→
+   420→  // 7. WHALE PRINTS ±5 (v6.7 SMC package): single fills ≥$250K near the entry
+   421→  // are the visible footprint of size players — aligned prints confirm, prints
+   422→  // against the thesis are distribution risk.
+   423→  if (m.whalePrint5m && m.whalePrint5m.totalUsd >= 400_000) {
+   424→    const whaleSide = m.whalePrint5m.buyUsd >= m.whalePrint5m.sellUsd ? 1 : -1;
+   425→    const aligned = whaleSide * dir;
+   426→    const desc = `${m.whalePrint5m.count} fill(s) ≥$250K totaling $${(m.whalePrint5m.totalUsd / 1000).toFixed(0)}K in 5m (max $${(m.whalePrint5m.maxUsd / 1000).toFixed(0)}K, ${m.whalePrint5m.buyUsd >= m.whalePrint5m.sellUsd ? "buy" : "sell"}-side dominant)`;
+   427→    if (aligned > 0) {
+   428→      raw += 5;
+   429→      reasons.push(`WHALE PRINTS ${desc} — pressing WITH the ${direction.toLowerCase()} thesis (smart-money participation)`);
+   430→    } else {
+   431→      raw -= 5;
+   432→      reasons.push(`WHALE PRINTS ${desc} — pressing AGAINST the ${direction.toLowerCase()} thesis (distribution risk)`);
+   433→    }
+   434→  }
+   435→
+   436→  // 2. OI × price matrix ±7
+   437→  if (m.oiDelta1h !== null && price1hAgoPct !== null) {
+   438→    const priceDir = price1hAgoPct * dir; // >0: price moving in candidate's favor
+   439→    const oiUp = m.oiDelta1h > 0;
+   440→    if (priceDir > 0 && oiUp) {
+   441→      raw += 7;
+   442→      reasons.push(`new positions conviction — price ${price1hAgoPct >= 0 ? "+" : ""}${price1hAgoPct.toFixed(2)}%/1h with OI ${m.oiDelta1h >= 0 ? "+" : ""}${m.oiDelta1h.toFixed(2)}%/1h (fresh ${direction.toLowerCase()}s pressing)`);
+   443→    } else if (priceDir > 0 && !oiUp) {
+   444→      raw += 2;
+   445→      reasons.push(`short-covering style move — OI unwinding ${m.oiDelta1h.toFixed(2)}%/1h while price drifts favorably`);
+   446→    } else if (priceDir < 0 && oiUp) {
+   447→      raw -= 7;
+   448→      reasons.push(`opposing new positions — OI ${m.oiDelta1h.toFixed(2)}%/1h building against the ${direction.toLowerCase()} thesis`);
+   449→    } else {
+   450→      raw -= 2;
+   451→      reasons.push(`capitulation washout pattern — OI and price both unwinding`);
+   452→    }
+   453→  }
+   454→
+   455→  // 3. REAL liquidation cascade (R16) — exhaustion logic ±3
+   456→  const liq = await liquidationPressure(symbol);
+   457→  if (liq) {
+   458→    if (liq.usd10m >= 400_000) {
+   459→      const sideWrecked = direction === "LONG" ? liq.longsUsd10m : liq.shortsUsd10m;
+   460→      if (sideWrecked > liq.usd10m * 0.6) {
+   461→        raw += 3;
+   462→        reasons.push(`REAL liquidation cascade: ${fmtUsdShort(liq.usd10m)} wrecked in 10m — ${direction === "LONG" ? "longs" : "shorts"} flushed (forceOrder), exhaustion tailwind`);
+   463→      } else {
+   464→        raw -= 1;
+   465→        reasons.push(`cascade ${fmtUsdShort(liq.usd10m)} in 10m hit the opposing side — momentum risk`);
+   466→      }
+   467→    } else {
+   468→      reasons.push(`no material liquidation cascade (${fmtUsdShort(liq.usd10m)} in 10m)`);
+   469→    }
+   470→  }
+   471→
+   472→  // 4. Funding contrarian ±5
+   473→  if (m.funding8h !== null) {
+   474→    if (m.funding8h > 0.05) {
+   475→      const v = dir > 0 ? -5 : 5;
+   476→      raw += v;
+   477→      reasons.push(`funding ${m.funding8h.toFixed(4)}%/8h — crowded longs pay, contrarian edge`);
+   478→    } else if (m.funding8h < -0.05) {
+   479→      const v = dir > 0 ? 5 : -5;
+   480→      raw += v;
+   481→      reasons.push(`funding ${m.funding8h.toFixed(4)}%/8h — shorts pay, squeeze fuel for longs`);
+   482→    } else reasons.push(`funding ${m.funding8h.toFixed(4)}%/8h — neutral carry`);
+   483→  }
+   484→
+   485→  // 5. Crowd positioning ±4
+   486→  if (m.crowdLongShort !== null) {
+   487→    if (m.crowdLongShort > 2.2) {
+   488→      raw += dir > 0 ? -4 : 4;
+   489→      reasons.push(`retail crowd ${m.crowdLongShort.toFixed(2)}:1 long — fade risk on longs`);
+   490→    } else if (m.crowdLongShort < 0.5) {
+   491→      raw += dir > 0 ? 4 : -4;
+   492→      reasons.push(`retail crowd ${m.crowdLongShort.toFixed(2)}:1 (heavy shorts) — contrarian tailwind for longs`);
+   493→    }
+   494→  }
+   495→
+   496→  // 5b. TOP-TRADER positioning ±4 (v6.7 SMC): the top-20% cohort's POSITION
+   497→  // sizing — where size actually sits. Extremes fade; a top-vs-retail DIVERGENCE
+   498→  // (smart money leaning where the crowd is not) adds a +2 alignment bonus.
+   499→  if (m.topLongShort !== null) {
+   500→    if (m.topLongShort > 2) {
+   501→      raw += dir > 0 ? -4 : 4;
+   502→      reasons.push(`top traders ${m.topLongShort.toFixed(2)}:1 net-LONG by position size — crowded smart-money side, fade risk on longs`);
+   503→    } else if (m.topLongShort < 0.5) {
+   504→      raw += dir > 0 ? 4 : -4;
+   505→      reasons.push(`top traders ${m.topLongShort.toFixed(2)}:1 net-SHORT by position size — crowded smart-money side, tailwind against longs`);
+   506→    }
+   507→    if (m.crowdLongShort !== null && ((m.crowdLongShort > 1.5 && m.topLongShort < 0.8) || (m.crowdLongShort < 0.7 && m.topLongShort > 1.5))) {
+   508→      const smartSide = m.topLongShort > 1 ? 1 : -1;
+   509→      raw += smartSide === dir ? 2 : -2;
+   510→      reasons.push(`top-vs-retail divergence: crowd ${m.crowdLongShort.toFixed(2)}:1 vs top traders ${m.topLongShort.toFixed(2)}:1 — size sits with the ${smartSide === 1 ? "longs" : "shorts"}`);
+   511→    }
+   512→  }
+   513→
+   514→  // 6. Taker acceleration ±5
+   515→  if (m.takerRatio !== null && m.takerMean !== null) {
+   516→    const accel = m.takerRatio - m.takerMean;
+   517→    const aligned = accel * dir;
+   518→    if (Math.abs(aligned) > 0.06) {
+   519→      raw += Math.max(-5, Math.min(5, aligned * 40));
+   520→      reasons.push(`taker buy/sell ${m.takerRatio.toFixed(3)} vs mean ${m.takerMean.toFixed(3)} — ${aligned > 0 ? "accelerating in favor" : "decelerating"}`);
+   521→    }
+   522→  }
+   523→
+   524→  // OI-notional weighting (v4.5): deep books trusted more
+   525→  const oiWeight = m.oiValueUsd ? Math.max(0.5, Math.min(1.2, Math.sqrt(m.oiValueUsd / 50_000_000))) : 1;
+   526→  let score = Math.round(Math.max(-25, Math.min(25, raw * oiWeight)));
+   527→  if (Math.abs(oiWeight - 1) >= 0.15) reasons.push(`flow weighted ×${oiWeight.toFixed(2)} by OI notional ${fmtUsdShort(m.oiValueUsd ?? 0)} — deep-book flow trusted`);
+   528→
+   529→  // ── v12.9 MULTI-VENUE CONSENSUS (AUDIT-NX3046-20261023, operator mandate
+   530→  // «باید از تمام صرافی‌ها مخصوصاً BINANCE تیکت گرفته بشه») ──
+   531→  // The bundle rode ONE venue's tape; nothing ever asked a SECOND venue
+   532→  // whether the tape agrees. NX-3046: BYBIT-only JCT showed CVD +18.5%
+   533→  // OPPOSING the short and OI unwinding — the bundle still rode neutral, and
+   534→  // no other venue was consulted. Now: the primary venue's 15m-window
+   535→  // (4×5m-bar) direction is compared against an INDEPENDENT second venue
+   536→  // (BYBIT-tape → OKX cross-check; Binance/SPOT-MIRROR-tape → BYBIT
+   537→  // cross-check). Sign-opposed moves diverging >1.5% clamp conviction to ±6
+   538→  // (below the ±8 CONFIRMS/CONFLICTS line) — cross-venue conflict can never
+   539→  // confirm a deploy. 60s per-symbol caches + in-flight dedupe keep the hot
+   540→  // path cheap; any fetch failure fails OPEN (consensus simply does not run,
+   541→  // no numbers invented). Single-venue coins (second rung null) are handled
+   542→  // by the engine-side SINGLE-VENUE deploy block.
+   543→  const consensusSrc = bridgeSrc ?? null;
+   544→  if (consensusSrc) {
+   545→    try {
+   546→      const pri = await cachedConsensusVal(`PRI5M|${symbol}`, 60_000, async () => {
+   547→        const r = await bridgeKlines(symbol, "5m", 4).catch(() => null);
+   548→        if (!r || r.rows.length < 4) return null;
+   549→        const o = r.rows[0]!.open, c = r.rows[r.rows.length - 1]!.close;
+   550→        return { move: o > 0 && c > 0 ? ((c - o) / o) * 100 : null, source: r.source as string };
+   551→      });
+   552→      const priMove = pri?.move ?? null;
+   553→      let secondName: string | null = null;
+   554→      let secondMove: number | null = null;
+   555→      if (consensusSrc === "BYBIT") {
+   556→        secondName = "OKX";
+   557→        secondMove = await cachedConsensusVal(`OKX5M|${symbol}`, 60_000, () => okx5mMove(symbol));
+   558→      } else if (consensusSrc === "BINANCE" || consensusSrc === "SPOT-MIRROR" || consensusSrc === "MIXED") {
+   559→        secondName = "BYBIT";
+   560→        secondMove = await cachedConsensusVal(`BYB5M|${symbol}`, 60_000, () => bybit5mMove(symbol));
+   561→      }
+   562→      if (priMove !== null && secondName && secondMove !== null) {
+   563→        const disagree = Math.sign(priMove) !== Math.sign(secondMove) && Math.abs(priMove - secondMove) > 1.5;
+   564→        if (disagree) {
+   565→          const cr = await getCoreRevert();
+   566→          if (!cr.enabled) score = Math.max(-6, Math.min(6, score));
+   567→          reasons.push(`MULTI-VENUE DISAGREE: primary ${consensusSrc} 15m-window ${priMove >= 0 ? "+" : ""}${priMove.toFixed(2)}% vs ${secondName} ${secondMove >= 0 ? "+" : ""}${secondMove.toFixed(2)}% — cross-venue tapes conflict${cr.enabled ? " · CORE-REVERT advisory: clamp lifted, telemetry only (v12.7 doctrine)" : ", conviction clamped ±6, cannot CONFIRM (operator mandate: confirmation from all venues, especially Binance — v12.9)"}`);
+   568→        } else if (Math.sign(priMove) === Math.sign(secondMove) && Math.abs(priMove - secondMove) <= 1.5) {
+   569→          reasons.push(`MULTI-VENUE AGREE: primary ${consensusSrc} ${priMove >= 0 ? "+" : ""}${priMove.toFixed(2)}% ≈ ${secondName} ${secondMove >= 0 ? "+" : ""}${secondMove.toFixed(2)}% over 15m — cross-venue tape concordant (v12.9)`);
+   570→        }
+   571→      }
+   572→    } catch {
+   573→      /* fail-open — consensus is telemetry, never a wedging gate */
+   574→    }
+   575→  }
+   576→
+   577→  // ── v12.8 SURROGATE-FLOW CAP (AUDIT-20261023, operator mandate «اصلاح
+   578→  // پیشنهادی را کامل و مهندسی اجرا کن») ──
+   579→  // Forensics NX-3014 (BTWUSDT 03:13Z): the flow bundle read "CONFIRMS +10"
+   580→  // while its source was the BYBIT bridge (fapi banned) on a symbol whose
+   581→  // BINANCE quote was null and whose cross-venue dislocation ran 90-105bps —
+   582→  // the price collapsed −4.5% within 48s of deploy (SL −61.2% in 103s). A
+   583→  // surrogate venue's tape is REAL tape, but it is the WRONG venue's tape for
+   584→  // a Binance-doctrine engine on dislocated micro-caps: it must not be allowed
+   585→  // to CONFIRM a deploy. Cap: when the feeding source is not BINANCE, flow
+   586→  // conviction is clamped to ±6 — below the ±8 CONFIRMS/CONFLICTS line, so a
+   587→  // surrogate bundle can never confirm NOR fully veto; it can still feed the
+   588→  // flowVetoScore ≤−4 soft veto (score −5/−6 survives the clamp) and rides as
+   589→  // honest telemetry. BINANCE-sourced bundles are untouched.
+   590→  if (bridgeSrc && bridgeSrc !== "BINANCE") {
+   591→    const crSurrogate = await getCoreRevert();
+   592→    if (!crSurrogate.enabled) score = Math.max(-6, Math.min(6, score));
+   593→    reasons.push(`SURROGATE-FLOW CAP: source ${bridgeSrc} ≠ BINANCE${crSurrogate.enabled ? " · CORE-REVERT advisory: clamp lifted, surrogate tape rides as telemetry (v12.7 doctrine — the +12/+8/cap stack was the no-Binance drought engine)" : " — conviction clamped ±6, surrogate flow cannot CONFIRM a deploy (NX-3014 48s-collapse forensics, v12.8)"}`);
+   594→  }
+   595→
+   596→  const verdict = score >= 8 ? "CONFIRMS" : score <= -8 ? "CONFLICTS" : "NEUTRAL";
+   597→  return { verdict, score, reasons, metrics: m, oiWeight: Number(oiWeight.toFixed(2)), calibrated: true, coverage, blind: false, source: bridgeSrc ?? undefined };
+   598→}
+   599→

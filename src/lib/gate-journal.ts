@@ -97,7 +97,8 @@ export type GateName =
   | "CASCADE-FREEZE" // v12.10 — price-ws tick-velocity freeze: ≥±5% inside a 60s sliding window (flush OR squeeze) freezes BOTH-direction deploys 10min (L3 liq-stream layer is structurally silent for microcaps; NX-3046 was detected 359s late)
   | "STALE-BAR" // v12.10 — stale detection inputs × hot tape: flow-board age beyond calibrated budgets while the live 4-bar tape is moving (NX-3046: 281s stale × −40% flush; NX-3040: 9.7min stale) — refusing to decide on dead structure
   | "STALE-CHASE" // v13.0 CORE-REVERT — data-driven late-entry filter: trigger-event age >20m or |move since event| >4.5% refuses (W42 buckets: 10-20m 5/5 SL; BIRB +10.63%/JCT +5.13% at entry both SL)
-  | "REARM-BRAKE-BE"; // v13.0 CORE-REVERT — BE-banked SL re-entry window 45m (BIRB 15:22 +4.67% BE-SL → 15:34 re-entry SL −61.2% 12min later)
+  | "REARM-BRAKE-BE" // v13.0 CORE-REVERT — BE-banked SL re-entry window 45m (BIRB 15:22 +4.67% BE-SL → 15:34 re-entry SL −61.2% 12min later)
+  | "SURROGATE-BREAKOUT"; // v13.1 P0 data-quality gate — BREAKOUT refused while the flow tape is surrogate (non-BINANCE bridge): native BREAKOUT WR 64% +$110.45 (n=188) vs surrogate WR 35% −$33.07 (n=31), 15-day ledger audit 2026-10-25
 
 export interface GateBlock {
   at: number;
