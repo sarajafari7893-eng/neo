@@ -114,33 +114,36 @@ export async function register(): Promise<void> {
           console.warn(`[ram-shed] shed#${st.sheds} freed=${freed} cache entries rss=${st.rssMB}MB avail=${st.availMB}MB`);
         }
         // LANE 2 — controlled self-recycle (pre-empting the kernel OOM-killer):
-        //   A) rss>2000 sustained 60s AND avail<380  (the exact pre-kill profile
-        //      of all five dmesg kills today), or
-        //   B) rss>2250 sustained 90s regardless of avail (hard plateau — the
-        //      kernel WILL reach us within minutes at this fleet load), or
+        //   A) rss>2100 sustained 90s AND avail<330 — the pre-kill profile
+        //      (all five dmesg kills today landed at avail 89-244); tuned to
+        //      sit BETWEEN mem-guard's deep-valley recycle (avail<300×6) and
+        //      the kernel trigger — no lane duplication, no treadmill.
+        //   B) rss>2300 sustained 120s regardless of avail — hard plateau;
+        //      mem-guard only sees this shape WITH avail<300, this lane adds
+        //      the RSS-only backstop the guard cannot fire on its own.
         //   C) avail<120 single tick (kernel-imminent; mem-guard acts at <130
         //      but races are lethal — exit first, heal chain brings us back).
-        const laneA = st.rssMB > 2000 && st.availMB < 380;
-        const laneB = st.rssMB > 2250;
+        const laneA = st.rssMB > 2100 && st.availMB < 330;
+        const laneB = st.rssMB > 2300;
         const laneC = st.availMB < 120;
         // streak clocks reset the moment their lane pressure clears (hysteresis)
         if (!laneA) highStart.a = 0;
         if (!laneB) highStart.b = 0;
         if (laneA && highStart.a === 0) highStart.a = now;
         if (laneB && highStart.b === 0) highStart.b = now;
-        if (laneA && now - highStart.a >= 60_000) {
+        if (laneA && now - highStart.a >= 90_000) {
           st.lastRecycleAt = now;
           st.recycles += 1;
           console.error(
-            `[ram-shed] SELF-RECYCLE#${st.recycles} lane=A rss=${st.rssMB}MB avail=${st.availMB}MB held=60s — controlled exit, warm-cache heal expected ≤45s (RAM-SHED-20261024)`
+            `[ram-shed] SELF-RECYCLE#${st.recycles} lane=A rss=${st.rssMB}MB avail=${st.availMB}MB held=90s — controlled exit, warm-cache heal expected ≤45s (RAM-SHED-20261024)`
           );
           process.exit(0);
         }
-        if (laneB && now - highStart.b >= 90_000) {
+        if (laneB && now - highStart.b >= 120_000) {
           st.lastRecycleAt = now;
           st.recycles += 1;
           console.error(
-            `[ram-shed] SELF-RECYCLE#${st.recycles} lane=B rss=${st.rssMB}MB held=90s — hard plateau, controlled exit (RAM-SHED-20261024)`
+            `[ram-shed] SELF-RECYCLE#${st.recycles} lane=B rss=${st.rssMB}MB held=120s — hard plateau, controlled exit (RAM-SHED-20261024)`
           );
           process.exit(0);
         }
