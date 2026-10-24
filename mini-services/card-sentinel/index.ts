@@ -23,6 +23,7 @@
 // LEASH doctrine: plain bun, no secrets, loopback-only writes to the app API.
 
 import { Database } from "bun:sqlite";
+import { readFileSync, writeFileSync, renameSync } from "node:fs";
 
 const PORT = 3022;
 const VER = "card-sentinel 1.0.0";
@@ -149,7 +150,7 @@ async function appAlive(): Promise<boolean> {
 
 function readAvailMb(): number {
   try {
-    const m = require("node:fs").readFileSync("/proc/meminfo", "utf8") as string;
+    const m = readFileSync("/proc/meminfo", "utf8");
     const hit = m.match(/^MemAvailable:\s+(\d+)\s+kB/m);
     return hit ? Math.round(Number(hit[1]) / 1024) : -1;
   } catch {
@@ -242,8 +243,8 @@ function persistState(): void {
       top: lastTop,
     };
     const tmp = `${STATE_PATH}.tmp`;
-    require("node:fs").writeFileSync(tmp, JSON.stringify(payload));
-    require("node:fs").renameSync(tmp, STATE_PATH);
+    writeFileSync(tmp, JSON.stringify(payload));
+    renameSync(tmp, STATE_PATH);
   } catch { /* best-effort */ }
 }
 

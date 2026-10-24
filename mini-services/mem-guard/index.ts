@@ -127,7 +127,19 @@ const SAMPLE_CAP = 240; // 1h ring
 const RSS_ACT = 2300;      // sustained (4 ticks = 60s) → preemptive graceful recycle (kill line measured 2.07-2.44GB on 10-23)
 const RSS_SUSTAIN_TICKS = 4;
 const RSS_HARD = 2400;     // single tick → restart now — ALSO ACTS DURING BOOT GRACE (kill-line spike zone)
-const AVAIL_FLOOR = 380;   // with the ~2.1GB app + fleet, ambient avail sits 350-550MB — today's kills happened inside avail valleys; trip earlier, recycle gracefully instead of feeding the OOM loop
+const AVAIL_FLOOR = 380;   // WARN line — sits inside ambient (350-550): below it only LOGS now
+// v12.12c LADDER RECALIBRATION (2026-10-24 13:03 forensics): the 380/3-tick rule
+// recycled a HEALTHY 17-min-old app on a routine ambient dip (avail 372 sustained).
+// Ambient-with-app on this 4GB box IS 350-550 — a floor inside the ambient band is
+// a hair-trigger. Kernel evidence: kills historically landed in deep valleys
+// (<200MB), not at 370. New ladder with hysteresis:
+//   warn  : avail < 380            → log only (watch list)
+//   act   : avail < 300 ×6 ticks (90s sustained deep valley) → recycle
+//   OOM   : avail < 130 single tick → recycle now (kernel-imminent)
+//   + RSS pair: (RSS ≥ 2300 ×4 AND avail < 300 ×4) → recycle (treadmill-unsafe combo)
+const AVAIL_ACT = 300;     // sustained-deep-valley recycle line
+const AVAIL_ACT_TICKS = 6; // 90s — transient ambient dips must pass through
+const AVAIL_OOM = 130;     // single-tick kernel-imminent line
 // v12.12 BOOT-TREADMILL FIX (2026-10-24, SENTINEL-M0M2 forensics — 144 boot-spike-act kills,
 // rescues1h=20): the v12.8.1 grace rule `availMb < 300` conflicts with THIS box's ambient
 // avail (350-550MB): every boot's Turbopack compile of `/` (20-25s, RSS ~1.8GB) dips avail
@@ -745,15 +757,18 @@ async function tick(): Promise<void> {
     if (!bootGrace && !restarting) {
       if (app.rssMb >= RSS_HARD) highRssTicks = RSS_SUSTAIN_TICKS;
       else if (app.rssMb >= RSS_ACT) highRssTicks++; else highRssTicks = 0;
-      if (mem.availableMb >= 0 && mem.availableMb < AVAIL_FLOOR && app.rssMb > 1200) lowAvailTicks++; else lowAvailTicks = 0;
-      if ((highRssTicks >= RSS_SUSTAIN_TICKS && lowAvailTicks >= 2) || lowAvailTicks >= 3) {
-        // v12.12b — RSS-high ALONE no longer recycles: the 10-24 treadmill recycled
-        // healthy warm-ups (RSS 2350) that the box was actually absorbing. Recycle
-        // only when RSS is high AND the box is genuinely tight (avail < floor),
-        // or avail is low on its own (the real kernel signal).
-        const why = lowAvailTicks >= 3
-          ? `avail ${mem.availableMb}MB < ${AVAIL_FLOOR}MB sustained`
-          : `RSS ${app.rssMb}MB ≥ ${RSS_ACT}MB sustained ×${highRssTicks} + avail ${mem.availableMb}MB < ${AVAIL_FLOOR}MB ×${lowAvailTicks}`;
+      if (mem.availableMb >= 0 && mem.availableMb < AVAIL_ACT && app.rssMb > 1200) lowAvailTicks++; else lowAvailTicks = 0;
+      if (mem.availableMb >= 0 && mem.availableMb < AVAIL_OOM) {
+        log("warn", "avail-oom-act", { availMb: mem.availableMb, rssMb: app.rssMb, note: `avail ${mem.availableMb}MB < ${AVAIL_OOM}MB single tick — kernel-imminent, recycle now (v12.12c)` });
+        await memRestart(`avail ${mem.availableMb}MB < ${AVAIL_OOM}MB OOM-imminent (single tick, v12.12c)`);
+      } else if ((highRssTicks >= RSS_SUSTAIN_TICKS && lowAvailTicks >= 4) || lowAvailTicks >= AVAIL_ACT_TICKS) {
+        // v12.12b/c — RSS-high ALONE no longer recycles, and shallow ambient dips
+        // (350-380) never recycle: the 10-24 treadmill recycled healthy warm-ups
+        // AND the 13:03 recycle killed a healthy app on an ambient dip. Recycle
+        // only on deep sustained valleys or the RSS+avail pair.
+        const why = lowAvailTicks >= AVAIL_ACT_TICKS
+          ? `avail ${mem.availableMb}MB < ${AVAIL_ACT}MB sustained ×${lowAvailTicks}`
+          : `RSS ${app.rssMb}MB ≥ ${RSS_ACT}MB sustained ×${highRssTicks} + avail ${mem.availableMb}MB < ${AVAIL_ACT}MB ×${lowAvailTicks}`;
         await memRestart(why);
       }
     } else if (bootGrace) {
