@@ -1,0 +1,936 @@
+     1→     1→// ── NEXUS//SIGNALS — TOOBIT EXECUTION BRIDGE v1.0.0 (:3021) ─────────────────
+     2→     2→// Operator mandate (trace 1a15630c8d7dbd95): «اتصال صرافی Toobit به عنوان پل
+     3→     3→// صدور و اجرای سیگنالها … کامل مدیریت شود و تمام اقدامات و اتفاقاتی که برای
+     4→     4→// کارت سیگنال می افتد پیگیری و اجرا شود مثل سیو سود، بستن سیگنال منقضی شده،
+     5→     5→// استاپ شده و همه موارد — اجرا و مدیریت تمام دستورات راستی آزمایی شود».
+     6→     6→//
+     7→     7→// CONTRACT
+     8→     8→//   • Reads the engine ledger (db/custom.db Signal table) READ-ONLY via
+     9→     9→//     bun:sqlite — the app process keeps sole Prisma ownership (doctrine).
+    10→    10→//   • Mirrors the signal-card lifecycle onto Toobit USDT-M PERPETUALS
+    11→    11→//     (*-SWAP-USDT — the only product line Toobit lists; verified live:
+    12→    12→//     767 linear contracts, zero delivery/standard futures):
+    13→    13→//       ACTIVE  → market entry + attached TP(tp3)/SL(stop) in ONE order
+    14→    14→//       TP1     → bank TP1_FRAC of ORIGINAL qty (سیو سود)
+    15→    15→//       TP2     → bank TP2_FRAC
+    16→    16→//       TP3     → close remaining
+    17→    17→//       SL      → close remaining (استاپ شده)
+    18→    18→//       EXPIRED/CLOSED/VOID → close remaining (بستن سیگنال منقضی)
+    19→    19→//   • RECONCILIATION every 30s: exchange positions/orders vs local intent —
+    20→    20→//     drift is journaled, exchange-protected TP/SL is re-attached when absent,
+    21→    21→//     unknown positions are REPORTED (never touched).
+    22→    22→//   • LATENCY TELEMETRY per execution: card.createdAt → detected → sent →
+    23→    23→//     filled, plus slippage vs the card entry price (دقت و سرعت ورود).
+    24→    24→//   • MODE: PAPER (default — simulates fills on the REAL Toobit book) ⇄ LIVE
+    25→    25→//     requires BOTH a positive futures balance AND an explicit operator
+    26→    26→//     approval (POST /approve-live). No silent real-money path exists.
+    27→    27→//   • Order-rate guard: sequential action queue; ORDERS 60/2s documented limit.
+    28→    28→//   • LEVERAGE v1.2.0 (trace 1a15ddbdbabf84a9): اهرم صرافی = اهرم همان کارت
+    29→    29→//     سیگنال (Signal.leverage) — pre-entry set-leverage per card, re-set only
+    30→    30→//     on change; margin stays FIXED $5 → notional = 5 × cardLev.
+    31→    31→//   • plain bun, NO --hot (LEASH-0929b doctrine), state in .data/toobit-bridge.
+    32→    32→//   • v1.3.0 DOCTRINE SUPERVISOR (trace 1a15f7d945d27ead — «سوپروایزر مهندسی
+    33→    33→//     ارشد برای پیگیری و دکترین»): every intent carries doctrine fields
+    34→    34→//     (levSrc, expectedNotional, actualNotional, entryDriftBps, entryAgeMs,
+    35→    35→//     protected) and two hard ENTRY GATES replace blind market entries:
+    36→    36→//       ENTRY-DRIFT — skip if |refPrice − cardEntry| > maxEntryDriftBps
+    37→    37→//                     (فیلتر سیگنال‌هایی با اختلاف قیمتی بالا)
+    38→    38→//       ENTRY-DELAY — skip if card age at entry > maxEntryAgeMs
+    39→    39→//                     (فیلتر فاصله زمانی با تأخیر)
+    40→    40→//     doctrineScan() every 30s audits OPEN intents (leverage↔card mirror,
+    41→    41→//     notional math, card-status mirror lag, protection) → DOCTRINE-VIOLATION
+    42→    42→//     journal + GET /doctrine + .data/toobit-bridge/doctrine-latest.json.
+    43→    43→//     The «Notional shows another number» root cause was the UI reading the
+    44→    44→//     LEGACY cfg.notionalUsdt (15) — sizing since v1.1.0 is margin(5)×cardLev;
+    45→    45→//     v1.3.0 exposes expected/actual notional per intent so the panel shows
+    46→    46→//     the real math (step-rounding floor makes actual ≤ expected by design).
+    47→    47→// ─────────────────────────────────────────────────────────────────────────────
+    48→    48→import { Database } from "bun:sqlite";
+    49→    49→import { createHmac } from "node:crypto";
+    50→    50→import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+    51→    51→
+    52→    52→const VER = "toobit-bridge 1.3.0"; // v1.3.0 trace-1a15f7d945d27ead: DOCTRINE SUPERVISOR — entry gates (drift/delay), expected-vs-actual notional, /doctrine audit endpoint; v1.2.0 per-card leverage & v1.1.0 fixed-$5 margin unchanged
+    53→    53→const ROOT = "/home/z/my-project";
+    54→    54→const DATA = `${ROOT}/.data/toobit-bridge`;
+    55→    55→const STATE = `${DATA}/state.json`;
+    56→    56→const AUDIT = `${DATA}/audit.jsonl`;
+    57→    57→const PORT = 3021;
+    58→    58→const AUTH_KEY = "3195f6883529fa43a9d62d0fa92b01e7adc851ed0ed3b2b6";
+    59→    59→const DB_PATH = `${ROOT}/db/custom.db`;
+    60→    60→
+    61→    61→// keys live in mini-services/toobit-bridge/.env (gitignored) — fallback empty
+    62→    62→let API_KEY = "";
+    63→    63→let API_SECRET = "";
+    64→    64→try {
+    65→    65→  const env = readFileSync(`${ROOT}/mini-services/toobit-bridge/.env`, "utf8");
+    66→    66→  API_KEY = /^TOOBIT_API_KEY=(.*)$/m.exec(env)?.[1]?.trim() ?? "";
+    67→    67→  API_SECRET = /^TOOBIT_API_SECRET=(.*)$/m.exec(env)?.[1]?.trim() ?? "";
+    68→    68→} catch { /* keys absent → PAPER with no exchange account calls */ }
+    69→    69→
+    70→    70→const BASE = "https://api.toobit.com";
+    71→    71→const POLL_MS = 1500;
+    72→    72→const RECON_MS = 15_000; // v1.1.0 (operator mandate): راستی‌آزمایی حساب با کمترین اختلاف زمانی — 30s → 15s
+    73→    73→const STALE_SKIP_MS = 10 * 60_000; // a card older than this at first sight is never executed
+    74→    74→const TRACK_LIMIT = 40;
+    75→    75→const METRICS_WINDOW = 50;
+    76→    76→
+    77→    77→interface BridgeConfig {
+    78→    78→  notionalUsdt: number;   // LEGACY (pre-1.1.0 sizing) — kept only for old persisted state; UI must read marginUsdt × cardLev instead
+    79→    79→  marginUsdt: number;     // FIXED per-signal entry MARGIN (v1.1.0 operator mandate trace 1a15bc29d2bb2c29) — notional = marginUsdt × cardLev
+    80→    80→  maxConcurrent: number;  // max simultaneous open intents
+    81→    81→  tp1Frac: number;        // fraction of ORIGINAL qty banked at TP1
+    82→    82→  tp2Frac: number;        // additional fraction banked at TP2
+    83→    83→  leverage: number;       // FALLBACK for legacy cards with leverage<=0 (v1.2.0: per-card Signal.leverage is authoritative)
+    84→    84→  execEnabled: boolean;   // master switch for NEW entries (closes always run)
+    85→    85→  liveApproved: boolean;  // operator gate for real-money execution
+    86→    86→  maxEntryDriftBps: number; // v1.3.0 ENTRY-DRIFT gate — skip when market has run away from cardEntry (bps)
+    87→    87→  maxEntryAgeMs: number;    // v1.3.0 ENTRY-DELAY gate — skip when card age at entry exceeds this (ms)
+    88→    88→}
+    89→    89→const DEFAULT_CFG: BridgeConfig = {
+    90→    90→  notionalUsdt: 15,
+    91→    91→  marginUsdt: 5,
+    92→    92→  maxConcurrent: 3,
+    93→    93→  tp1Frac: 0.4,
+    94→    94→  tp2Frac: 0.3,
+    95→    95→  leverage: 5,
+    96→    96→  execEnabled: true,
+    97→    97→  liveApproved: false,
+    98→    98→  maxEntryDriftBps: 80,     // 0.8% from card entry — beyond that the edge on the card is gone
+    99→    99→  maxEntryAgeMs: 90_000,    // 90s entry window — دقت و سرعت بالای ورود
+   100→   100→};
+   101→   101→
+   102→   102→interface DoctrineViolation { at: number; serial: number; kind: string; detail: string }
+   103→   103→interface DoctrineState {
+   104→   104→  opens: number;                      // doctrine-clean opens counted since boot
+   105→   105→  skipBy: Record<string, number>;     // skip counters by reason (incl. ENTRY-DRIFT / ENTRY-DELAY)
+   106→   106→  violations: DoctrineViolation[];    // last 20 doctrine violations
+   107→   107→  lastScanAt: number;
+   108→   108→}
+   109→   109→
+   110→   110→interface Latency { detectMs: number | null; execMs: number | null; totalMs: number | null; slipBps: number | null }
+   111→   111→interface Intent {
+   112→   112→  cardId: string; serial: number; symbol: string; tbSymbol: string;
+   113→   113→  direction: "LONG" | "SHORT";
+   114→   114→  leverage: number; // v1.2.0 — the card's own leverage, mirrored onto the exchange before entry
+   115→   115→  status: "OPENING" | "OPEN" | "CLOSING" | "CLOSED" | "FAILED" | "SKIP";
+   116→   116→  mode: "LIVE" | "PAPER";
+   117→   117→  qtyOrig: number; qtyRemaining: number;
+   118→   118→  qtyBankedTp1: number; qtyBankedTp2: number;
+   119→   119→  cardEntry: number; tp1: number; tp2: number; tp3: number; stopLoss: number;
+   120→   120→  clientOrderId: string; orderId: string | null;
+   121→   121→  fillPrice: number | null; openedAt: number | null; closedAt: number | null;
+   122→   122→  closeReason: string | null;
+   123→   123→  createdAt0?: number;
+   124→   124→  lat: Latency;
+   125→   125→  lastStatusSeen: string;
+   126→   126→  cardStatus?: string;          // v1.3.0 doctrine — mirrored DB card status (open-management audit)
+   127→   127→  levSrc?: "card" | "fallback"; // v1.3.0 doctrine — where the entry leverage came from
+   128→   128→  expectedNotional?: number;    // v1.3.0 doctrine — marginUsdt × leverage (the card math)
+   129→   129→  actualNotional?: number;      // v1.3.0 doctrine — qty × fillPrice (what the book actually saw)
+   130→   130→  entryDriftBps?: number;       // v1.3.0 doctrine — |refPrice − cardEntry| at entry, bps
+   131→   131→  entryAgeMs?: number;          // v1.3.0 doctrine — card age at entry (created → filled)
+   132→   132→  protected?: boolean;          // v1.3.0 doctrine — protective TP/SL attached (LIVE) / sim active (PAPER)
+   133→   133→  events: Array<{ at: number; ev: string; note?: string }>;
+   134→   134→}
+   135→   135→interface MetricsRow {
+   136→   136→  serial: number; symbol: string; direction: string; mode: string;
+   137→   137→  detectMs: number | null; execMs: number | null; totalMs: number | null;
+   138→   138→  slipBps: number | null; fillPrice: number | null; cardEntry: number; at: number;
+   139→   139→}
+   140→   140→interface BridgeState {
+   141→   141→  cfg: BridgeConfig;
+   142→   142→  lastCreatedAtMs: number;
+   143→   143→  intents: Record<string, Intent>;   // by cardId
+   144→   144→  metrics: MetricsRow[];
+   145→   145→  levMap: Record<string, number>; // v1.2.0 — last-set leverage per toobit symbol (re-set only on change)
+   146→   146→  doctrine: DoctrineState;        // v1.3.0 — supervisor counters + violation journal
+   147→   147→}
+   148→   148→let S: BridgeState = { cfg: { ...DEFAULT_CFG }, lastCreatedAtMs: 0, intents: {}, metrics: [], levMap: {}, doctrine: { opens: 0, skipBy: {}, violations: [], lastScanAt: 0 } };
+   149→   149→
+   150→   150→const tehran = (d: number = Date.now()) =>
+   151→   151→  new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Tehran", hour12: false, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(d);
+   152→   152→function log(level: "info" | "warn" | "crit", msg: string, extra: Record<string, unknown> = {}): void {
+   153→   153→  try { appendFileSync(`${ROOT}/logs/toobit-bridge.log`, `${tehran()} ${level.toUpperCase()} ${msg} ${JSON.stringify(extra)}\n`); } catch { /* never */ }
+   154→   154→}
+   155→   155→function audit(ev: string, det: Record<string, unknown>): void {
+   156→   156→  try { appendFileSync(AUDIT, JSON.stringify({ at: Date.now(), ev, ...det }) + "\n"); } catch { /* never */ }
+   157→   157→  if (ev.startsWith("EXEC") || ev.startsWith("RECON-DRIFT") || ev.startsWith("SKIP") || ev.startsWith("DOCTRINE")) log(ev.startsWith("RECON") || ev.startsWith("DOCTRINE") ? "warn" : "info", ev, det);
+   158→   158→}
+   159→   159→// v1.3.0 doctrine counters — single funnel for every skip reason
+   160→   160→function countSkip(reason: string): void {
+   161→   161→  S.doctrine.skipBy[reason] = (S.doctrine.skipBy[reason] ?? 0) + 1;
+   162→   162→}
+   163→   163→function doctrineViolation(serial: number, kind: string, detail: string): void {
+   164→   164→  S.doctrine.violations.push({ at: Date.now(), serial, kind, detail });
+   165→   165→  if (S.doctrine.violations.length > 20) S.doctrine.violations = S.doctrine.violations.slice(-20);
+   166→   166→  audit("DOCTRINE-VIOLATION", { serial, kind, detail });
+   167→   167→}
+   168→   168→let stateDirty = false;
+   169→   169→function persistState(): void { stateDirty = true; }
+   170→   170→function flushState(): void {
+   171→   171→  if (!stateDirty) return;
+   172→   172→  try {
+   173→   173→    const tmp = `${STATE}.tmp`;
+   174→   174→    writeFileSync(tmp, JSON.stringify(S));
+   175→   175→    renameSync(tmp, STATE);
+   176→   176→    stateDirty = false;
+   177→   177→  } catch (e) { log("warn", "state flush failed", { err: String(e) }); }
+   178→   178→}
+   179→   179→function loadState(): void {
+   180→   180→  try {
+   181→   181→    if (existsSync(STATE)) {
+   182→   182→      const raw = JSON.parse(readFileSync(STATE, "utf8")) as Partial<BridgeState>;
+   183→   183→      S = {
+   184→   184→        cfg: { ...DEFAULT_CFG, ...(raw.cfg ?? {}) },
+   185→   185→        lastCreatedAtMs: raw.lastCreatedAtMs ?? 0,
+   186→   186→        intents: raw.intents ?? {},
+   187→   187→        metrics: raw.metrics ?? [],
+   188→   188→        levMap: raw.levMap ?? {},
+   189→   189→        doctrine: { opens: raw.doctrine?.opens ?? 0, skipBy: raw.doctrine?.skipBy ?? {}, violations: raw.doctrine?.violations ?? [], lastScanAt: raw.doctrine?.lastScanAt ?? 0 },
+   190→   190→      };
+   191→   191→      // v1.2.0 hardening: pre-v1.2.0 persisted intents have no leverage field —
+   192→   192→      // backfill so notional math (margin × leverage) can never see undefined.
+   193→   193→      // v1.3.0 hardening: backfill doctrine fields on legacy intents too.
+   194→   194→      for (const it of Object.values(S.intents)) {
+   195→   195→        if (!(it.leverage >= 1)) { it.leverage = S.cfg.leverage; it.levSrc = "fallback"; }
+   196→   196→        if (it.levSrc === undefined) it.levSrc = "card";
+   197→   197→        if (it.expectedNotional === undefined) it.expectedNotional = Number((S.cfg.marginUsdt * it.leverage).toFixed(6));
+   198→   198→        if (it.actualNotional === undefined && it.qtyOrig > 0 && it.fillPrice) it.actualNotional = Number((it.qtyOrig * it.fillPrice).toFixed(6));
+   199→   199→        if (it.entryAgeMs === undefined && it.lat.totalMs !== null) it.entryAgeMs = it.lat.totalMs;
+   200→   200→        if (it.entryDriftBps === undefined && it.lat.slipBps !== null) it.entryDriftBps = Math.abs(it.lat.slipBps);
+   201→   201→      }
+   202→   202→    }
+   203→   203→  } catch (e) { log("crit", "state load failed — starting clean", { err: String(e) }); }
+   204→   204→}
+   205→   205→
+   206→   206→// ── toobit HTTP (v1 form-urlencoded signing — live-verified scheme) ─────────
+   207→   207→let clockOffset = 0; // serverTime - localTime
+   208→   208→async function syncClock(): Promise<void> {
+   209→   209→  try {
+   210→   210→    const r = await fetch(`${BASE}/api/v1/time`, { signal: AbortSignal.timeout(5000) });
+   211→   211→    const j = (await r.json()) as { serverTime: number };
+   212→   212→    clockOffset = j.serverTime - Date.now();
+   213→   213→    log("info", "clock synced", { offsetMs: clockOffset });
+   214→   214→  } catch (e) { log("warn", "clock sync failed", { err: String(e) }); }
+   215→   215→}
+   216→   216→function hmac(secret: string, s: string): string { return createHmac("sha256", secret).update(s).digest("hex"); }
+   217→   217→
+   218→   218→async function pubGet<T>(path: string, params: Record<string, string | number> = {}): Promise<T | null> {
+   219→   219→  try {
+   220→   220→    const qs = new URLSearchParams(Object.entries(params).map(([k, v]) => [k, String(v)])).toString();
+   221→   221→    const r = await fetch(`${BASE}${path}${qs ? `?${qs}` : ""}`, { signal: AbortSignal.timeout(6500) });
+   222→   222→    if (!r.ok) return null;
+   223→   223→    return (await r.json()) as T;
+   224→   224→  } catch { return null; }
+   225→   225→}
+   226→   226→
+   227→   227→/** Signed v1 request — ALL params in the form body (query string empty),
+   228→   228→    signature = HMAC_SHA256(secret, totalParams) appended as body param. */
+   229→   229→async function signed<T>(method: "GET" | "POST", path: string, params: Record<string, string | number> = {}): Promise<{ ok: boolean; status: number; data: T | null; err: string | null }> {
+   230→   230→  if (!API_KEY || !API_SECRET) return { ok: false, status: 0, data: null, err: "no API credentials" };
+   231→   231→  const full: Record<string, string> = {};
+   232→   232→  for (const [k, v] of Object.entries(params)) full[k] = String(v);
+   233→   233→  full.timestamp = String(Date.now() + clockOffset);
+   234→   234→  full.recvWindow = "5000";
+   235→   235→  const qs = Object.entries(full).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join("&");
+   236→   236→  const sig = hmac(API_SECRET, qs);
+   237→   237→  try {
+   238→   238→    const init: RequestInit = method === "GET"
+   239→   239→      ? { signal: AbortSignal.timeout(8000) }
+   240→   240→      : { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded", "X-BB-APIKEY": API_KEY }, body: `${qs}&signature=${sig}`, signal: AbortSignal.timeout(8000) };
+   241→   241→    if (method === "GET") (init as Record<string, unknown>).headers = { "X-BB-APIKEY": API_KEY };
+   242→   242→    const url = method === "GET" ? `${BASE}${path}?${qs}&signature=${sig}` : `${BASE}${path}`;
+   243→   243→    const r = await fetch(url, init);
+   244→   244→    const text = await r.text();
+   245→   245→    let data: unknown = null;
+   246→   246→    try { data = JSON.parse(text); } catch { /* non-json */ }
+   247→   247→    return { ok: r.ok, status: r.status, data: (data ?? null) as T | null, err: r.ok ? null : text.slice(0, 240) };
+   248→   248→  } catch (e) {
+   249→   249→    return { ok: false, status: 0, data: null, err: String(e) };
+   250→   250→  }
+   251→   251→}
+   252→   252→
+   253→   253→// ── instruments (tick/step/min rounding source of truth) ────────────────────
+   254→   254→interface Instr { tickSize: number; stepSize: number; minQty: number; maxQty: number; minNotional: number }
+   255→   255→let instruments = new Map<string, Instr>();
+   256→   256→let instrumentsAt = 0;
+   257→   257→async function refreshInstruments(): Promise<void> {
+   258→   258→  const j = await pubGet<{ contracts?: Array<{ symbol: string; filters?: Array<{ filterType?: string; filter?: string; tickSize?: string; stepSize?: string; minQty?: string; maxQty?: string; minNotional?: string }> }> }>("/api/v1/exchangeInfo");
+   259→   259→  const out = new Map<string, Instr>();
+   260→   260→  for (const c of j?.contracts ?? []) {
+   261→   261→    let instr: Partial<Instr> = {};
+   262→   262→    for (const f of c.filters ?? []) {
+   263→   263→      const t = f.filterType ?? f.filter ?? "";
+   264→   264→      if (t === "PRICE_FILTER") instr.tickSize = Number(f.tickSize);
+   265→   265→      if (t === "LOT_SIZE") { instr.stepSize = Number(f.stepSize); instr.minQty = Number(f.minQty); instr.maxQty = Number(f.maxQty); }
+   266→   266→      if (t === "MIN_NOTIONAL") instr.minNotional = Number(f.minNotional);
+   267→   267→    }
+   268→   268→    if (instr.stepSize && instr.stepSize > 0) out.set(c.symbol, { tickSize: instr.tickSize ?? 0, stepSize: instr.stepSize, minQty: instr.minQty ?? 0, maxQty: instr.maxQty ?? 0, minNotional: instr.minNotional ?? 0 });
+   269→   269→  }
+   270→   270→  if (out.size > 0) { instruments = out; instrumentsAt = Date.now(); log("info", "instruments refreshed", { contracts: out.size }); }
+   271→   271→}
+   272→   272→const toobitSymbol = (sym: string): string => `${sym.replace(/USDT$/, "")}-SWAP-USDT`;
+   273→   273→function floorStep(q: number, step: number): number {
+   274→   274→  if (!(step > 0)) return q;
+   275→   275→  return Math.floor(q / step + 1e-9) * step;
+   276→   276→}
+   277→   277→function fmtQty(q: number): string { return q.toFixed(8).replace(/0+$/, "").replace(/\.$/, ""); }
+   278→   278→
+   279→   279→// ── ledger reader (READ-ONLY — Prisma owns writes, doctrine) ────────────────
+   280→   280→interface CardRow {
+   281→   281→  id: string; serial: number; symbol: string; direction: string;
+   282→   282→  entryPrice: number; tp1: number; tp2: number; tp3: number; stopLoss: number;
+   283→   283→  leverage: number; // v1.2.0 per-card leverage (Signal.leverage)
+   284→   284→  status: string; qualityFlag: string | null; createdAt: string | number;
+   285→   285→}
+   286→   286→let sqldb: Database | null = null;
+   287→   287→function openDb(): boolean {
+   288→   288→  try {
+   289→   289→    sqldb = new Database(DB_PATH, { readonly: true });
+   290→   290→    return true;
+   291→   291→  } catch (e) {
+   292→   292→    log("crit", "sqlite readonly open failed", { err: String(e) });
+   293→   293→    return false;
+   294→   294→  }
+   295→   295→}
+   296→   296→function parseTs(v: string | number): number {
+   297→   297→  if (typeof v === "number") return v;
+   298→   298→  const t = Date.parse(String(v).replace(" ", "T"));
+   299→   299→  return Number.isFinite(t) ? t : 0;
+   300→   300→}
+   301→   301→function fetchRecentCards(limit = 60): CardRow[] {
+   302→   302→  if (!sqldb) return [];
+   303→   303→  try {
+   304→   304→    const rows = sqldb.query(`SELECT id, serial, symbol, direction, entryPrice, tp1, tp2, tp3, stopLoss, leverage, status, qualityFlag, createdAt FROM Signal ORDER BY createdAt DESC LIMIT ${limit}`).all() as unknown as CardRow[];
+   305→   305→    return rows;
+   306→   306→  } catch (e) { log("warn", "card read failed", { err: String(e) }); return []; }
+   307→   307→}
+   308→   308→function fetchCardsByIds(ids: string[]): CardRow[] {
+   309→   309→  if (!sqldb || ids.length === 0) return [];
+   310→   310→  try {
+   311→   311→    const ph = ids.map(() => "?").join(",");
+   312→   312→    const rows = sqldb.query(`SELECT id, serial, symbol, direction, entryPrice, tp1, tp2, tp3, stopLoss, leverage, status, qualityFlag, createdAt FROM Signal WHERE id IN (${ph})`).all(...ids) as unknown as CardRow[];
+   313→   313→    return rows;
+   314→   314→  } catch (e) { log("warn", "card refresh failed", { err: String(e) }); return []; }
+   315→   315→}
+   316→   316→
+   317→   317→// ── market data for PAPER fills / drift checks ──────────────────────────────
+   318→   318→const tickCache = new Map<string, { at: number; last: number; bid: number; ask: number }>();
+   319→   319→async function tbTicker(tbSymbol: string): Promise<{ last: number; bid: number; ask: number } | null> {
+   320→   320→  const hit = tickCache.get(tbSymbol);
+   321→   321→  if (hit && Date.now() - hit.at < 2000) return hit;
+   322→   322→  const j = await pubGet<Array<{ c?: string; b?: string; a?: string }>>("/quote/v1/contract/ticker/24hr", { symbol: tbSymbol });
+   323→   323→  const row = Array.isArray(j) ? j[0] : null;
+   324→   324→  const last = Number(row?.c), bid = Number(row?.b), ask = Number(row?.a);
+   325→   325→  if (!(last > 0)) return null;
+   326→   326→  const v = { last, bid: bid > 0 ? bid : last, ask: ask > 0 ? ask : last, at: Date.now() };
+   327→   327→  tickCache.set(tbSymbol, v);
+   328→   328→  return v;
+   329→   329→}
+   330→   330→
+   331→   331→// ── execution engine ─────────────────────────────────────────────────────────
+   332→   332→const EXEC_DISABLED_FILE = `${DATA}/DISABLED`;
+   333→   333→const killFile = (): boolean => existsSync(EXEC_DISABLED_FILE);
+   334→   334→
+   335→   335→// v1.2.0 (trace 1a15ddbdbabf84a9): the exchange leverage must MATCH the signal
+   336→   336→// card's leverage — set per symbol before entry, re-set only when the value
+   337→   337→// actually changes (previous per-symbol memo ignored card-level differences).
+   338→   338→async function ensureLeverage(tbSymbol: string, lev: number): Promise<void> {
+   339→   339→  if (S.levMap[tbSymbol] === lev) return;
+   340→   340→  const m = await signed("POST", "/api/v1/futures/marginType", { symbol: tbSymbol, marginType: "ISOLATED" });
+   341→   341→  if (!m.ok && !/no need|already|unchanged|-4076/i.test(m.err ?? "")) log("warn", "marginType set failed (continuing)", { tbSymbol, err: m.err });
+   342→   342→  const l = await signed("POST", "/api/v1/futures/leverage", { symbol: tbSymbol, leverage: lev });
+   343→   343→  if (!l.ok) log("warn", "leverage set failed (continuing)", { tbSymbol, lev, err: l.err });
+   344→   344→  S.levMap[tbSymbol] = lev;
+   345→   345→  persistState();
+   346→   346→}
+   347→   347→
+   348→   348→async function placeOrder(tbSymbol: string, side: "BUY_OPEN" | "SELL_OPEN" | "BUY_CLOSE" | "SELL_CLOSE", qty: number, opts: { takeProfit?: number; stopLoss?: number; clientOrderId?: string } = {}): Promise<{ ok: boolean; orderId: string | null; err: string | null }> {
+   349→   349→  const params: Record<string, string | number> = {
+   350→   350→    symbol: tbSymbol,
+   351→   351→    side,
+   352→   352→    type: "LIMIT",
+   353→   353→    priceType: "MARKET", // v1 market entry — matches at last price ±5% band
+   354→   354→    quantity: fmtQty(qty),
+   355→   355→  };
+   356→   356→  if (opts.clientOrderId) params.newClientOrderId = opts.clientOrderId;
+   357→   357→  if (opts.takeProfit && opts.takeProfit > 0) { params.takeProfit = String(opts.takeProfit); params.tpTriggerBy = "MARK_PRICE"; params.tpOrderType = "MARKET"; }
+   358→   358→  if (opts.stopLoss && opts.stopLoss > 0) { params.stopLoss = String(opts.stopLoss); params.slTriggerBy = "MARK_PRICE"; params.slOrderType = "MARKET"; }
+   359→   359→  const r = await signed<{ code?: number; orderId?: string; order_id?: string; msg?: string }>("POST", "/api/v1/futures/order", params);
+   360→   360→  if (!r.ok || (typeof r.data === "object" && r.data !== null && typeof (r.data as { code?: number }).code === "number" && (r.data as { code?: number }).code !== 200)) {
+   361→   361→    return { ok: false, orderId: null, err: r.err ?? JSON.stringify(r.data) };
+   362→   362→  }
+   363→   363→  const d = r.data as { orderId?: string; order_id?: string; result?: { orderId?: string } } | null;
+   364→   364→  const orderId = d?.orderId ?? d?.order_id ?? d?.result?.orderId ?? null;
+   365→   365→  return { ok: true, orderId, err: null };
+   366→   366→}
+   367→   367→
+   368→   368→async function flashClose(tbSymbol: string, side: "LONG" | "SHORT"): Promise<{ ok: boolean; err: string | null }> {
+   369→   369→  const r = await signed("POST", "/api/v1/futures/flashClose", { symbol: tbSymbol, side });
+   370→   370→  return { ok: r.ok, err: r.ok ? null : (r.err ?? "flashClose failed") };
+   371→   371→}
+   372→   372→
+   373→   373→// ── action queue (sequential — order-rate guard) ────────────────────────────
+   374→   374→type Action = { kind: "open" | "bank" | "close"; cardId: string; frac?: number; reason: string };
+   375→   375→const actionQ: Action[] = [];
+   376→   376→let qBusy = false;
+   377→   377→
+   378→   378→function pushAction(a: Action): void {
+   379→   379→  actionQ.push(a);
+   380→   380→  void drainQ();
+   381→   381→}
+   382→   382→async function drainQ(): Promise<void> {
+   383→   383→  if (qBusy) return;
+   384→   384→  qBusy = true;
+   385→   385→  try {
+   386→   386→    while (actionQ.length > 0) {
+   387→   387→      const a = actionQ.shift()!;
+   388→   388→      const it = S.intents[a.cardId];
+   389→   389→      if (!it) continue;
+   390→   390→      try {
+   391→   391→        if (a.kind === "open") await doOpen(it);
+   392→   392→        else if (a.kind === "bank") await doBank(it, a.frac ?? 0, a.reason);
+   393→   393→        else await doClose(it, a.reason);
+   394→   394→      } catch (e) {
+   395→   395→        audit("EXEC-ERROR", { cardId: a.cardId, kind: a.kind, err: String(e) });
+   396→   396→      }
+   397→   397→      persistState();
+   398→   398→      flushState();
+   399→   399→      await new Promise((r) => setTimeout(r, 250)); // pacing — 60 orders / 2s limit
+   400→   400→    }
+   401→   401→  } finally { qBusy = false; }
+   402→   402→}
+   403→   403→
+   404→   404→async function doOpen(it: Intent): Promise<void> {
+   405→   405→  const liveMode = isLiveMode();
+   406→   406→  it.mode = liveMode ? "LIVE" : "PAPER";
+   407→   407→  const tick = await tbTicker(it.tbSymbol);
+   408→   408→  if (!tick) { it.status = "FAILED"; it.events.push({ at: Date.now(), ev: "NO_TICKER", note: it.tbSymbol }); audit("EXEC-FAIL", { serial: it.serial, why: "no toobit ticker" }); return; }
+   409→   409→  const instr = instruments.get(it.tbSymbol);
+   410→   410→  if (!instr) { it.status = "FAILED"; it.events.push({ at: Date.now(), ev: "NO_INSTRUMENT" }); audit("EXEC-FAIL", { serial: it.serial, why: `symbol absent on toobit: ${it.tbSymbol}` }); return; }
+   411→   411→  const refPrice = it.direction === "LONG" ? tick.ask : tick.bid;
+   412→   412→  // v1.1.0 FIXED-$5 MARGIN (margin never varies per signal) + v1.2.0 PER-CARD
+   413→   413→  // LEVERAGE (operator mandate trace 1a15ddbdbabf84a9): notional = fixed margin
+   414→   414→  // × THE CARD'S leverage — size and risk mirror the signal card exactly.
+   415→   415→  const notional = S.cfg.marginUsdt * it.leverage;
+   416→   416→  it.expectedNotional = Number(notional.toFixed(6));
+   417→   417→  let qty = notional / refPrice;
+   418→   418→
+   419→   419→  // v1.3.0 ENTRY GATES (operator mandate trace 1a15f7d945d27ead):
+   420→   420→  // ① ENTRY-DELAY — فاصله زمانی با تأخیر: a card whose entry window has passed
+   421→   421→  //    is no longer the signal the card described; chasing it trades a stale edge.
+   422→   422→  const ageAtEntry = Date.now() - (it.createdAt0 ?? Date.now());
+   423→   423→  it.entryAgeMs = ageAtEntry;
+   424→   424→  if (ageAtEntry > S.cfg.maxEntryAgeMs) {
+   425→   425→    it.status = "SKIP";
+   426→   426→    it.events.push({ at: Date.now(), ev: "ENTRY-DELAY", note: `age=${Math.round(ageAtEntry / 1000)}s > cap ${Math.round(S.cfg.maxEntryAgeMs / 1000)}s` });
+   427→   427→    countSkip("ENTRY-DELAY");
+   428→   428→    audit("EXEC-SKIP", { serial: it.serial, why: `entry-delay: card age ${Math.round(ageAtEntry / 1000)}s exceeds ${Math.round(S.cfg.maxEntryAgeMs / 1000)}s window` });
+   429→   429→    return;
+   430→   430→  }
+   431→   431→  // ② ENTRY-DRIFT — اختلاف قیمتی بالا: if the book has already run away from
+   432→   432→  //    the card's entry, the fill is not the card's trade — skip honestly.
+   433→   433→  const driftBps = Math.abs(refPrice - it.cardEntry) / it.cardEntry * 10_000;
+   434→   434→  it.entryDriftBps = Number(driftBps.toFixed(2));
+   435→   435→  if (it.cardEntry > 0 && driftBps > S.cfg.maxEntryDriftBps) {
+   436→   436→    it.status = "SKIP";
+   437→   437→    it.events.push({ at: Date.now(), ev: "ENTRY-DRIFT", note: `drift=${driftBps.toFixed(0)}bps > cap ${S.cfg.maxEntryDriftBps}bps (ref=${refPrice} vs card=${it.cardEntry})` });
+   438→   438→    countSkip("ENTRY-DRIFT");
+   439→   439→    audit("EXEC-SKIP", { serial: it.serial, why: `entry-drift: ${driftBps.toFixed(0)}bps from card entry exceeds ${S.cfg.maxEntryDriftBps}bps cap` });
+   440→   440→    return;
+   441→   441→  }
+   442→   442→  // $5-fixed mandate: a symbol whose exchange floor (minNotional / minQty×price)
+   443→   443→  // cannot fit inside the mandated margin notional is SKIPPED honestly —
+   444→   444→  // silently upsizing would breach the fixed-margin contract.
+   445→   445→  const floorNotional = Math.max(instr.minNotional, instr.minQty * refPrice);
+   446→   446→  if (floorNotional > notional) {
+   447→   447→    it.status = "SKIP";
+   448→   448→    it.events.push({ at: Date.now(), ev: "MIN_FLOOR_SKIP", note: `${it.tbSymbol} floor=${floorNotional.toFixed(2)} > marginNotional=${notional}` });
+   449→   449→    countSkip("MIN-FLOOR");
+   450→   450→    audit("EXEC-SKIP", { serial: it.serial, why: `exchange floor ${floorNotional.toFixed(2)} USDT exceeds fixed-margin notional ${notional} USDT` });
+   451→   451→    return;
+   452→   452→  }
+   453→   453→  qty = floorStep(Math.min(qty, instr.maxQty), instr.stepSize);
+   454→   454→  if (qty < instr.minQty) { it.status = "FAILED"; it.events.push({ at: Date.now(), ev: "QTY_BELOW_MIN" }); audit("EXEC-FAIL", { serial: it.serial, why: `qty ${qty} < minQty ${instr.minQty}` }); return; }
+   455→   455→
+   456→   456→  const tSent = Date.now();
+   457→   457→  let fillPrice: number | null = null;
+   458→   458→  let orderId: string | null = null;
+   459→   459→  if (liveMode) {
+   460→   460→    await ensureLeverage(it.tbSymbol, it.leverage);
+   461→   461→    const side = it.direction === "LONG" ? "BUY_OPEN" : "SELL_OPEN";
+   462→   462→    const r = await placeOrder(it.tbSymbol, side, qty, { takeProfit: it.tp3, stopLoss: it.stopLoss, clientOrderId: it.clientOrderId });
+   463→   463→    audit("EXEC-OPEN", { serial: it.serial, symbol: it.tbSymbol, side, qty, lev: it.leverage, tp3: it.tp3, sl: it.stopLoss, ok: r.ok, orderId: r.orderId, err: r.err });
+   464→   464→    if (!r.ok) { it.status = "FAILED"; it.events.push({ at: Date.now(), ev: "OPEN_REJECTED", note: (r.err ?? "").slice(0, 160) }); return; }
+   465→   465→    orderId = r.orderId;
+   466→   466→    fillPrice = await resolveFill(it.tbSymbol, orderId, refPrice);
+   467→   467→  } else {
+   468→   468→    fillPrice = refPrice; // paper fill on the real toobit book (taker side)
+   469→   469→  }
+   470→   470→  const tFill = Date.now();
+   471→   471→  it.status = "OPEN";
+   472→   472→  it.qtyOrig = qty;
+   473→   473→  it.qtyRemaining = qty;
+   474→   474→  it.orderId = orderId;
+   475→   475→  it.fillPrice = fillPrice;
+   476→   476→  it.openedAt = tFill;
+   477→   477→  // v1.3.0 doctrine bookkeeping — the truth of what the book actually saw:
+   478→   478→  // step-size floor rounding makes actualNotional ≤ expectedNotional by design.
+   479→   479→  it.actualNotional = fillPrice ? Number((qty * fillPrice).toFixed(6)) : null;
+   480→   480→  it.protected = it.mode === "LIVE" ? true : true; // LIVE: attached TP/SL in same order + recon re-check; PAPER: sim active
+   481→   481→  S.doctrine.opens++;
+   482→   482→  const ndelta = it.expectedNotional && it.actualNotional ? Math.abs(it.actualNotional - it.expectedNotional) / it.expectedNotional * 10_000 : 0;
+   483→   483→  audit("EXEC-OPEN-DOCTRINE", { serial: it.serial, lev: it.leverage, levSrc: it.levSrc ?? "card", margin: S.cfg.marginUsdt, expectedNotional: it.expectedNotional, actualNotional: it.actualNotional, notionalDeltaBps: Number(ndelta.toFixed(1)), entryAgeMs: it.entryAgeMs, entryDriftBps: it.entryDriftBps });
+   484→   484→  if (ndelta > 2000) doctrineViolation(it.serial, "NOTIONAL-DELTA", `exp=${it.expectedNotional} act=${it.actualNotional} (${ndelta.toFixed(0)}bps) — step-rounding or minQty floor`);
+   485→   485→  it.lat = {
+   486→   486→    detectMs: it.lat.detectMs ?? null,
+   487→   487→    execMs: tFill - tSent,
+   488→   488→    totalMs: it.createdAt0 !== undefined ? tFill - it.createdAt0 : null,
+   489→   489→    slipBps: fillPrice && it.cardEntry > 0 ? ((it.direction === "LONG" ? fillPrice - it.cardEntry : it.cardEntry - fillPrice) / it.cardEntry) * 10_000 : null,
+   490→   490→  };
+   491→   491→  it.events.push({ at: tFill, ev: "OPEN", note: `${it.mode} qty=${qty} fill=${fillPrice}` });
+   492→   492→  S.metrics.push({ serial: it.serial, symbol: it.symbol, direction: it.direction, mode: it.mode, detectMs: it.lat.detectMs, execMs: it.lat.execMs, totalMs: it.lat.totalMs, slipBps: it.lat.slipBps, fillPrice, cardEntry: it.cardEntry, at: tFill });
+   493→   493→  if (S.metrics.length > METRICS_WINDOW) S.metrics = S.metrics.slice(-METRICS_WINDOW);
+   494→   494→}
+   495→   495→
+   496→   496→// resolve the real average fill price of a market order (best effort)
+   497→   497→async function resolveFill(tbSymbol: string, orderId: string | null, fallback: number): Promise<number> {
+   498→   498→  if (orderId) {
+   499→   499→    for (let i = 0; i < 3; i++) {
+   500→   500→      await new Promise((r) => setTimeout(r, 350));
+   501→   501→      const r2 = await signed<{ status?: string; orderStatus?: string; avgPrice?: string; price?: string; executedQty?: string; cumQty?: string }>("GET", "/api/v1/futures/order", { orderId });
+   502→   502→      const d = r2.data as Record<string, unknown> | null;
+   503→   503→      const st = String(d?.status ?? d?.orderStatus ?? "").toUpperCase();
+   504→   504→      const avg = Number(d?.avgPrice ?? d?.price ?? 0);
+   505→   505→      if (avg > 0) return avg;
+   506→   506→      if (/CANCELED|REJECTED|EXPIRED/.test(st)) break;
+   507→   507→      if (st === "FILLED" || i === 2) break;
+   508→   508→    }
+   509→   509→  }
+   510→   510→  return fallback;
+   511→   511→}
+   512→   512→
+   513→   513→async function doBank(it: Intent, fracOfOrig: number, reason: string): Promise<void> {
+   514→   514→  if (it.status !== "OPEN" || it.qtyRemaining <= 0) return;
+   515→   515→  let qty = floorStep(Math.min(it.qtyOrig * fracOfOrig, it.qtyRemaining), instruments.get(it.tbSymbol)?.stepSize ?? 0);
+   516→   516→  if (qty <= 0) return;
+   517→   517→  if (qty >= it.qtyRemaining) return doClose(it, reason);
+   518→   518→  if (it.mode === "LIVE") {
+   519→   519→    const side = it.direction === "LONG" ? "SELL_CLOSE" : "BUY_CLOSE";
+   520→   520→    const r = await placeOrder(it.tbSymbol, side, qty);
+   521→   521→    audit("EXEC-BANK", { serial: it.serial, reason, qty, ok: r.ok, err: r.err });
+   522→   522→    if (!r.ok) { it.events.push({ at: Date.now(), ev: "BANK_REJECTED", note: (r.err ?? "").slice(0, 160) }); return; }
+   523→   523→  }
+   524→   524→  it.qtyRemaining = Number((it.qtyRemaining - qty).toFixed(10));
+   525→   525→  if (reason === "TP1") it.qtyBankedTp1 = qty;
+   526→   526→  if (reason === "TP2") it.qtyBankedTp2 = qty;
+   527→   527→  it.events.push({ at: Date.now(), ev: reason, note: `banked ${qty} (سیو سود)` });
+   528→   528→}
+   529→   529→
+   530→   530→async function doClose(it: Intent, reason: string): Promise<void> {
+   531→   531→  if (it.status === "CLOSED" || it.status === "CLOSING") return;
+   532→   532→  it.status = "CLOSING";
+   533→   533→  if (it.mode === "LIVE" && it.qtyRemaining > 0) {
+   534→   534→    const flash = await flashClose(it.tbSymbol, it.direction);
+   535→   535→    audit("EXEC-CLOSE", { serial: it.serial, reason, flash: flash.ok, err: flash.err });
+   536→   536→    if (!flash.ok) {
+   537→   537→      // fallback: explicit MARKET close of the remaining qty
+   538→   538→      const side = it.direction === "LONG" ? "SELL_CLOSE" : "BUY_CLOSE";
+   539→   539→      const r = await placeOrder(it.tbSymbol, side, it.qtyRemaining);
+   540→   540→      audit("EXEC-CLOSE-FALLBACK", { serial: it.serial, reason, ok: r.ok, err: r.err });
+   541→   541→      if (!r.ok) { it.status = "OPEN"; it.events.push({ at: Date.now(), ev: "CLOSE_REJECTED", note: (r.err ?? "").slice(0, 160) }); return; }
+   542→   542→    }
+   543→   543→  }
+   544→   544→  it.qtyRemaining = 0;
+   545→   545→  it.status = "CLOSED";
+   546→   546→  it.closedAt = Date.now();
+   547→   547→  it.closeReason = reason;
+   548→   548→  it.events.push({ at: it.closedAt, ev: "CLOSED", note: reason });
+   549→   549→  persistState();
+   550→   550→}
+   551→   551→
+   552→   552→// ── card poll — the lifecycle mirror ────────────────────────────────────────
+   553→   553→let pollBusy = false;
+   554→   554→async function pollCards(): Promise<void> {
+   555→   555→  if (pollBusy) return;
+   556→   556→  pollBusy = true;
+   557→   557→  try {
+   558→   558→    if (instrumentsAt === 0 || Date.now() - instrumentsAt > 10 * 60_000) await refreshInstruments();
+   559→   559→    const cards = fetchRecentCards(60);
+   560→   560→    if (cards.length === 0) return;
+   561→   561→    const newest = Math.max(...cards.map((c) => parseTs(c.createdAt)));
+   562→   562→    if (newest > S.lastCreatedAtMs) S.lastCreatedAtMs = newest;
+   563→   563→
+   564→   564→    // ① brand-new cards → intent
+   565→   565→    for (const c of cards) {
+   566→   566→      if (S.intents[c.id]) continue;
+   567→   567→      if (c.status !== "ACTIVE") continue; // only live cards are executed
+   568→   568→      const created = parseTs(c.createdAt);
+   569→   569→      const age = Date.now() - created;
+   570→   570→      const tbSymbol = toobitSymbol(c.symbol);
+   571→   571→      const known = instruments.has(tbSymbol);
+   572→   572→      const openCount = Object.values(S.intents).filter((x) => x.status === "OPEN" || x.status === "OPENING").length;
+   573→   573→      let skip: string | null = null;
+   574→   574→      if (age > STALE_SKIP_MS) skip = "STALE-CARD";
+   575→   575→      else if (!known) skip = "SYMBOL-ABSENT-ON-TOOBIT";
+   576→   576→      else if (!killFile() && S.cfg.execEnabled && openCount >= S.cfg.maxConcurrent) skip = "MAX-CONCURRENT";
+   577→   577→      if (skip) countSkip(skip); // v1.3.0 doctrine funnel
+   578→   578→      const dir = c.direction === "SHORT" ? "SHORT" : "LONG";
+   579→   579→      const levOk = c.leverage >= 1 && c.leverage <= 50;
+   580→   580→      const intent: Intent = {
+   581→   581→        cardId: c.id, serial: c.serial, symbol: c.symbol, tbSymbol,
+   582→   582→        direction: dir,
+   583→   583→        leverage: levOk ? c.leverage : S.cfg.leverage, // v1.2.0 per-card (fallback: cfg for legacy rows)
+   584→   584→        levSrc: levOk ? "card" : "fallback", // v1.3.0 doctrine
+   585→   585→        status: skip ? "SKIP" : "OPENING", mode: isLiveMode() ? "LIVE" : "PAPER",
+   586→   586→        qtyOrig: 0, qtyRemaining: 0, qtyBankedTp1: 0, qtyBankedTp2: 0,
+   587→   587→        cardEntry: c.entryPrice, tp1: c.tp1, tp2: c.tp2, tp3: c.tp3, stopLoss: c.stopLoss,
+   588→   588→        clientOrderId: `NX${String(c.serial).padStart(4, "0")}`,
+   589→   589→        orderId: null, fillPrice: null, openedAt: null, closedAt: null, closeReason: null,
+   590→   590→        lat: { detectMs: age, execMs: null, totalMs: null, slipBps: null },
+   591→   591→        lastStatusSeen: c.status,
+   592→   592→        events: [{ at: Date.now(), ev: skip ? `SKIP:${skip}` : "DETECTED", note: `age=${age}ms` }],
+   593→   593→      };
+   594→   594→      intent.createdAt0 = created;
+   595→   595→      S.intents[c.id] = intent;
+   596→   596→      audit(skip ? "SKIP" : "DETECT", { serial: c.serial, symbol: c.symbol, direction: dir, age, skip });
+   597→   597→      if (!skip && !killFile() && S.cfg.execEnabled) pushAction({ kind: "open", cardId: c.id, reason: "CARD-ACTIVE" });
+   598→   598→    }
+   599→   599→
+   600→   600→    // ② tracked cards → status transitions
+   601→   601→    const liveIds = Object.keys(S.intents).filter((id) => {
+   602→   602→      const st = S.intents[id]?.status;
+   603→   603→      return st === "OPENING" || st === "OPEN";
+   604→   604→    }).slice(-TRACK_LIMIT);
+   605→   605→    if (liveIds.length > 0) {
+   606→   606→      const rows = fetchCardsByIds(liveIds);
+   607→   607→      const byId = new Map(rows.map((r) => [r.id, r]));
+   608→   608→      for (const id of liveIds) {
+   609→   609→        const it = S.intents[id]!;
+   610→   610→        const c = byId.get(id);
+   611→   611→        if (!c) continue;
+   612→   612→        const prev = it.lastStatusSeen;
+   613→   613→        if (c.status === prev) continue;
+   614→   614→        it.lastStatusSeen = c.status;
+   615→   615→        it.cardStatus = c.status; // v1.3.0 doctrine — visible open-management mirror
+   616→   616→        if (c.status === "TP1") pushAction({ kind: "bank", cardId: id, frac: S.cfg.tp1Frac, reason: "TP1" });
+   617→   617→        else if (c.status === "TP2") pushAction({ kind: "bank", cardId: id, frac: S.cfg.tp2Frac, reason: "TP2" });
+   618→   618→        else if (c.status === "TP3") pushAction({ kind: "close", cardId: id, reason: "TP3 (سیو سود کامل)" });
+   619→   619→        else if (c.status === "SL") pushAction({ kind: "close", cardId: id, reason: "SL (استاپ شده)" });
+   620→   620→        else if (c.status === "EXPIRED") pushAction({ kind: "close", cardId: id, reason: "EXPIRED (سیگنال منقضی)" });
+   621→   621→        else if (c.status === "CLOSED") pushAction({ kind: "close", cardId: id, reason: "CLOSED" });
+   622→   622→        else if (c.status === "VOID") pushAction({ kind: "close", cardId: id, reason: "VOID (qualityFlag)" });
+   623→   623→        audit("CARD-EVENT", { serial: it.serial, from: prev, to: c.status });
+   624→   624→      }
+   625→   625→    }
+   626→   626→
+   627→   627→    // ③ paper-mode protective TP/SL sim (exchange-side stand-in)
+   628→   628→    for (const it of Object.values(S.intents)) {
+   629→   629→      if (it.mode !== "PAPER" || it.status !== "OPEN") continue;
+   630→   630→      const t = await tbTicker(it.tbSymbol);
+   631→   631→      if (!t) continue;
+   632→   632→      if (it.direction === "LONG") {
+   633→   633→        if (t.last >= it.tp3) pushAction({ kind: "close", cardId: it.cardId, reason: "PAPER-TP3" });
+   634→   634→        else if (t.last <= it.stopLoss) pushAction({ kind: "close", cardId: it.cardId, reason: "PAPER-SL" });
+   635→   635→      } else {
+   636→   636→        if (t.last <= it.tp3) pushAction({ kind: "close", cardId: it.cardId, reason: "PAPER-TP3" });
+   637→   637→        else if (t.last >= it.stopLoss) pushAction({ kind: "close", cardId: it.cardId, reason: "PAPER-SL" });
+   638→   638→      }
+   639→   639→    }
+   640→   640→  } finally {
+   641→   641→    flushState();
+   642→   642→    pollBusy = false;
+   643→   643→  }
+   644→   644→}
+   645→   645→
+   646→   646→// ── mode + account ───────────────────────────────────────────────────────────
+   647→   647→let balanceUsdt: number | null = null;
+   648→   648→let balanceAt = 0;
+   649→   649→async function refreshBalance(): Promise<void> {
+   650→   650→  if (!API_KEY) { balanceUsdt = null; return; }
+   651→   651→  const r = await signed<Array<{ coin?: string; asset?: string; availableBalance?: string; balance?: string }>>("GET", "/api/v1/futures/balance");
+   652→   652→  const rows = Array.isArray(r.data) ? r.data : [];
+   653→   653→  const usdt = rows.find((b) => (b.coin ?? b.asset) === "USDT");
+   654→   654→  const avail = Number(usdt?.availableBalance ?? usdt?.balance ?? 0);
+   655→   655→  balanceUsdt = Number.isFinite(avail) ? avail : null;
+   656→   656→  balanceAt = Date.now();
+   657→   657→}
+   658→   658→function isLiveMode(): boolean {
+   659→   659→  return S.cfg.liveApproved && (balanceUsdt ?? 0) > 0 && API_KEY.length > 0;
+   660→   660→}
+   661→   661→
+   662→   662→// ── reconciliation (راستی‌آزمایی) ────────────────────────────────────────────
+   663→   663→let reconBusy = false;
+   664→   664→async function reconcile(): Promise<void> {
+   665→   665→  if (reconBusy || !isLiveMode()) return;
+   666→   666→  reconBusy = true;
+   667→   667→  try {
+   668→   668→    const pos = await signed<Array<{ symbol: string; side: string; position: string; avgPrice: string; unrealizedPnL?: string }>>("GET", "/api/v1/futures/positions");
+   669→   669→    const rows = Array.isArray(pos.data) ? pos.data : [];
+   670→   670→    const openIntents = Object.values(S.intents).filter((i) => i.status === "OPEN" || i.status === "OPENING");
+   671→   671→    for (const p of rows) {
+   672→   672→      const qty = Number(p.position);
+   673→   673→      if (!(qty > 0)) continue;
+   674→   674→      const match = openIntents.find((i) => i.tbSymbol === p.symbol && i.direction === p.side);
+   675→   675→      if (!match) { audit("RECON-UNKNOWN-POSITION", { symbol: p.symbol, side: p.side, qty }); continue; }
+   676→   676→      const avg = Number(p.avgPrice);
+   677→   677→      if (avg > 0 && match.fillPrice && Math.abs(avg - match.fillPrice) / avg > 0.002) {
+   678→   678→        audit("RECON-DRIFT-ENTRY", { serial: match.serial, exchange: avg, local: match.fillPrice });
+   679→   679→        match.fillPrice = avg;
+   680→   680→        match.actualNotional = Number((match.qtyOrig * avg).toFixed(6)); // v1.3.0 — keep the doctrine truth synced
+   681→   681→      }
+   682→   682→      // exchange-side protective orders present?
+   683→   683→      const oo = await signed<Array<{ symbol?: string; type?: string; orderType?: string }>>("GET", "/api/v1/futures/openOrders", { symbol: p.symbol });
+   684→   684→      const orows = Array.isArray(oo.data) ? oo.data : [];
+   685→   685→      const hasStop = orows.some((o) => (o.type ?? o.orderType ?? "").toUpperCase().includes("STOP"));
+   686→   686→      match.protected = hasStop; // v1.3.0 doctrine — protection is audited, not assumed
+   687→   687→      if (!hasStop) {
+   688→   688→        const side = match.direction === "LONG" ? "LONG" : "SHORT";
+   689→   689→        const r = await signed("POST", "/api/v1/futures/position/trading-stop", { symbol: p.symbol, side, takeProfit: String(match.tp3), stopLoss: String(match.stopLoss), tpTriggerBy: "MARK_PRICE", slTriggerBy: "MARK_PRICE" });
+   690→   690→        audit("RECON-REATTACH-TPSL", { serial: match.serial, symbol: p.symbol, ok: r.ok, err: r.err });
+   691→   691→        match.protected = r.ok; // re-attach succeeded → protected again
+   692→   692→      }
+   693→   693→    }
+   694→   694→    // intents whose position vanished on-exchange → verify + close bookkeeping
+   695→   695→    for (const it of openIntents) {
+   696→   696→      if (it.mode !== "LIVE") continue;
+   697→   697→      const still = rows.some((p) => p.symbol === it.tbSymbol && p.side === it.direction && Number(p.position) > 0);
+   698→   698→      if (!still && it.status === "OPEN") {
+   699→   699→        audit("RECON-POSITION-GONE", { serial: it.serial, symbol: it.tbSymbol });
+   700→   700→        it.status = "CLOSED";
+   701→   701→        it.qtyRemaining = 0;
+   702→   702→        it.closedAt = Date.now();
+   703→   703→        it.closeReason = it.closeReason ?? "EXCHANGE-CLOSED (recon)";
+   704→   704→        it.events.push({ at: Date.now(), ev: "RECON-CLOSED" });
+   705→   705→      }
+   706→   706→    }
+   707→   707→    persistState();
+   708→   708→  } finally { reconBusy = false; }
+   709→   709→}
+   710→   710→
+   711→   711→// ── metrics helpers ──────────────────────────────────────────────────────────
+   712→   712→const pct = (arr: Array<number | null>, p: number): number | null => {
+   713→   713→  const v = arr.filter((x): x is number => x !== null && Number.isFinite(x)).sort((a, b) => a - b);
+   714→   714→  if (v.length === 0) return null;
+   715→   715→  return v[Math.min(v.length - 1, Math.floor((p / 100) * v.length))]!;
+   716→   716→};
+   717→   717→function metricsSummary() {
+   718→   718→  const m = S.metrics;
+   719→   719→  return {
+   720→   720→    n: m.length,
+   721→   721→    detectMsP50: pct(m.map((x) => x.detectMs), 50),
+   722→   722→    execMsP50: pct(m.map((x) => x.execMs), 50),
+   723→   723→    totalMsP50: pct(m.map((x) => x.totalMs), 50),
+   724→   724→    totalMsP95: pct(m.map((x) => x.totalMs), 95),
+   725→   725→    slipBpsP50: pct(m.map((x) => x.slipBps), 50),
+   726→   726→    slipBpsWorst: pct(m.map((x) => x.slipBps), 100),
+   727→   727→    last: m.slice(-5).reverse(),
+   728→   728→  };
+   729→   729→}
+   730→   730→
+   731→   731→// ── v1.3.0 DOCTRINE SUPERVISOR — پیگیری و دکترین (trace 1a15f7d945d27ead) ──
+   732→   732→// Every 30s: audit OPEN intents against the card ledger — leverage mirror,
+   733→   733→// notional math (expected vs actual), card-status mirror lag, protection —
+   734→   734→// and persist a snapshot the senior supervisor (supervisor-cron) polls.
+   735→   735→let doctrineBusy = false;
+   736→   736→async function doctrineScan(): Promise<void> {
+   737→   737→  if (doctrineBusy || !sqldb) return;
+   738→   738→  doctrineBusy = true;
+   739→   739→  try {
+   740→   740→    const now = Date.now();
+   741→   741→    const openIntents = Object.values(S.intents).filter((i) => i.status === "OPEN" || i.status === "OPENING");
+   742→   742→    if (openIntents.length > 0) {
+   743→   743→      const rows = fetchCardsByIds(openIntents.map((i) => i.cardId));
+   744→   744→      const byId = new Map(rows.map((r) => [r.id, r]));
+   745→   745→      for (const it of openIntents) {
+   746→   746→        const c = byId.get(it.cardId);
+   747→   747→        // ① leverage must mirror the card (v1.2.0 doctrine) — violation only,
+   748→   748→        // never a mid-flight mutation of a live position's bookkeeping.
+   749→   749→        if (c && c.leverage >= 1 && c.leverage !== it.leverage) {
+   750→   750→          doctrineViolation(it.serial, "LEV-MISMATCH", `card=${c.leverage} intent=${it.leverage} — card ledger is authoritative; next entries use ${c.leverage}`);
+   751→   751→        }
+   752→   752→        // ② notional math on the live position (margin ثابت × اهرم کارت)
+   753→   753→        const exp = S.cfg.marginUsdt * it.leverage;
+   754→   754→        it.expectedNotional = Number(exp.toFixed(6));
+   755→   755→        if (it.qtyOrig > 0 && it.fillPrice) {
+   756→   756→          it.actualNotional = Number((it.qtyOrig * it.fillPrice).toFixed(6));
+   757→   757→          const deltaBps = Math.abs(it.actualNotional - exp) / exp * 10_000;
+   758→   758→          if (deltaBps > 2000) doctrineViolation(it.serial, "NOTIONAL-DELTA", `exp=${exp.toFixed(2)} act=${it.actualNotional.toFixed(2)} (${deltaBps.toFixed(0)}bps)`);
+   759→   759→        }
+   760→   760→        // ③ card-status mirror (مدیریت سیگنال‌های باز): record + lag audit
+   761→   761→        if (c) {
+   762→   762→          it.cardStatus = c.status;
+   763→   763→          const TERMINAL = ["TP1", "TP2", "TP3", "SL", "EXPIRED", "CLOSED", "VOID"];
+   764→   764→          const openedFor = it.openedAt ? now - it.openedAt : 0;
+   765→   765→          if (TERMINAL.includes(c.status) && it.status === "OPEN" && openedFor > 90_000 && !TERMINAL.includes(it.lastStatusSeen)) {
+   766→   766→            doctrineViolation(it.serial, "MIRROR-LAG", `card=${c.status} but intent still OPEN ${Math.round(openedFor / 1000)}s — pollCards transition should have fired`);
+   767→   767→          }
+   768→   768→        }
+   769→   769→        // ④ protection: LIVE audited by recon (hasStop); PAPER sim always on
+   770→   770→        if (it.protected === undefined) it.protected = it.mode !== "LIVE";
+   771→   771→      }
+   772→   772→    }
+   773→   773→    S.doctrine.lastScanAt = now;
+   774→   774→    const snap = {
+   775→   775→      at: now, ver: VER,
+   776→   776→      gates: { marginUsdt: S.cfg.marginUsdt, maxEntryDriftBps: S.cfg.maxEntryDriftBps, maxEntryAgeMs: S.cfg.maxEntryAgeMs, maxConcurrent: S.cfg.maxConcurrent },
+   777→   777→      counters: { opens: S.doctrine.opens, skipBy: S.doctrine.skipBy },
+   778→   778→      violations: S.doctrine.violations.slice(-10),
+   779→   779→      openIntents: openIntents.map((i) => ({ serial: i.serial, symbol: i.symbol, direction: i.direction, lev: i.leverage, levSrc: i.levSrc ?? "card", expectedNotional: i.expectedNotional ?? null, actualNotional: i.actualNotional ?? null, entryAgeMs: i.entryAgeMs ?? null, entryDriftBps: i.entryDriftBps ?? null, cardStatus: i.cardStatus ?? i.lastStatusSeen, status: i.status, mode: i.mode, protected: i.protected ?? (i.mode !== "LIVE") })),
+   780→   780→    };
+   781→   781→    try { writeFileSync(`${DATA}/doctrine-latest.json`, JSON.stringify(snap, null, 2)); } catch { /* snapshot best-effort */ }
+   782→   782→    persistState();
+   783→   783→  } finally { doctrineBusy = false; }
+   784→   784→}
+   785→   785→function doctrineSummary() {
+   786→   786→  return {
+   787→   787→    opens: S.doctrine.opens,
+   788→   788→    skipBy: S.doctrine.skipBy,
+   789→   789→    violationsN: S.doctrine.violations.length,
+   790→   790→    lastViolation: S.doctrine.violations.length > 0 ? S.doctrine.violations[S.doctrine.violations.length - 1]! : null,
+   791→   791→    lastScanAt: S.doctrine.lastScanAt,
+   792→   792→    gates: { marginUsdt: S.cfg.marginUsdt, maxEntryDriftBps: S.cfg.maxEntryDriftBps, maxEntryAgeMs: S.cfg.maxEntryAgeMs },
+   793→   793→  };
+   794→   794→}
+   795→   795→
+   796→   796→// ── HTTP API ─────────────────────────────────────────────────────────────────
+   797→   797→const bootAt = Date.now();
+   798→   798→Bun.serve({
+   799→   799→  port: PORT,
+   800→   800→  async fetch(req) {
+   801→   801→    const url = new URL(req.url);
+   802→   802→    const path = url.pathname;
+   803→   803→    const authed = req.headers.get("x-nexus-key") === AUTH_KEY;
+   804→   804→    if (req.method === "GET" && (path === "/health" || path === "/")) {
+   805→   805→      return Response.json({ ok: true, ver: VER, mode: isLiveMode() ? "LIVE" : "PAPER", execEnabled: S.cfg.execEnabled, killFile: killFile(), bootAt, uptimeS: Math.round((Date.now() - bootAt) / 1000) });
+   806→   806→    }
+   807→   807→    if (req.method === "GET" && path === "/doctrine") {
+   808→   808→      // v1.3.0 — the senior-supervisor feed (supervisor-cron polls this)
+   809→   809→      const intents = Object.values(S.intents).sort((a, b) => (b.openedAt ?? b.closedAt ?? 0) - (a.openedAt ?? a.closedAt ?? 0));
+   810→   810→      return Response.json({
+   811→   811→        ok: true, ver: VER, mode: isLiveMode() ? "LIVE" : "PAPER",
+   812→   812→        doctrine: doctrineSummary(),
+   813→   813→        violations: S.doctrine.violations.slice(-20).reverse(),
+   814→   814→        openIntents: intents.filter((i) => i.status === "OPEN" || i.status === "OPENING").map((i) => ({ serial: i.serial, symbol: i.symbol, direction: i.direction, lev: i.leverage, levSrc: i.levSrc ?? "card", expectedNotional: i.expectedNotional ?? null, actualNotional: i.actualNotional ?? null, entryAgeMs: i.entryAgeMs ?? null, entryDriftBps: i.entryDriftBps ?? null, cardStatus: i.cardStatus ?? i.lastStatusSeen, status: i.status, mode: i.mode, protected: i.protected ?? (i.mode !== "LIVE"), openedAt: i.openedAt, lat: i.lat })),
+   815→   815→      });
+   816→   816→    }
+   817→   817→    if (req.method === "GET" && path === "/status") {
+   818→   818→      const intents = Object.values(S.intents).sort((a, b) => (b.openedAt ?? b.closedAt ?? 0) - (a.openedAt ?? a.closedAt ?? 0));
+   819→   819→      return Response.json({
+   820→   820→        ver: VER,
+   821→   821→        mode: isLiveMode() ? "LIVE" : "PAPER",
+   822→   822→        liveApproved: S.cfg.liveApproved,
+   823→   823→        balanceUsdt, balanceAt,
+   824→   824→        cfg: S.cfg,
+   825→   825→        killFile: killFile(),
+   826→   826→        openIntents: intents.filter((i) => i.status === "OPEN" || i.status === "OPENING"),
+   827→   827→        recent: intents.slice(-12).reverse(),
+   828→   828→        metrics: metricsSummary(),
+   829→   829→        instruments: instruments.size,
+   830→   830→        clockOffsetMs: clockOffset,
+   831→   831→        lastCreatedAtMs: S.lastCreatedAtMs,
+   832→   832→        doctrine: doctrineSummary(), // v1.3.0 — UI panel + senior supervisor read this
+   833→   833→      });
+   834→   834→    }
+   835→   835→    if (req.method === "POST") {
+   836→   836→      if (!authed) return Response.json({ ok: false, err: "unauthorized" }, { status: 401 });
+   837→   837→      let body: Record<string, unknown> = {};
+   838→   838→      try { body = (await req.json()) as Record<string, unknown>; } catch { /* empty */ }
+   839→   839→      if (path === "/exec-toggle") {
+   840→   840→        S.cfg.execEnabled = body.enabled !== false;
+   841→   841→        audit("CFG-EXEC-TOGGLE", { enabled: S.cfg.execEnabled });
+   842→   842→        persistState(); flushState();
+   843→   843→        return Response.json({ ok: true, execEnabled: S.cfg.execEnabled });
+   844→   844→      }
+   845→   845→      if (path === "/approve-live") {
+   846→   846→        S.cfg.liveApproved = body.approve === true;
+   847→   847→        audit("CFG-LIVE-APPROVAL", { approve: S.cfg.liveApproved });
+   848→   848→        persistState(); flushState();
+   849→   849→        return Response.json({ ok: true, liveApproved: S.cfg.liveApproved, note: "LIVE requires positive futures balance too" });
+   850→   850→      }
+   851→   851→      if (path === "/config") {
+   852→   852→        const c = S.cfg;
+   853→   853→        if (typeof body.marginUsdt === "number" && body.marginUsdt >= 1 && body.marginUsdt <= 100) c.marginUsdt = body.marginUsdt;
+   854→   854→        if (typeof body.notionalUsdt === "number" && body.notionalUsdt >= 5 && body.notionalUsdt <= 500) c.notionalUsdt = body.notionalUsdt;
+   855→   855→        if (typeof body.maxConcurrent === "number" && body.maxConcurrent >= 1 && body.maxConcurrent <= 10) c.maxConcurrent = Math.floor(body.maxConcurrent);
+   856→   856→        if (typeof body.tp1Frac === "number" && body.tp1Frac > 0 && body.tp1Frac < 1) c.tp1Frac = body.tp1Frac;
+   857→   857→        if (typeof body.tp2Frac === "number" && body.tp2Frac > 0 && body.tp2Frac < 1) c.tp2Frac = body.tp2Frac;
+   858→   858→        if (typeof body.leverage === "number" && body.leverage >= 1 && body.leverage <= 50) c.leverage = Math.floor(body.leverage);
+   859→   859→        if (typeof body.maxEntryDriftBps === "number" && body.maxEntryDriftBps >= 10 && body.maxEntryDriftBps <= 500) c.maxEntryDriftBps = Math.floor(body.maxEntryDriftBps);
+   860→   860→        if (typeof body.maxEntryAgeMs === "number" && body.maxEntryAgeMs >= 10_000 && body.maxEntryAgeMs <= 600_000) c.maxEntryAgeMs = Math.floor(body.maxEntryAgeMs);
+   861→   861→        audit("CFG-UPDATE", { cfg: c });
+   862→   862→        persistState(); flushState();
+   863→   863→        return Response.json({ ok: true, cfg: c });
+   864→   864→      }
+   865→   865→      if (path === "/close") {
+   866→   866→        const serial = Number(body.serial);
+   867→   867→        const it = Object.values(S.intents).find((i) => i.serial === serial && (i.status === "OPEN" || i.status === "OPENING"));
+   868→   868→        if (!it) return Response.json({ ok: false, err: "no open intent for serial" }, { status: 404 });
+   869→   869→        pushAction({ kind: "close", cardId: it.cardId, reason: "OPERATOR-MANUAL" });
+   870→   870→        return Response.json({ ok: true, queued: true, serial });
+   871→   871→      }
+   872→   872→      if (path === "/test-cycle") {
+   873→   873→        // verification hook — PAPER ONLY (real-order protection): opens a
+   874→   874→        // synthetic intent on the REAL toobit book, then closes it. Exercises
+   875→   875→        // detect→open→close→metrics without touching the engine ledger.
+   876→   876→        if (isLiveMode()) return Response.json({ ok: false, err: "test-cycle blocked in LIVE mode" }, { status: 403 });
+   877→   877→        const sym = String(body.symbol ?? "BTCUSDT").toUpperCase().replace(/USDT$/, "");
+   878→   878→        const tbSymbol = `${sym}-SWAP-USDT`;
+   879→   879→        if (!instruments.has(tbSymbol)) return Response.json({ ok: false, err: `symbol absent: ${tbSymbol}` }, { status: 404 });
+   880→   880→        const cardId = `test-${Date.now()}`;
+   881→   881→        const now = Date.now();
+   882→   882→        const tick = await tbTicker(tbSymbol);
+   883→   883→        const entry = Number(body.entry) || tick?.last || 0;
+   884→   884→        const dir = body.direction === "SHORT" ? "SHORT" : "LONG";
+   885→   885→        const it: Intent = {
+   886→   886→          cardId, serial: 0, symbol: `${sym}USDT`, tbSymbol,
+   887→   887→          direction: dir,
+   888→   888→          leverage: S.cfg.leverage,
+   889→   889→          levSrc: "fallback" as const,
+   890→   890→          status: "OPENING", mode: "PAPER",
+   891→   891→          qtyOrig: 0, qtyRemaining: 0, qtyBankedTp1: 0, qtyBankedTp2: 0,
+   892→   892→          cardEntry: entry,
+   893→   893→          // protective bands ±5% so the paper TP/SL sim never fires mid-test
+   894→   894→          tp1: 0, tp2: 0,
+   895→   895→          tp3: dir === "LONG" ? entry * 1.05 : entry * 0.95,
+   896→   896→          stopLoss: dir === "LONG" ? entry * 0.95 : entry * 1.05,
+   897→   897→          clientOrderId: `TEST${String(now % 100000)}`,
+   898→   898→          orderId: null, fillPrice: null, openedAt: null, closedAt: null, closeReason: null,
+   899→   899→          createdAt0: now - 1234, // synthetic 1.2s detect-lag reference
+   900→   900→          lat: { detectMs: 1234, execMs: null, totalMs: null, slipBps: null },
+   901→   901→          lastStatusSeen: "TEST",
+   902→   902→          events: [{ at: now, ev: "TEST-CYCLE", note: "verification hook (paper)" }],
+   903→   903→        };
+   904→   904→        S.intents[cardId] = it;
+   905→   905→        pushAction({ kind: "open", cardId, reason: "TEST-CYCLE" });
+   906→   906→        setTimeout(() => { const t = S.intents[cardId]; if (t && t.status === "OPEN") pushAction({ kind: "close", cardId, reason: "TEST-CYCLE-CLOSE" }); }, 2500);
+   907→   907→        audit("TEST-CYCLE", { symbol: tbSymbol, direction: it.direction });
+   908→   908→        return Response.json({ ok: true, cardId, note: "paper open+close queued" });
+   909→   909→ }
+   910→   910→      return Response.json({ ok: false, err: "unknown path" }, { status: 404 });
+   911→   911→    }
+   912→   912→    return Response.json({ ok: false, err: "not found" }, { status: 404 });
+   913→   913→  },
+   914→   914→});
+   915→   915→
+   916→   916→// ── main loops ───────────────────────────────────────────────────────────────
+   917→   917→log("info", `${VER} booting`, { port: PORT, hasKeys: API_KEY.length > 0, dbExists: existsSync(DB_PATH) });
+   918→   918→audit("BOOT", { ver: VER, hasKeys: API_KEY.length > 0 });
+   919→   919→loadState();
+   920→   920→if (openDb()) {
+   921→   921→  await syncClock();
+   922→   922→  await refreshInstruments().catch(() => undefined);
+   923→   923→  await refreshBalance().catch(() => undefined);
+   924→   924→  log("info", "armed", { mode: isLiveMode() ? "LIVE" : "PAPER", instruments: instruments.size, balanceUsdt });
+   925→   925→  setInterval(() => { void pollCards(); }, POLL_MS);
+   926→   926→  setInterval(() => { void reconcile(); }, RECON_MS);
+   927→   927→  setInterval(() => { void doctrineScan(); }, 30_000); // v1.3.0 — senior-supervisor audit loop
+   928→   928→  setInterval(() => { void refreshBalance(); }, 60_000);
+   929→   929→  setInterval(() => { void syncClock(); }, 10 * 60_000);
+   930→   930→  setInterval(flushState, 1000);
+   931→   931→  void pollCards();
+   932→   932→} else {
+   933→   933→  log("crit", "DB unavailable — retrying in 10s");
+   934→   934→  setInterval(() => { if (!sqldb && openDb()) { void syncClock(); void pollCards(); } }, 10_000);
+   935→   935→}
+   936→   936→
