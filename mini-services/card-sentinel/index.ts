@@ -125,13 +125,13 @@ function budgetMs(heat: CardRow["heat"]): number {
 // ── refresh lane ─────────────────────────────────────────────────────────────
 const lastRefreshAttempt = new Map<string, number>();
 
-async function refreshSymbol(symbol: string): Promise<boolean> {
+async function refreshSymbol(symbol: string): Promise<boolean | "skipped"> {
   try {
     const res = await fetch(`${APP}/api/internal/flow-refresh?symbol=${encodeURIComponent(symbol)}`, {
       signal: AbortSignal.timeout(30_000),
     });
     const j = (await res.json().catch(() => ({}))) as { ok?: boolean; skipped?: string };
-    if (res.ok && j.ok && !j.skipped) return true;
+    if (res.ok && j.ok) return j.skipped ? "skipped" : true; // v1.0.1 — rate-limit is neutral, not failure
     return false;
   } catch {
     return false;
@@ -209,12 +209,12 @@ async function cycle(): Promise<void> {
       const c = batch[idx++];
       lastRefreshAttempt.set(c.symbol, Date.now());
       const ok = await refreshSymbol(c.symbol);
-      if (ok) {
+      if (ok === true) {
         refreshedRing.push(Date.now());
         lastRefreshOkAt = Date.now();
-      } else {
+      } else if (ok === false) {
         failedRing.push(Date.now());
-      }
+      } // "skipped" → neutral, no ring
     }
   };
   await Promise.all(Array.from({ length: Math.min(CONCURRENCY, batch.length) }, worker));
