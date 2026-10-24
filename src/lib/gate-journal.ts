@@ -95,7 +95,9 @@ export type GateName =
   | "FLUSH-EXHAUSTION" // v12.9 AUDIT-NX3046 — deploying WITH a ≥max(12%,1.2×ATR%) 4-bar cascade / SHORT below 20-bar low in a live waterfall / implied SL < 0.5×max-3-bar-range (NX-3046 −40.4% terminal-tick, dead in 23.4s)
   | "SINGLE-VENUE" // v12.9 AUDIT-NX3046 — only ONE live venue: cross-venue confirmation impossible, machine deploy refused (JCT 12 deploys/48h on BYBIT-only tape); operator-forced passes tagged
   | "CASCADE-FREEZE" // v12.10 — price-ws tick-velocity freeze: ≥±5% inside a 60s sliding window (flush OR squeeze) freezes BOTH-direction deploys 10min (L3 liq-stream layer is structurally silent for microcaps; NX-3046 was detected 359s late)
-  | "STALE-BAR"; // v12.10 — stale detection inputs × hot tape: flow-board age beyond calibrated budgets while the live 4-bar tape is moving (NX-3046: 281s stale × −40% flush; NX-3040: 9.7min stale) — refusing to decide on dead structure
+  | "STALE-BAR" // v12.10 — stale detection inputs × hot tape: flow-board age beyond calibrated budgets while the live 4-bar tape is moving (NX-3046: 281s stale × −40% flush; NX-3040: 9.7min stale) — refusing to decide on dead structure
+  | "STALE-CHASE" // v13.0 CORE-REVERT — data-driven late-entry filter: trigger-event age >20m or |move since event| >4.5% refuses (W42 buckets: 10-20m 5/5 SL; BIRB +10.63%/JCT +5.13% at entry both SL)
+  | "REARM-BRAKE-BE"; // v13.0 CORE-REVERT — BE-banked SL re-entry window 45m (BIRB 15:22 +4.67% BE-SL → 15:34 re-entry SL −61.2% 12min later)
 
 export interface GateBlock {
   at: number;

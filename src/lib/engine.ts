@@ -89,6 +89,7 @@ import { volCauseBoost } from "@/lib/volCause";
 import { peekSymbolFlow, ensureSymbolFlow, maybeFlowScan, flowShiftTracking, type MtfRollup } from "@/lib/flow-scanner";
 import { cascadeFreezeActive } from "@/lib/cascade-alerts"; // v12.10 — tick-velocity cascade freeze (price-ws plane)
 import { getSingleVenueProbation } from "@/lib/venue-probation"; // v12.10 — calibrated single-venue re-entry lane
+import { getCoreRevert } from "@/lib/core-revert"; // v13.0 CORE-REVERT — operator revert mandate («سیستم به همان وضعیت برگردد»)
 import { featureScaleOn, loadFeatureStats, rescaleCandidate, featureScaleHealth, noteRescale } from "./feature-scale";
 import { engineFlags } from "@/lib/engine-flags"; // v10.18 phased-consolidation flags (operator option A)
 // v8.1 P1/P2 (operator mandate «P1 و P2 رو کامل اجرا کن»): OI/funding board,
@@ -151,7 +152,7 @@ import { buildResearchLadder, journalResearchShadowDeploy, settleResearchShadow 
 //   ④ SINGLE-VENUE DEPLOY BLOCK: only ONE live venue → machine deploy refused, operator-forced passes tagged SINGLE-VENUE-FORCED (JCT/MAGMA class — 12 deploys/48h on BYBIT-only tape)
 //   ⑤ NO-BINANCE-CONFIRM surcharge +12 (≥2 live venues but BINANCE quote null — anchor absent, higher bar; IRYS/BTW/NEAR during fapi outage)
 //   ⑥ MULTI-VENUE CONSENSUS (flow.ts): independent second-venue 15m-window direction (OKX↔BYBIT↔Binance) — cross-venue tape conflict clamps conviction ±6, can never CONFIRM
-export const ENGINE_VERSION = "NEXUS-LIVE v12.9"; // v11.8 — TASK-42 (operator mandate «دو توصیه باقی مانده را کامل و مهندسی اجرا کن»): ① anti-chase guards RE-ARMED (onsetRetestGuard 0→1, chaseThrAdj 0→6 = v6.7.2 evidence defaults) + RETEST GATE storm-class fix (latest-eruption anchoring incl. the FORMING bar, pre-eruption-close leg math, CHASE+FADE both gated — the Task-41 AGT fade-stops slipped past the armed gate three ways) ② LIQUIDITY-FLOOR deployability gate (volume24h ≥ $25M + ≥1 real venue quote; scan-pool exclusion + authoritative deploy gate — AGTUSDT sat at sim with 4 null venues and the focusSymbol path short-circuited the sim ban). v11.7 REENTRY-LOCKOUT ladder retained. v11.9 — TASK-43 (operator audit «استاپ‌های امروز»): LIQUIDITY-FLOOR hardening (sim-source veto + engine-price/real-kline divergence — NX-2741 AGTUSDT slipped through at ~+11% drift over the real Binance close on a flickering synthetic tape) + PHANTOM-FEED gate (XMRUSDT tape oscillated 118.7↔607.75 ×5, 314 jumps>10%/24h — NX-2736 −60.84% in 35s and NX-2744 −14.93% in 18s printed on phantom data). v12.0 — TASK-44/45 (operator orders «ترمیم writer فید» + «مدیریت egress/IP برای رفع بن fapi» + «چرا close-all@$20 شلیک نمی‌کند»): ① PRICE-ARMOR write-side (zombie-ticker rejection — measured XMRUSDT spot 118.70 bid=0/ask=0 zombie listing vs perp ~592; cross-plane 10% divergence guard; anchor-locked sim drift on lastLivePrice; TAPE PURITY — sim ticks never written to PricePoint/tick-archive) ② fapi-gate v2 egress manager (ipify sampler, rotation-aware early probe lifts the ban window the moment the NAT pool rotates clean, named-IP ban ledger persisted to .data/fapi-gate/bans.json) ③ open-pnl single source of truth (ACCOUNT bar ≡ close-all breaker — the $20 mandate now reads the same bankable number the bar shows). v12.1 — TASK-48 (operator mandate «پیشنهادها را کامل و مهندسی اجرا کن» — the four Task-47 APR/BRU forensics proposals): ① R6 RADAR LANE — SUCCESS-renom revival (0/119 conversion since 10-09 was a 100% VETO RATE, not dead code: R1 SHORT-GUARD + CHOP + MEMORY + MIN_SCORE dynamic killed every nomination; the lane bypasses ONLY the four cohort-blind mood gates with dailyCap 4 + all physical gates live + auto-demote at n≥30 probation fail) ② FLOW-NO-DATA honest verdict (70% of deploys were blind yet read NEUTRAL; blind-cache 20s TTL; optional flow-gate ships tag-only — blind cohort +$204 WR 57.1% outperformed sighted +$7) ③ BOTTOM-FADE gate (SHORT selling the bottom 30% of ±30m range with RSI≤25 or %B≤0 — replay: blocks NX-2770/2779/2769 = −$18.42, passes 14/14 winners) ④ V-REVERSAL gate (SHORT on a ≥1.5% young bounce off the local low inside a ≥2.5% range — blocks NX-2770's inverse-V; LONG mirror shadow-only). v12.7 — SENTINEL-20261020 (operator mandate «تمام توصیه‌های P1/P2 و مأموریت بعدی پیشنهادی را قابل راستی‌آزمایی کامل و مهندسی شده اجرا کن»): ① RE-ARM BRAKE (same-direction post-stop cooldown 360m, escalating 720m at ≥2 stops/24h — binds auto + RAW-CAL capture + radar/authority lanes, ONLY operator-forced passes tagged; replay .data/audit-rearm-brake.ts: 92 relay deploys/14d, 73 via RAW-CAL bypass incl. NX-2910 APR→NX-2911 6-SECOND relay and NX-2913→NX-2916 68s relay — the capture lane had become a repeat-stop relay) ② AI 429 shield cap 10m→30m + probe tail-gating (failed probes ~2/window → ≤1) ③ P2-b evaluation ledger: REGIME-VOLATILE cell WR 43.9% −$2.8 (n=66) — ×0.6/+6thr KEPT, data-led no-change decision.
+export const ENGINE_VERSION = "NEXUS-LIVE v13.0"; // v13.0 — CORE-REVERT (operator mandate 2026-10-24 «پیشنهاد من سیستم به همان وضعیت برگردد و با دیتای موجود نقاط ضعف را فیلتر کند», W42 performance audit): v12.7 era measured +$39.74 / WR 60.4% / med event→entry 13.2m vs v12.9 era −$8.70 with 7× hard SL −61.2% and med delay 27.4m — the confirmation stack DOUBLED latency and starved the board behind a 200+ veto wall. Therefore: v12.8+ hard gates (CHASE-EXTREME, FLUSH-EXHAUSTION/KNIFE-CATCH/EVENT-VOL STOP-FLOOR, SINGLE-VENUE refuse + probation +8, NO-BINANCE +12, STALE-BAR, SURROGATE-FLOW cap, MULTI-VENUE clamp) → ADVISORY journal-only behind EngineSetting "core-revert" {enabled} (flip false = exact v12.9). Weaknesses filtered from EXISTING data instead: ① STALE-CHASE gate — trigger-event age >20m or |move since event| >4.5% refuses (W42 buckets: 0-10m +$1.71, 10-20m 5/5 SL −$7.52, >35m 1/1 SL; moveAtEntry +10.63% BIRB 14:54 / +5.13% JCT 15:06 both SL) ② REARM-BRAKE-BE — BE-banked SL re-entry window 45m (BIRB 15:22 +4.67% BE-SL → 15:34 re-entry SL −61.2% 12m later). KEPT HARD (the successful v12.7 core + zero-cost protectors): FLAT-10, minScore, REARM-BRAKE, REENTRY-LOCKOUT, SHORT-GUARD, REGIME/EQ-100, MEMORY, LIQUIDITY-FLOOR, PHANTOM-FEED, PRICE-ARMOR, VOL-ONSET-RETEST, BOTTOM-FADE, V-REVERSAL, DISLOCATION, STABLE-REGIME, tick-plane CASCADE-FREEZE (only sub-bar guard, 4 blocks/day ≈ zero drought cost). // v11.8 — TASK-42 (operator mandate «دو توصیه باقی مانده را کامل و مهندسی اجرا کن»): ① anti-chase guards RE-ARMED (onsetRetestGuard 0→1, chaseThrAdj 0→6 = v6.7.2 evidence defaults) + RETEST GATE storm-class fix (latest-eruption anchoring incl. the FORMING bar, pre-eruption-close leg math, CHASE+FADE both gated — the Task-41 AGT fade-stops slipped past the armed gate three ways) ② LIQUIDITY-FLOOR deployability gate (volume24h ≥ $25M + ≥1 real venue quote; scan-pool exclusion + authoritative deploy gate — AGTUSDT sat at sim with 4 null venues and the focusSymbol path short-circuited the sim ban). v11.7 REENTRY-LOCKOUT ladder retained. v11.9 — TASK-43 (operator audit «استاپ‌های امروز»): LIQUIDITY-FLOOR hardening (sim-source veto + engine-price/real-kline divergence — NX-2741 AGTUSDT slipped through at ~+11% drift over the real Binance close on a flickering synthetic tape) + PHANTOM-FEED gate (XMRUSDT tape oscillated 118.7↔607.75 ×5, 314 jumps>10%/24h — NX-2736 −60.84% in 35s and NX-2744 −14.93% in 18s printed on phantom data). v12.0 — TASK-44/45 (operator orders «ترمیم writer فید» + «مدیریت egress/IP برای رفع بن fapi» + «چرا close-all@$20 شلیک نمی‌کند»): ① PRICE-ARMOR write-side (zombie-ticker rejection — measured XMRUSDT spot 118.70 bid=0/ask=0 zombie listing vs perp ~592; cross-plane 10% divergence guard; anchor-locked sim drift on lastLivePrice; TAPE PURITY — sim ticks never written to PricePoint/tick-archive) ② fapi-gate v2 egress manager (ipify sampler, rotation-aware early probe lifts the ban window the moment the NAT pool rotates clean, named-IP ban ledger persisted to .data/fapi-gate/bans.json) ③ open-pnl single source of truth (ACCOUNT bar ≡ close-all breaker — the $20 mandate now reads the same bankable number the bar shows). v12.1 — TASK-48 (operator mandate «پیشنهادها را کامل و مهندسی اجرا کن» — the four Task-47 APR/BRU forensics proposals): ① R6 RADAR LANE — SUCCESS-renom revival (0/119 conversion since 10-09 was a 100% VETO RATE, not dead code: R1 SHORT-GUARD + CHOP + MEMORY + MIN_SCORE dynamic killed every nomination; the lane bypasses ONLY the four cohort-blind mood gates with dailyCap 4 + all physical gates live + auto-demote at n≥30 probation fail) ② FLOW-NO-DATA honest verdict (70% of deploys were blind yet read NEUTRAL; blind-cache 20s TTL; optional flow-gate ships tag-only — blind cohort +$204 WR 57.1% outperformed sighted +$7) ③ BOTTOM-FADE gate (SHORT selling the bottom 30% of ±30m range with RSI≤25 or %B≤0 — replay: blocks NX-2770/2779/2769 = −$18.42, passes 14/14 winners) ④ V-REVERSAL gate (SHORT on a ≥1.5% young bounce off the local low inside a ≥2.5% range — blocks NX-2770's inverse-V; LONG mirror shadow-only). v12.7 — SENTINEL-20261020 (operator mandate «تمام توصیه‌های P1/P2 و مأموریت بعدی پیشنهادی را قابل راستی‌آزمایی کامل و مهندسی شده اجرا کن»): ① RE-ARM BRAKE (same-direction post-stop cooldown 360m, escalating 720m at ≥2 stops/24h — binds auto + RAW-CAL capture + radar/authority lanes, ONLY operator-forced passes tagged; replay .data/audit-rearm-brake.ts: 92 relay deploys/14d, 73 via RAW-CAL bypass incl. NX-2910 APR→NX-2911 6-SECOND relay and NX-2913→NX-2916 68s relay — the capture lane had become a repeat-stop relay) ② AI 429 shield cap 10m→30m + probe tail-gating (failed probes ~2/window → ≤1) ③ P2-b evaluation ledger: REGIME-VOLATILE cell WR 43.9% −$2.8 (n=66) — ×0.6/+6thr KEPT, data-led no-change decision.
 const MIN_TICK_MS = 3500;
 // v6.3: MAX_ACTIVE is now the governor-owned gate.maxActive knob (2–8, default 5)
 // — the static constant only remains as the fallback if the gate read fails.
@@ -1692,6 +1693,8 @@ export async function deploySignal(symbol?: string, directionHint?: "LONG" | "SH
       void recordGateBlock({ gate: "CASCADE-FREEZE", symbol: asset.symbol, direction: conf.direction, reason: `tick-plane cascade ${cf.side} ${cf.movePct}% inside ${Math.round(cf.windowMs / 1000)}s (${cf.lane}) — both-direction deploys frozen ${Math.max(0, Math.round((cf.until - Date.now()) / 60000))}min more (NX-3046: the −40.4%/8.5min flush was invisible to the liquidation-stream layer; this gate sees it at tick speed)` });
       return;
     }
+    // ── v13.0 CORE-REVERT knob — one cached read per evaluation pass (30s TTL) ──
+    const coreRevert = await getCoreRevert();
     // ── v12.8 CHASE-EXTREME HARD BLOCK (AUDIT-20261023, operator mandate
     // «اصلاح پیشنهادی را کامل و مهندسی اجرا کن») ──
     // NX-3013 forensics: entered LONG IRYSUSDT at RSI 87.4 on a +18.2%/5-bar
@@ -1724,8 +1727,18 @@ export async function deploySignal(symbol?: string, directionHint?: "LONG" | "SH
       }
     }
     if (chaseHardBlock) {
-      void recordGateBlock({ gate: "CHASE-EXTREME", symbol: asset.symbol, direction: conf.direction, reason: chaseHardBlock });
-      return;
+      if (coreRevert.enabled) {
+        // v13.0 CORE-REVERT — advisory cohort: the v12.8/v12.9 confirmation
+        // stack doubled entry latency (W42: med 13.2m → 27.4m) while the hard
+        // SL class it targeted kept printing (7× −61.2% on 10-24). The gate
+        // keeps journaling for the future recalibration; deploys proceed
+        // v12.7-fast and the residual chase risk is owned by STALE-CHASE.
+        void recordGateBlock({ gate: "CHASE-EXTREME", symbol: asset.symbol, direction: conf.direction, reason: `ADVISORY(core-revert): ${chaseHardBlock}` });
+        chaseNote = `${chaseNote ? chaseNote + " · " : ""}CORE-REVERT: extreme-chase signature present (advisory, deploy allowed)`;
+      } else {
+        void recordGateBlock({ gate: "CHASE-EXTREME", symbol: asset.symbol, direction: conf.direction, reason: chaseHardBlock });
+        return;
+      }
     }
     // ── v12.9 FLUSH-EXHAUSTION / KNIFE-CATCH / EVENT-VOL STOP-FLOOR HARD
     // BLOCKS (AUDIT-NX3046-20261023, operator mandate «نسخهٔ اصلاحی را کامل و
@@ -1791,8 +1804,13 @@ export async function deploySignal(symbol?: string, directionHint?: "LONG" | "SH
       }
     }
     if (flushHardBlock) {
-      void recordGateBlock({ gate: "FLUSH-EXHAUSTION", symbol: asset.symbol, direction: conf.direction, reason: flushHardBlock });
-      return;
+      if (coreRevert.enabled) {
+        // v13.0 CORE-REVERT — advisory cohort (journal-only, deploy proceeds)
+        void recordGateBlock({ gate: "FLUSH-EXHAUSTION", symbol: asset.symbol, direction: conf.direction, reason: `ADVISORY(core-revert): ${flushHardBlock}` });
+      } else {
+        void recordGateBlock({ gate: "FLUSH-EXHAUSTION", symbol: asset.symbol, direction: conf.direction, reason: flushHardBlock });
+        return;
+      }
     }
     // ── v12.9 SINGLE-VENUE DEPLOY BLOCK + NO-BINANCE-CONFIRM SURCHARGE
     // (operator mandate: «باید از تمام صرافی‌ها مخصوصاً BINANCE تیکت گرفته
@@ -1811,7 +1829,20 @@ export async function deploySignal(symbol?: string, directionHint?: "LONG" | "SH
     const vCount = vQuotes.filter((q) => typeof q.price === "number" && q.price > 0).length;
     const vBinanceLive = vQuotes.some((q) => q.venue === "BINANCE" && typeof q.price === "number" && q.price > 0);
     let noBinanceNote: string | null = null;
-    if (vCount === 1) {
+    if (coreRevert.enabled) {
+      // v13.0 CORE-REVERT — the venue-confirmation stack (SINGLE-VENUE refuse,
+      // NO-BINANCE +12, probation +8) was a drought engine for exactly the
+      // no-Binance cohort the operator watches (BIRB/IRYS/BTW/JCT: the 10-24
+      // morning veto wall). v12.7 doctrine restored: venue rows ride as
+      // telemetry; REARM-BRAKE + REENTRY-LOCKOUT own the repeat-deploy risk.
+      if (vCount === 1) {
+        const sole = vQuotes.find((q) => typeof q.price === "number" && q.price > 0);
+        noBinanceNote = `CORE-REVERT: single-venue tape (${sole?.venue ?? "?"}) — deploy admitted v12.7-doctrine (advisory, journal-only)`;
+        void recordGateBlock({ gate: "SINGLE-VENUE", symbol: asset.symbol, direction: conf.direction, reason: `ADVISORY(core-revert): only ONE live venue (${sole?.venue ?? "?"}) — deploy admitted, cross-venue confirmation unavailable (telemetry)` });
+      } else if (vCount >= 2 && !vBinanceLive) {
+        noBinanceNote = `CORE-REVERT: BINANCE quote null (${vCount} live venues) — no surcharge (v12.7 doctrine), venue disagreement rides as telemetry`;
+      }
+    } else if (vCount === 1) {
       const sole = vQuotes.find((q) => typeof q.price === "number" && q.price > 0);
       if (opts?.forced) {
         noBinanceNote = `SINGLE-VENUE-FORCED (operator override — only ONE live venue ${sole?.venue ?? "?"}, cross-venue confirmation impossible)`;
@@ -1859,8 +1890,13 @@ export async function deploySignal(symbol?: string, directionHint?: "LONG" | "SH
         staleRefuse = `STALE-BAR: flow board ${Math.round(staleAgeS / 60)}min old while the live 4-bar tape moved ${fxMoveLive.toFixed(1)}% (≥10% extreme) — the NX-3046 signature (281s-stale board × −40% flush) refused`;
       }
       if (staleRefuse) {
-        void recordGateBlock({ gate: "STALE-BAR", symbol: asset.symbol, direction: conf.direction, reason: staleRefuse });
-        return;
+        if (coreRevert.enabled) {
+          // v13.0 CORE-REVERT — advisory cohort (journal-only, deploy proceeds)
+          void recordGateBlock({ gate: "STALE-BAR", symbol: asset.symbol, direction: conf.direction, reason: `ADVISORY(core-revert): ${staleRefuse}` });
+        } else {
+          void recordGateBlock({ gate: "STALE-BAR", symbol: asset.symbol, direction: conf.direction, reason: staleRefuse });
+          return;
+        }
       }
     }
     // ── v8.0 MULTI-TF FLOW BOARD GUARD (EPOCH-2 operator mandate) ──
@@ -2899,6 +2935,60 @@ export async function deploySignal(symbol?: string, directionHint?: "LONG" | "SH
     }
   }
 
+  // ── v13.0 STALE-CHASE — data-driven late-entry filter (operator mandate
+  // «سیستم به همان وضعیت برگردد و با دیتای موجود نقاط ضعف را فیلتر کند») ──
+  // W42 measured weakness (the ONLY structural regression the v12.9 stack
+  // made worse): event-matched deploys 0-10min after the trigger event went
+  // +$1.71 (1 SL/2), 10-20min 5/5 SL (−$7.52), 20-35m 3/4 SL, >35m 1/1 SL;
+  // moveAtEntry +10.63% (BIRB 14:54) and +5.13% (JCT 15:06) both SL. The
+  // v9.3 CHASE-PRICE gate re-anchors its reference at every scan so it only
+  // sees intra-pass drift — the event→deploy gap was UNMEASURED. This filter
+  // anchors to the freshest VolCauseEvent (detection instant, EXISTING data,
+  // one indexed read per deploy-stage call — same cost class as REARM-BRAKE):
+  // event age > maxAgeMin OR |price moved| > maxMovePct since the event →
+  // the move has left, refuse. No recent event → pass (non-event strategies
+  // unaffected). Operator-forced deploys bypass. Tunable via EngineSetting
+  // key "stale-chase" {enabled, maxAgeMin, maxMovePct, lookbackMin}.
+  {
+    let scCfg = { enabled: true, maxAgeMin: 20, maxMovePct: 4.5, lookbackMin: 90 };
+    try {
+      const row = await db.engineSetting.findUnique({ where: { key: "stale-chase" } });
+      if (row) {
+        const p = JSON.parse(row.value) as Partial<typeof scCfg>;
+        if (typeof p.enabled === "boolean") scCfg.enabled = p.enabled;
+        if (typeof p.maxAgeMin === "number") scCfg.maxAgeMin = Math.max(5, Math.min(60, Math.floor(p.maxAgeMin)));
+        if (typeof p.maxMovePct === "number") scCfg.maxMovePct = Math.max(1, Math.min(20, p.maxMovePct));
+        if (typeof p.lookbackMin === "number") scCfg.lookbackMin = Math.max(15, Math.min(240, Math.floor(p.lookbackMin)));
+      }
+    } catch {
+      /* fail-open → code defaults */
+    }
+    if (scCfg.enabled && !opts?.forced) {
+      try {
+        const scEv = await db.volCauseEvent.findFirst({
+          where: { symbol: asset.symbol, detectedAt: { gte: new Date(Date.now() - scCfg.lookbackMin * 60_000) } },
+          orderBy: { detectedAt: "desc" },
+          select: { detectedAt: true, price: true, primaryCause: true },
+        });
+        if (scEv?.price && scEv.price > 0) {
+          const scAgeMin = (Date.now() - new Date(scEv.detectedAt).getTime()) / 60_000;
+          const scPrice = Number(asset.price);
+          const scMove = scPrice > 0 ? ((scPrice - scEv.price) / scEv.price) * 100 : 0;
+          if (scAgeMin > scCfg.maxAgeMin) {
+            void recordGateBlock({ gate: "STALE-CHASE", symbol: asset.symbol, direction, reason: `trigger event ${scAgeMin.toFixed(0)}min old (> ${scCfg.maxAgeMin}m budget, ${scEv.primaryCause ?? "cause"}) — W42 evidence: 10-20m bucket 5/5 SL, >35m 1/1 SL; fresh triggers only (stale-chase knob, v13.0)` });
+            return { error: `stale-chase gate: ${direction} ${asset.symbol} refused — trigger event ${scAgeMin.toFixed(0)}m old > ${scCfg.maxAgeMin}m budget`, status: 409 };
+          }
+          if (Math.abs(scMove) > scCfg.maxMovePct) {
+            void recordGateBlock({ gate: "STALE-CHASE", symbol: asset.symbol, direction, reason: `price already ${scMove >= 0 ? "+" : ""}${scMove.toFixed(2)}% away from the trigger event price ${scEv.price} (${scAgeMin.toFixed(0)}m ago) — chasing a departed move refused (W42: +10.63% BIRB 14:54 → SL, +5.13% JCT 15:06 → SL, v13.0)` });
+            return { error: `stale-chase gate: ${direction} ${asset.symbol} refused — price ${scMove.toFixed(2)}% past the trigger event (> ${scCfg.maxMovePct}% cap)`, status: 409 };
+          }
+        }
+      } catch {
+        /* fail-open: a data filter must never wedge the engine */
+      }
+    }
+  }
+
   // ── v12.7 RE-ARM BRAKE — same-direction post-stop cooldown (SENTINEL-20261020
   // operator mandate, acceptance: صفر ورود تکراری هم‌جهت پس از استاپ) ──
   // Forensics (2026-10-20): NX-2910 APRUSDT LONG SL closed 12:41:16 → NX-2911
@@ -2964,6 +3054,50 @@ export async function deploySignal(symbol?: string, directionHint?: "LONG" | "SH
           return { error: `rearm-brake gate: ${direction} ${asset.symbol} refused — same-direction stop ${minutesSince.toFixed(1)}m ago < cooldown ${cooldownMin}m (${stopCount} stops/${cfg.windowHours}h)`, status: 409 };
         }
         rearmBrakeTag = "REARM-BRAKE"; // operator-forced override — audited cohort
+      }
+    }
+  }
+
+  // ── v13.0 BE-RELOOP BRAKE — BE-banked stops relay too (operator mandate:
+  // filter weaknesses from existing data) ──
+  // W42 measured: BIRBUSDT SHORT SL closed 15:22 at +4.67% (BE-banked — the
+  // v12.7 brake correctly ignored it, net-POSITIVE) → machine re-entry 15:34
+  // → hard SL −61.2% (−$6.12) 12 minutes later. The v12.7 brake only counts
+  // NET-NEGATIVE stops; the BE-banked cohort relays within minutes. Fix: any
+  // same-direction SL close (ANY sign) within beCooldownMin (default 45m,
+  // clamp 10-240) refuses machine deploys — net-negative stops keep their
+  // longer 360m/720m v12.7 windows, this only closes the positive-SL relay
+  // gap. Operator-forced deploys still pass (audited cohort). Tunable via
+  // EngineSetting key "rearm-brake" {beCooldownMin}.
+  {
+    let beCfg = { enabled: true, beCooldownMin: 45 };
+    try {
+      const row = await db.engineSetting.findUnique({ where: { key: "rearm-brake" } });
+      if (row) {
+        const p = JSON.parse(row.value) as Partial<typeof beCfg>;
+        if (p.enabled === false) beCfg.enabled = false;
+        if (typeof p.beCooldownMin === "number") beCfg.beCooldownMin = Math.max(10, Math.min(240, Math.floor(p.beCooldownMin)));
+      }
+    } catch {
+      /* fail-open → code defaults */
+    }
+    if (beCfg.enabled && !opts?.forced) {
+      try {
+        const lastAnyStop = await db.signal.findFirst({
+          where: { symbol: asset.symbol, direction, status: "SL", closedAt: { gte: new Date(Date.now() - 6 * 3600_000) } },
+          orderBy: { closedAt: "desc" },
+          select: { closedAt: true, pnlPercent: true },
+        });
+        if (lastAnyStop?.closedAt && (lastAnyStop.pnlPercent ?? 0) >= 0) {
+          const beMins = (Date.now() - new Date(lastAnyStop.closedAt).getTime()) / 60_000;
+          if (beMins < beCfg.beCooldownMin) {
+            void recordGateBlock({ gate: "REARM-BRAKE-BE", symbol: asset.symbol, direction, reason: `BE-reloop brake: ${asset.symbol} ${direction} BE-banked SL closed ${beMins.toFixed(1)}m ago (+${lastAnyStop.pnlPercent.toFixed(1)}%) — re-entry within the ${beCfg.beCooldownMin}m window refused (W42: BIRB 15:22 BE-SL +4.67% → 15:34 re-entry SL −61.2% 12min later, v13.0)` });
+            void nearMissCaptureGate({ symbol: asset.symbol, direction, strategy: conf.strategy, reason: `REARM-BRAKE-BE: ${asset.symbol} ${direction} ${beMins.toFixed(0)}m after BE-banked stop (${beCfg.beCooldownMin}m window)` }).catch(() => undefined);
+            return { error: `rearm-brake-be gate: ${direction} ${asset.symbol} refused — BE-banked stop ${beMins.toFixed(1)}m ago < ${beCfg.beCooldownMin}m re-entry window`, status: 409 };
+          }
+        }
+      } catch {
+        /* fail-open: a risk overlay must never wedge the engine */
       }
     }
   }

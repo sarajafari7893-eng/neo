@@ -9,6 +9,7 @@
 import { gateFetch } from "./fapi-gate";
 import { liquidationPressure } from "./liquidations";
 import { bridgeOiHist, bridgeTape, bridgeKlines, bybit5mMove, bybitTickerRow, okx5mMove, type FlowSource } from "./flow-bridge";
+import { getCoreRevert } from "./core-revert"; // v13.0 CORE-REVERT — operator revert mandate
 
 const TIMEOUT_MS = 6500;
 const CACHE_TTL = 150_000; // 2.5min
@@ -561,8 +562,9 @@ export async function scoreFlow(symbol: string, direction: "LONG" | "SHORT", pri
       if (priMove !== null && secondName && secondMove !== null) {
         const disagree = Math.sign(priMove) !== Math.sign(secondMove) && Math.abs(priMove - secondMove) > 1.5;
         if (disagree) {
-          score = Math.max(-6, Math.min(6, score));
-          reasons.push(`MULTI-VENUE DISAGREE: primary ${consensusSrc} 15m-window ${priMove >= 0 ? "+" : ""}${priMove.toFixed(2)}% vs ${secondName} ${secondMove >= 0 ? "+" : ""}${secondMove.toFixed(2)}% — cross-venue tapes conflict, conviction clamped ±6, cannot CONFIRM (operator mandate: confirmation from all venues, especially Binance — v12.9)`);
+          const cr = await getCoreRevert();
+          if (!cr.enabled) score = Math.max(-6, Math.min(6, score));
+          reasons.push(`MULTI-VENUE DISAGREE: primary ${consensusSrc} 15m-window ${priMove >= 0 ? "+" : ""}${priMove.toFixed(2)}% vs ${secondName} ${secondMove >= 0 ? "+" : ""}${secondMove.toFixed(2)}% — cross-venue tapes conflict${cr.enabled ? " · CORE-REVERT advisory: clamp lifted, telemetry only (v12.7 doctrine)" : ", conviction clamped ±6, cannot CONFIRM (operator mandate: confirmation from all venues, especially Binance — v12.9)"}`);
         } else if (Math.sign(priMove) === Math.sign(secondMove) && Math.abs(priMove - secondMove) <= 1.5) {
           reasons.push(`MULTI-VENUE AGREE: primary ${consensusSrc} ${priMove >= 0 ? "+" : ""}${priMove.toFixed(2)}% ≈ ${secondName} ${secondMove >= 0 ? "+" : ""}${secondMove.toFixed(2)}% over 15m — cross-venue tape concordant (v12.9)`);
         }
@@ -586,8 +588,9 @@ export async function scoreFlow(symbol: string, direction: "LONG" | "SHORT", pri
   // flowVetoScore ≤−4 soft veto (score −5/−6 survives the clamp) and rides as
   // honest telemetry. BINANCE-sourced bundles are untouched.
   if (bridgeSrc && bridgeSrc !== "BINANCE") {
-    score = Math.max(-6, Math.min(6, score));
-    reasons.push(`SURROGATE-FLOW CAP: source ${bridgeSrc} ≠ BINANCE — conviction clamped ±6, surrogate flow cannot CONFIRM a deploy (NX-3014 48s-collapse forensics, v12.8)`);
+    const crSurrogate = await getCoreRevert();
+    if (!crSurrogate.enabled) score = Math.max(-6, Math.min(6, score));
+    reasons.push(`SURROGATE-FLOW CAP: source ${bridgeSrc} ≠ BINANCE${crSurrogate.enabled ? " · CORE-REVERT advisory: clamp lifted, surrogate tape rides as telemetry (v12.7 doctrine — the +12/+8/cap stack was the no-Binance drought engine)" : " — conviction clamped ±6, surrogate flow cannot CONFIRM a deploy (NX-3014 48s-collapse forensics, v12.8)"}`);
   }
 
   const verdict = score >= 8 ? "CONFIRMS" : score <= -8 ? "CONFLICTS" : "NEUTRAL";
