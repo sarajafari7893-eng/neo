@@ -286,6 +286,32 @@ let lastScanAt = 0;
 let scanInFlight = false;
 const shiftLastAt = new Map<string, number>();
 
+// ── RAM-SHED hook (RAM-SHED-20261024) ──────────────────────────────────────
+// The instrumentation RSS governor calls this under memory pressure. The
+// kline cache is the biggest DISCRETIONARY in-app store (candles per
+// symbol×tf — safely refetchable within one scan cycle), so it sheds first:
+// entries older than 10min are dropped + in-flight dedupe cleared. Returns
+// the number of entries freed for the governor log. globalThis dedupe —
+// Turbopack can instantiate per-route bundles; the governor must reach the
+// ONE shared cache instance.
+{
+  const g = globalThis as { __nexusShed?: () => number };
+  if (!g.__nexusShed) {
+    g.__nexusShed = (): number => {
+      let freed = 0;
+      const now = Date.now();
+      for (const [key, entry] of klineFlowCache) {
+        if (now - entry.at > 10 * 60_000) {
+          klineFlowCache.delete(key);
+          freed++;
+        }
+      }
+      klineFlowInFlight.clear();
+      return freed;
+    };
+  }
+}
+
 async function loadBoard(): Promise<void> {
   if (boardLoaded) return;
   boardLoaded = true;

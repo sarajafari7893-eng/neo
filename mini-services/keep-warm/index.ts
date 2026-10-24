@@ -187,6 +187,51 @@ async function beat(): Promise<Beat> {
   return b;
 }
 
+// ── RAM-SHED v1.0 (RAM-SHED-20261024) — bounded-RSS self-respawn ──────────
+// Evidence: this ~60-line observer ballooned to 189MB RSS (bun allocator
+// retains freed pages across days of beats) — the fleet's 4th biggest
+// consumer on a 4GB no-swap box, bigger than watchdog+mem-guard+card-sentinel
+// COMBINED. Self-respawn pattern (same class as the watchdog heal-spawn, and
+// the reason it is safe: children of a long-lived process survive the parent):
+// spawn a fresh plain-bun replacement FIRST, then exit. Downtime <1s, RSS
+// returns to ~40MB, :3018 never left unattended.
+const RSS_RESPAWN_MB = 120;
+function selfRespawnIfFat(reason: string): void {
+  let mb = 0;
+  try {
+    mb = Math.round(process.memoryUsage.rss() / 1048576);
+  } catch {
+    return;
+  }
+  if (mb < RSS_RESPAWN_MB) return;
+  try {
+    const child = Bun.spawn(["bun", "index.ts"], {
+      cwd: import.meta.dir,
+      stdin: "ignore",
+      stdout: "inherit",
+      stderr: "inherit",
+      env: process.env,
+    });
+    console.log(`[keep-warm] SELF-RESPAWN rss=${mb}MB>${RSS_RESPAWN_MB}MB (${reason}) → child pid=${child.pid}, exiting (RAM-SHED-20261024)`);
+    appendLog({
+      at: new Date().toISOString(),
+      atTehran: tehran(),
+      ok: true,
+      healthz: 0,
+      pulse: 0,
+      services: "?/?",
+      uptimeSec: Math.floor((Date.now() - BOOT) / 1000),
+      latencyMs: 0,
+      ext: -1,
+      note: `self-respawn rss=${mb}MB`,
+    });
+    setTimeout(() => process.exit(0), 500).unref?.();
+  } catch (err) {
+    console.error("[keep-warm] self-respawn failed — continuing in place", err);
+  }
+}
+setInterval(() => selfRespawnIfFat("rss-ticker"), 60_000).unref?.();
+
 const server = Bun.serve({
   port: PORT,
   fetch(req) {

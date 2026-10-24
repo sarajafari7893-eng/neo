@@ -148,6 +148,14 @@ export async function GET() {
       heapUsedMB: Math.round(mem.heapUsed / 1048576),
       heapTotalMB: Math.round(mem.heapTotal / 1048576),
       memAvailableMB: memAvailableMB(),
+      ramShed: (() => {
+        // RAM-SHED-20261024 governor telemetry — the in-app lane that
+        // pre-empts kernel OOM-kill with a controlled warm-cache recycle.
+        const st = (globalThis as { __nexusRamShed?: { ver: string; recycles: number; sheds: number; lastRecycleAt: number; lastShedAt: number } }).__nexusRamShed;
+        return st
+          ? { ver: st.ver, recycles: st.recycles, sheds: st.sheds, lastRecycleAt: st.lastRecycleAt || null, lastShedAt: st.lastShedAt || null }
+          : null;
+      })(),
       watchdogLayer1: p0WatchdogStatus(),
       watchdogLayer2: layer2Status(),
     },
