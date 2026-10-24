@@ -32112,3 +32112,25 @@ Stage Summary:
 - توصیه‌های P0: (۱) خنثی‌سازی حلقه‌ی بوت — ارتقای grace بوت mem-guard به 180s + معیار بر پایه‌ی availMb و سقف مسیرهای گرم؛ پذیرش: ۳۰ دقیقه بدون boot-spike-act و rescues1h≤2؛ (۲) مهار کرش undici (AbortSignal سراسری/نگهبان process-level)؛ پذیرش: صفر AssertionError در یک ساعت
 - توصیه‌های P1: قاعده‌ی heat-hold برای FlowScan (نماد تا X دقیقه پس از آخرین VolCauseEvent داغ بماند) و بازسازی وتوی مطلق EQ-100 به کالیبراسیون امتیازی (گام ۳ برنامه‌ی قبلی — همان انتقاد اپراتور)
 - اقدام اصلاحی انجام نشد (ناظر فقط مشاهده می‌کند؛ زنجیره‌ی ترمیم خودِ سیستم مالک پنجره‌ی اپ است)
+
+---
+Task ID: V1212-STAB-CARDSENTINEL-20261024
+Agent: nexus-sentinel (مأموریت اپراتور trace 1a16d24a6e87b251: «ماموریت بعدی را کامل و مهندسی انجام بده + ساخت ماژول نظارت و پیگیری کارت‌های کهنه و بروزرسانی در سریعترین حالت»)
+
+Work Log:
+- P0-1 — ریشه‌یابی و رفع حلقه‌ی مرگ‌وبار داشبورد (۳ لایه‌ی پچ در mini-services/mem-guard/index.ts، نسخه doctrine v12.12c):
+  (۱) شرط گریس بوت `avail<300` با اَمبینت باکس (۳۵۰-۵۵۰) در تضاد بود → هر بوت در ~۳۰ ثانیگی kill می‌شد (۱۴۴ بار boot-spike-act، rescues1h=20)؛ جایگزین: تنها OOM-imminent واقعی — تک‌تیک <۱۱۰MB یا ۳ تیک پیوسته <۱۶۵MB یا RSS≥۲۵۵۰ در گریس ۲۴۰s
+  (۲) کش Turbopack در دلایل boot-spike دیگر prune نمی‌شود (mode boot-spike-keep) — prune در فشار، بوت بعدی را سرد می‌کرد (کامپایل ۲۰-۲۵ثانیه‌ای، ~1.8GB) = موتور خودِ تردمیل
+  (۳) نردبان حالت-پایدار با هیسترزیس: avail<380 فقط WARN؛ recycle فقط با deep-valley پایدار (<300 ×۶ تیک/۹۰s) یا تک‌تیک <۱۳۰MB یا جفت (RSS≥۲۳۰۰ ×۴ + avail<300 ×۴) — اثبات ۱۳:۰۳: recycle قبلی یک اپ سالم ۱۷دقیقه‌ای را روی یک فرورفتن عادی اَمبینت (۳۷۲MB) کشته بود
+- P0-2 — مهار کرش undici: گارد uncaughtException فقط-برای-امضای undici در src/instrumentation.ts (شمارنده + لاگ سرویس‌شده ۶۰s) — **زنده و مؤثر: ۵ کرش بلعیده شد و پروسه زنده ماند** (قبلاً ۵۹ بار `AssertionError false==true` از node:internal/deps/undici)؛ به‌علاوه آخرین fetch بی‌سقف src/lib (nexus-client.ts) با AbortSignal.timeout(30s) محدود شد
+- ماژول جدید — card-sentinel :3022 (mini-services/card-sentinel، v1.0.2): رصد تازگی کارت‌های FlowScan با مدل حرارت (hot: ایونت<۴۵min یا |Δ24h|≥۲۰٪ → بودجه ۱۵min؛ warm → ۴۵min؛ dust → ۲۴h)؛ کارت‌های کهنه → POST :3000/api/internal/flow-refresh (حداکثر ۴ نماد/سیکل، همروندی ۲، فاصله ۶min/نماد، گیت RAM: skip وقتی avail<500MB، گیت app-down)؛ تله‌متری: /health · /state · .data/card-sentinel-state.json (اتمیک) — نتیجه زنده: BIRBUSDT از ۲۴۹ دقیقه کهنگی به ۱۲ دقیقه رسید، refreshed1h=۱۱
+- اتصال به ناوبری نکسوس: p0-watchdog v1.5.0 (کلید cards + SVCS + دو-جایی + خط arm)؛ dev-up.sh (اسپاون probe-gated بخش 4-b)؛ sentinel-service v1.3.3 (بلاک cards در /report برای کارت SENTINEL داشبورد)
+- زیرساخت بروزرسانی سریع: export refreshSymbolFlow در flow-scanner.ts (اسکن تک‌نماد + upsert کارت‌های DB — ensureSymbolFlow قبلی فقط بورد حافظه را گرم می‌کرد و کارت‌های DB کهنه می‌ماندند؛ همین ریشه‌ی «کارت‌های کهنه BIRB» بود) + مسیر داخلی src/app/api/internal/flow-refresh (سقف ۹۰s/نماد، timeout ۴۵s، single-flight)
+- راستی‌آزمایی: lint = ۱۷ (baseline، صفر新增)؛ بوت گرم «Ready in 2.3-3.2s» (قبلاً ۲۰-۲۵s)؛ اپ پس از پچ ۳۶۸s+ آپ بدون هیچ kill خود-زاده؛ dmesg دو OOM کرنل در ۱۳:۵۰-۱۳:۵۱ عمدتاً با مرورگر verification خودم (Chromium روی باکس 4GB) تقویت شده بود — مرورگر بسته شد و سیستم روی avail≈414MB پایدار ماند
+- صادقانه: killهای باقی‌مانده = OOM سراسری کرنل (باکس 4GB بدون swap، ناوگان ۱۵ سرویسی + اپ 2.2GB) با ترمیم ~۳۰s توسط watchdog — ریشه‌پاک‌کنی نیازمند مأموریت RAM-shedding (بک‌لاگ شناخته‌شده) است
+
+Stage Summary:
+- commit: V1212-STAB-CARDSENTINEL-20261024
+- داشبورد از «هرگز بالا نمی‌آید» به «بالا با بوت گرم ۲-۳s و گپ‌های ~۳۰s هنگام OOM کرنل» رسید؛ سه حلقه kill خود-زاده (گریس بوت، prune تردمیل، نردبان avail) حذف شدند
+- کارت‌های جریان اکنون ماژول نظارت اختصاصی دارند (heat-hold + سریع‌ترین بروزرسانی ممکن با گیت حافظه)
+- مأموریت بعدی پیشنهادی: RAM-shedding (لاغرسازی ناوگان + رژیم RSS اپ) برای صفر کردن OOM کرنل، سپس ادامه گام‌های ۱+۲ قبلی (tick-cascade/staleness/onset/Tier-1 + ممیزی منابع داده)

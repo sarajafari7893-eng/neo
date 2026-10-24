@@ -33,8 +33,12 @@ const STATE_PATH = `${ROOT}/.data/card-sentinel-state.json`;
 const APP = "http://127.0.0.1:3000";
 
 const CARD_TICK_MS = 45_000;
-const RAM_FLOOR_MB = 400;
-const MAX_REFRESH_PER_CYCLE = 6;
+// v1.0.2 — kernel-OOM forensics (13:15Z dmesg: global_oom killed next-server):
+// the refresh lane adds in-app scan mass; during tight-RAM windows it must STAY
+// OUT entirely. Floor raised 400→500, batch 6→4. Freshness SLA unchanged for
+// hot cards (a hot batch of 4 clears in ≤2 cycles = ≤90s — «سریع‌ترین حالت»).
+const RAM_FLOOR_MB = 500;
+const MAX_REFRESH_PER_CYCLE = 4;
 const CONCURRENCY = 2;
 const PER_SYMBOL_MIN_MS = 6 * 60_000; // never re-refresh a symbol faster than 6min
 const DUST_SLOTS_PER_CYCLE = 1;       // the 43-day tail revives at 1/cycle — bounded
