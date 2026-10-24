@@ -2,7 +2,7 @@
  "ver": "supervisor-cron 1.6.0",
  "pid": 1718,
  "startedAt": "2026-10-24T22:50:48.954Z",
- "updatedAt": "2026-10-24T23:31:18.997Z",
+ "updatedAt": "2026-10-24T23:36:18.956Z",
  "jobs": {
   "sweep": {
    "lastRunAt": 1792884678955,
@@ -59,13 +59,13 @@
    "failures": 0
   },
   "keepwarm": {
-   "lastRunAt": 1792884678955,
-   "nextRunAt": 1792884678954,
-   "lastStatus": "ok",
-   "lastDurationMs": 42,
-   "lastError": null,
-   "runs": 66,
-   "failures": 10
+   "lastRunAt": 1792884978954,
+   "nextRunAt": 1792884978954,
+   "lastStatus": "error",
+   "lastDurationMs": 2,
+   "lastError": "HEARTBEAT COLD app:3000 1ms streak=1",
+   "runs": 67,
+   "failures": 11
   }
  },
  "lastSweep": {
@@ -154,14 +154,14 @@
   "newN": 0
  },
  "lastKeepwarm": {
-  "at": "2026-10-24T23:31:18.997Z",
-  "ok": true,
-  "ms": 42,
-  "bootAt": "2026-10-24T23:28:53.642Z",
-  "gitSha": "876ee41",
-  "coldStreak": 0
+  "at": "2026-10-24T23:36:18.955Z",
+  "ok": false,
+  "ms": 1,
+  "bootAt": null,
+  "gitSha": null,
+  "coldStreak": 1
  },
- "coldStreak": 0,
+ "coldStreak": 1,
  "alertLedger": {
   "sentinel-red": 1792883479639,
   "review-llm-unavailable": 1792882279253,
@@ -170,13 +170,6 @@
  "wsDownStreak": 0,
  "staleStreak": 0,
  "history": [
-  {
-   "id": "sweep",
-   "at": 1792601650198,
-   "status": "ok",
-   "durationMs": 735,
-   "detail": "AMBER: sentinel :3030 verdict AMBER"
-  },
   {
    "id": "keepwarm",
    "at": 1792601932023,
@@ -519,6 +512,13 @@
    "status": "ok",
    "durationMs": 42,
    "detail": "HEARTBEAT OK 42ms boot=23:28:53Z sha=876ee41"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1792884978954,
+   "status": "error",
+   "durationMs": 2,
+   "detail": "HEARTBEAT COLD app:3000 1ms streak=1"
   }
  ],
  "watchRuns": [
