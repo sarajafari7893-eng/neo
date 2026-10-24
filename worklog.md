@@ -32311,3 +32311,25 @@ Stage Summary:
 - برداشت MFE حالا عددی است: نردبان TP1 در T≈20٪ NET به‌تنهایی در پنجرهٔ ۱۵روزه +$159.48 (×۲.۰ از پایه +$161.73) می‌ساخت — +$61.64 در دورهٔ اوج و +$97.84 در بقیهٔ دوره‌ها (kept-MFE از 2.1٪ به 13.6٪)؛ CRITICAL: این کرانِ بالای مرتبه-اول است (تک-ماکس MFE، fees صفر، پروکسی کتابِ باقی‌مانده = pnl پایانی واقعی) — نه پیش‌بینی دیپلوی
 - توصیه: سناریوی T=20 بهترین نسبتِ سرریز-به-ریسک مدل است و با معماری فعلی BE-BANK@0.5R سازگار است (بانک ۲۵٪ در آرم، سپس ترانش 50٪ در T)؛ پیش از هر تغییر رانتایم، مدل مرتبه-دوم با مسیر قیمت (tick-archive) + شبیه‌سازی fees ضروری است — این مأموریت فقط-سنجه بود و صفر تغییر رانتایم داشت
 - commit: کد + گزارش JSON توسط چرخهٔ خودکار armor در 99b993e9 سواپ شد؛ این entry در commit پیام‌دار «P1-a: shadow MFE-capture replay — harvest headroom quantified» همراه است
+
+---
+Task ID: P1-b
+Agent: general-purpose (P1-b تله‌متری تاخیر ورود — زنده‌کردن detectedAt/latencyMs/refSource در FillLedger؛ مأموریت اپراتور P1، ممیزی DOCTRINE-PEAK-QA: هر ۹۶۲ ردیف پنجره refSource='none'، slipBps=0، latencyMs=NULL — «آنچه اندازه نشود مدیریت نمیشود»)
+
+Work Log:
+- ریشه‌یابی «چرا رادار هرگز شلیک نمی‌کند» (دو لایه، هر دو با شواهد DB/کد):
+  (۱) سیم‌کشی رادار سالم است — pump-dump.ts:845 از همان Task-79/v8.4 موقع فراخوانی deploySignal هم refPrice (anchorPrice ترک) و هم detectedAt (track.detectedAt) را می‌فرستد و ۳۵۸ ردیف radar-anchor تاریخی (تا ~10-09، دوران v8.4→v11.3) گواه آن است؛ ولی خودِ مسیرِ انتشار از تثبیت v10.18 (gated-emission) گرسنه است: pump.performance نشان می‌دهد spawnedSignals=0 برای هر ۶۰۰ ترک resolve‌شده (کف ۷۸ + پشته کامل گیت + اسپیسینگ ۲۰m) — یعنی ۱۰۰٪ پنجره ممیزی‌شده از مسیر اسکن آمده است.
+  (۲) مسیر اسکن هیچ لحظه‌ی آشکارسازی نداشت: در deploySignal هرگز opts.detectedAt ست نمی‌شد (→ latencyMs=NULL) و chaseRef = chosen.scanPrice = asset.price همان تیکِ in-memoryِ همان پاسِ دیپلوی است که entry از آن می‌آید (|entry−ref|<1e-12 → refSource='none'، slipBps=0) — یعنی «مرجع» در همان لحظه‌ی ورود تعریف می‌شد و هیچ‌چیز را نمی‌سنجید.
+- سیم‌کشی دومنبه‌ی صادقانه در recordFillLedger (بدون هیچ تغییر رفتاری در دیپلوی/گیت‌ها/مارجین):
+  ① فیلد اختیاری refSource ("radar-anchor" | "scan" | "none") به FillRecordInput اضافه شد — لیبل صریحِ مسیر از سوی caller می‌برد؛ هیوریستیک قدیمی به‌عنوان fallback برای callerهای بدون لیبل مانده است.
+  ② مسیر رادار: همان threading موجود pump-dump (anchorPrice + track.detectedAt) → refSource 'radar-anchor' صریح؛ slip واقعی anchor→entry و latency detection→deploy — دست‌نخورده، فقط لیبل‌دار شد.
+  ③ مسیر اسکن: لحظه‌ی آشکارسازی = فیلد `at` اسنپ‌شات MTF منجمدِ همان دیپلوی (mtfJson که در DB تأیید شده)، با گارد سلامت (finite، >0، ≤ اکنون)؛ fallback = تازه‌ترین FlowScan.updatedAt همان symbol (unique (symbol,tf))؛ فقط اگر هیچ‌کدام نبود 'none'. slipBps دست‌نخورده (refPrice همان chaseRef اسکن — اگر == entry، صفرِ صادقانه می‌ماند؛ ارزش اینجا latency است).
+- تعریف دقیق KPI (کامنت یک‌خطی سر کال‌سایت): **latencyMs = signal.createdAt − snapshot.at = lag بورد→دیپلوی** — پروکسی اندازه‌پذیر «تاخیر ورود» اپراتور؛ برای دیپلوی‌های radar مسیر، detection→deploy ترک.
+- دست‌نخورده‌ها: FLAT-10، همه‌ی گیت‌ها/هندسه/مارجین، عمکرد recordFillLedger (fire-and-forget، fail-open مطلق)، ردیف‌های تاریخی (بدون backfill/جعل — rowهای قدیم همان 'none' می‌مانند). تنها await افزوده یک findFirst ایندکس‌شده‌ی FlowScan بعد از create سیگنال است (تله‌متری، بعد از commit سیگنال، fail-open).
+- راستی‌آزمایی: lint = 17 (baseline، صفر جدید — در engine.ts/fill-ledger.ts صفر یافته)؛ tsc --noEmit روی هر دو فایل صفر خطا؛ dev.log صفر «Failed to compile/Type error»؛ /api/signals 200 (کامپایل زنده‌ی مسیر engine)؛ healthz ok:true (بوت 22:59:26Z، uptime 14s)؛ ردیابی ایستا‌ی مسیر رد شد.
+- حادثه‌ی محیطی (شفاف‌سازی): در میانه‌ی مأموریت (~22:50Z) یک گلیچ sync لحظه‌ای درخت را به اسنپ‌شات 10-22 (v12.7) برگرداند و git را re-init کرد؛ تا ~22:54 خودش ترمیم شد و درخت فعلی همه‌ی موج‌ها (v13.1 + گیت P0-a + fwd-settle P0-b + ویرایش‌های من) را دارد — delta کد من در armor commit 99b993e9 ثبت شده؛ پس از ترمیم، همه‌ی راستی‌آزمایی‌ها از نو اجرا و تأیید شد.
+- یادداشت صادقانه: تا لحظه‌ی commit هیچ دیپلوی طبیعی رخ نداده (آخرین سیگنال NX سریال 3110 در ~21:32Z) تا ردیف زنده بسازد — اولین دیپلوی بعد از این شپ، ردیفش را با refSource='scan' و latencyMs واقعی پر می‌کند؛ چرخه‌ی recycle ~۱۰-۱۵ دقیقه‌ای اپ (فشار 4GB) پیش‌تر هم بود و پابرجاست.
+
+Stage Summary:
+- تله‌متری تاخیر ورود از «مرده» به «زنده» رسید: مسیر اسکن اکنون لحظه‌ی واقعی آشکارسازی (اسنپ‌شات MTF/FlowScan) را در detectedAt ثبت و board→deploy lag را در latencyMs می‌سنجد؛ مسیر رادار (هر وقت دوباره شلیک کند) صریحاً 'radar-anchor' لیبل می‌خورد — هر دو بدون دست‌زدن به FLAT-10 و گیت‌ها.
+- commit: P1-b ENTRY-DELAY-TELEMETRY-20261025 (delta کد توسط armor v2 در 99b993e9 ثبت شده بود؛ این commit worklog + دلتای نهایی است)
