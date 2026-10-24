@@ -140,10 +140,11 @@ const AVAIL_FLOOR = 380;   // with the ~2.1GB app + fleet, ambient avail sits 35
 //   • RSS ≥ RSS_HARD single tick (unchanged hard line)
 //   A healthy boot now rides through the compile plateau; memRestart keeps the Turbopack
 //   cache on boot-spike reasons so the NEXT boot is warm (smaller spike, shorter compile).
-const BOOT_GRACE_MS = 120_000;         // restored 120s — with kernel-imminent floors, observing the plateau is safe
+const BOOT_GRACE_MS = 240_000;         // v12.12b — 240s: the boot transient measured 2345-2408MB with avail 137-250 for ~3min post-boot (12:46-12:49Z); the ramp needs room to settle before the governor owns the tape
 const BOOT_OOM_FLOOR = 110;            // single tick inside grace → kernel-kill imminent
 const BOOT_SUSTAIN_FLOOR = 165;        // 3 consecutive ticks inside grace → genuine boot stall
 const BOOT_SUSTAIN_TICKS = 3;
+const BOOT_RSS_HARD = 2550;            // v12.12b — grace-window RSS line: above the measured boot transient (2408 survived the kernel at avail ~140), below nothing sacred — avail floors remain the real kernel guard
 const RESTARTS_PER_HOUR = 3;
 const CACHE_PRUNE_AVAIL = 900; // prune gate for the rescue path (preemptive restarts ALWAYS prune)
 
@@ -745,8 +746,14 @@ async function tick(): Promise<void> {
       if (app.rssMb >= RSS_HARD) highRssTicks = RSS_SUSTAIN_TICKS;
       else if (app.rssMb >= RSS_ACT) highRssTicks++; else highRssTicks = 0;
       if (mem.availableMb >= 0 && mem.availableMb < AVAIL_FLOOR && app.rssMb > 1200) lowAvailTicks++; else lowAvailTicks = 0;
-      if (highRssTicks >= RSS_SUSTAIN_TICKS || lowAvailTicks >= 3) {
-        const why = highRssTicks >= RSS_SUSTAIN_TICKS ? `RSS ${app.rssMb}MB ≥ ${RSS_ACT}MB sustained` : `avail ${mem.availableMb}MB < ${AVAIL_FLOOR}MB sustained`;
+      if ((highRssTicks >= RSS_SUSTAIN_TICKS && lowAvailTicks >= 2) || lowAvailTicks >= 3) {
+        // v12.12b — RSS-high ALONE no longer recycles: the 10-24 treadmill recycled
+        // healthy warm-ups (RSS 2350) that the box was actually absorbing. Recycle
+        // only when RSS is high AND the box is genuinely tight (avail < floor),
+        // or avail is low on its own (the real kernel signal).
+        const why = lowAvailTicks >= 3
+          ? `avail ${mem.availableMb}MB < ${AVAIL_FLOOR}MB sustained`
+          : `RSS ${app.rssMb}MB ≥ ${RSS_ACT}MB sustained ×${highRssTicks} + avail ${mem.availableMb}MB < ${AVAIL_FLOOR}MB ×${lowAvailTicks}`;
         await memRestart(why);
       }
     } else if (bootGrace) {
@@ -754,9 +761,9 @@ async function tick(): Promise<void> {
       // (avail 117-201MB observed 10-24) is OBSERVED, not killed. See constants
       // block for the treadmill forensics (144 kills, rescues1h=20).
       const avail = mem.availableMb;
-      if (app.rssMb >= RSS_HARD) {
-        log("warn", "boot-spike-act", { rssMb: app.rssMb, availMb: avail, note: `RSS ≥ hard line ${RSS_HARD}MB during boot grace — graceful recycle instead of kernel kill (v12.12)` });
-        await memRestart(`boot-spike ${app.rssMb}MB ≥ ${RSS_HARD}MB hard line (grace-window act, v12.12)`);
+      if (app.rssMb >= BOOT_RSS_HARD) {
+        log("warn", "boot-spike-act", { rssMb: app.rssMb, availMb: avail, note: `RSS ≥ boot line ${BOOT_RSS_HARD}MB during boot grace — graceful recycle instead of kernel kill (v12.12b)` });
+        await memRestart(`boot-spike ${app.rssMb}MB ≥ ${BOOT_RSS_HARD}MB boot line (grace-window act, v12.12b)`);
       } else if (avail >= 0 && avail < BOOT_OOM_FLOOR) {
         log("warn", "boot-spike-act", { rssMb: app.rssMb, availMb: avail, note: `avail ${avail}MB < ${BOOT_OOM_FLOOR}MB OOM-imminent floor during boot grace (v12.12)` });
         await memRestart(`boot-spike avail ${avail}MB < ${BOOT_OOM_FLOOR}MB OOM-imminent (grace-window act, v12.12)`);
