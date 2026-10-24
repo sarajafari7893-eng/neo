@@ -1,30 +1,36 @@
 {
  "schemaVersion": 1,
  "kind": "deep",
- "at": "2026-10-23T03:18:00.546Z",
- "tehran": "23/10/2026, 06:48:00",
- "verdict": "AMBER",
+ "at": "2026-10-24T03:18:00.293Z",
+ "tehran": "24/10/2026, 06:48:00",
+ "verdict": "RED",
  "anomalies": [
   {
+   "sev": "crit",
+   "area": "app",
+   "msg": "service down / probe failed"
+  },
+  {
    "sev": "warn",
-   "area": "memory",
-   "msg": "MemAvailable 394MB < 400MB — pre-emptive OOM-proximity watch (4GB no-swap box)"
+   "area": "watchdog",
+   "msg": "layer-1 non-ok services: {\"app\":\"degraded\",\"liq\":\"ok\",\"ws\":\"ok\",\"bridge\":\"ok\",\"trade\":\"ok\",\"sentinel\":\"ok\",\"armor\":\"ok\",\"cron\":\"ok\",\"stable\":\"ok\",\"kw\":\"ok\",\"mem\":\"ok\",\"warm\":\"ok\",\"tbt\":\"ok\"}"
   }
  ],
  "services": [
   {
    "key": "app",
    "label": "app :3000",
-   "up": true,
-   "status": 200,
-   "ms": 26
+   "up": false,
+   "status": null,
+   "ms": 3,
+   "tcpOpen": false
   },
   {
    "key": "ws",
    "label": "price-ws :3003",
    "up": true,
    "status": 400,
-   "ms": 1
+   "ms": 2
   },
   {
    "key": "bridge",
@@ -38,7 +44,7 @@
    "label": "liq :3010",
    "up": true,
    "status": 200,
-   "ms": 1
+   "ms": 2
   },
   {
    "key": "trade",
@@ -56,41 +62,41 @@
   }
  ],
  "mem": {
-  "availableMb": 394
+  "availableMb": 2474
  },
  "disk": {
-  "rootFreeGb": 2.86,
-  "tmpFreeGb": 2.86
+  "rootFreeGb": 2.81,
+  "tmpFreeGb": 2.81
  },
  "db": {
   "ok": true,
-  "signals": 3014,
-  "events": 80362,
-  "prices": 112665,
-  "assets": 47,
-  "pumps": 2279,
-  "events1h": 961,
-  "lastEventAgeMs": 1257,
+  "signals": 3069,
+  "events": 80039,
+  "prices": 94706,
+  "assets": 49,
+  "pumps": 2307,
+  "events1h": 474,
+  "lastEventAgeMs": 21899,
   "stuckActive": 0,
   "orphanEvents": 0,
   "stuckPumpTracks": 0,
-  "dbBytes": 54923264,
-  "walBytes": 4124152
+  "dbBytes": 55947264,
+  "walBytes": 0
  },
  "backup": {
   "ok": true,
   "dir": "/tmp/my-project/backups",
   "encCount": 12,
   "zipCount": 12,
-  "newestEncMs": 1792721930150.532,
-  "newestAnyMs": 1792721930150.532,
-  "encAgeMs": 3550057.468017578
+  "newestEncMs": 1792808329411.3955,
+  "newestAnyMs": 1792808329411.3955,
+  "encAgeMs": 3550873.6044921875
  },
  "watchdog": {
   "ok": true,
   "ver": "p0-watchdog 1.4.9",
   "modes": {
-   "app": "ok",
+   "app": "degraded",
    "liq": "ok",
    "ws": "ok",
    "bridge": "ok",
@@ -104,14 +110,14 @@
    "warm": "ok",
    "tbt": "ok"
   },
-  "nonOk": 0,
+  "nonOk": 1,
   "memLevel": "ok",
-  "memAvailableMb": 392,
-  "paused": false
+  "memAvailableMb": 2470,
+  "paused": true
  },
  "log": {
-  "windowLines": 566,
-  "errors": 18,
+  "windowLines": 84,
+  "errors": 4,
   "http500": 0,
   "oom": 0,
   "enospc": 0,
@@ -122,25 +128,27 @@
  },
  "shadow": {
   "ok": true,
-  "source": "live-api",
+  "source": "legacy-file",
+  "degraded": true,
+  "fileAgeH": 0,
   "mode": "veto",
-  "generatedAt": "2026-10-23T03:18:00.227Z",
+  "generatedAt": "2026-10-24T03:17:00.893Z",
   "stats": {
-   "total": 600,
-   "passSide": 403,
-   "rejectSide": 197,
-   "vetoCount": 496,
-   "tradeCount": 104,
-   "modelSharePct": 49.2,
+   "total": 7507,
+   "passSide": 4425,
+   "rejectSide": 3082,
+   "vetoCount": 4773,
+   "tradeCount": 2734,
+   "modelSharePct": 43.5,
    "modelGroundedPct": 100,
-   "avgConfidence": 70.1,
-   "gateAgreement": 164,
-   "paperOpen": 12,
-   "paperSettled": 1228,
+   "avgConfidence": 67.8,
+   "gateAgreement": 1825,
+   "paperOpen": 14,
+   "paperSettled": 1247,
    "recent24h": {
-    "n": 209,
-    "modelSharePct": 40.7,
-    "lastModelAgeH": 0.5,
+    "n": 375,
+    "modelSharePct": 43.7,
+    "lastModelAgeH": 1.3,
     "lastVerdictAgeH": 0.1
    }
   },
@@ -151,8 +159,7 @@
     "target": 30,
     "pct": 100,
     "starved": false,
-    "reachable": true,
-    "fed": 71,
+    "fed": null,
     "lastFedAgeH": null
    },
    {
@@ -161,8 +168,7 @@
     "target": 30,
     "pct": 100,
     "starved": false,
-    "reachable": true,
-    "fed": 332,
+    "fed": null,
     "lastFedAgeH": null
    },
    {
@@ -171,8 +177,7 @@
     "target": 30,
     "pct": 100,
     "starved": false,
-    "reachable": true,
-    "fed": 1240,
+    "fed": null,
     "lastFedAgeH": null
    },
    {
@@ -181,36 +186,30 @@
     "target": 30,
     "pct": 0,
     "starved": false,
-    "reachable": true,
-    "fed": 0,
+    "fed": null,
     "lastFedAgeH": null
    }
   ],
   "fillPct": 75,
-  "fillPctReach": 75,
   "nSum": 90,
   "tSum": 120,
-  "nSumReach": 90,
-  "tSumReach": 120,
-  "fenceEntries24hFloor": 378
+  "fenceEntries24hFloor": 194
  },
  "rawcal": {
-  "armed": true,
-  "issued": 554,
-  "issuedTotal": 1972,
-  "target": 3007,
+  "armed": null,
+  "error": "api unreachable",
   "heartbeatAgeH": 0,
-  "heartbeatAt": "2026-10-23T0317Z ARMED issued=554/1965 target=3007"
+  "heartbeatAt": "2026-10-24T0317Z ISSUE NX-3069 raw open 5/8"
  },
  "cures": {
   "armed": true,
   "curing": false,
-  "cures24h": 0,
-  "lastCureAt": "2026-10-21T09:49:13.426Z",
-  "lastCureOutcome": "app-still-compiling-post-cure",
+  "cures24h": 1,
+  "lastCureAt": "2026-10-23T18:28:00.880Z",
+  "lastCureOutcome": "app-200-post-cure",
   "failStreak": 0,
   "baselineMark": 0
  },
- "uptimeSec": 14400,
+ "uptimeSec": 100800,
  "ver": "nexus-sentinel 1.3.2"
 }
