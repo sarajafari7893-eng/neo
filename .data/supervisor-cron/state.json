@@ -2,15 +2,15 @@
  "ver": "supervisor-cron 1.6.0",
  "pid": 6187,
  "startedAt": "2026-10-22T23:18:00.186Z",
- "updatedAt": "2026-10-24T04:28:30.279Z",
+ "updatedAt": "2026-10-24T04:38:31.052Z",
  "jobs": {
   "sweep": {
-   "lastRunAt": 1792816110187,
-   "nextRunAt": 1792816110186,
+   "lastRunAt": 1792816710187,
+   "nextRunAt": 1792816710186,
    "lastStatus": "ok",
-   "lastDurationMs": 92,
+   "lastDurationMs": 865,
    "lastError": null,
-   "runs": 240,
+   "runs": 241,
    "failures": 0
   },
   "progress": {
@@ -59,29 +59,29 @@
    "failures": 0
   },
   "keepwarm": {
-   "lastRunAt": 1792816110188,
-   "nextRunAt": 1792816410186,
-   "lastStatus": "ok",
-   "lastDurationMs": 73,
-   "lastError": null,
-   "runs": 401,
-   "failures": 82
+   "lastRunAt": 1792816710187,
+   "nextRunAt": 1792817010186,
+   "lastStatus": "error",
+   "lastDurationMs": 2,
+   "lastError": "HEARTBEAT COLD app:3000 0ms streak=2",
+   "runs": 403,
+   "failures": 84
   }
  },
  "lastSweep": {
-  "at": "2026-10-24T04:28:30.279Z",
-  "verdict": "AMBER",
-  "reason": "sentinel :3030 verdict AMBER · toobit-bridge doctrine: 2 violation(s) — last=MIRROR-LAG: card=TP1 but intent still OPEN 2722s — pollCards transition should have fired",
+  "at": "2026-10-24T04:38:30.202Z",
+  "verdict": "RED",
+  "reason": "app :3000 down",
   "services": {
    "app": {
-    "up": true,
-    "status": 200,
-    "ms": 75
+    "up": false,
+    "status": null,
+    "ms": 0
    },
    "liq": {
     "up": true,
     "status": 200,
-    "ms": 1
+    "ms": 3
    },
    "trade": {
     "up": true,
@@ -96,7 +96,7 @@
    "watchdog": {
     "up": true,
     "status": 200,
-    "ms": 1
+    "ms": 0
    },
    "sentinel": {
     "up": true,
@@ -111,19 +111,24 @@
    "bridge": {
     "up": true,
     "status": 200,
-    "ms": 1
+    "ms": 0
    },
    "tbt": {
     "up": true,
     "status": 200,
-    "ms": 0
+    "ms": 1
    }
   },
   "anomalies": [
    {
-    "class": "sentinel-amber",
-    "sev": "warn",
-    "msg": "sentinel :3030 verdict AMBER"
+    "class": "app-down",
+    "sev": "crit",
+    "msg": "app :3000 DOWN (HTTP unreachable) · healthz=err → pulse fallback"
+   },
+   {
+    "class": "sentinel-red",
+    "sev": "crit",
+    "msg": "sentinel :3030 verdict RED"
    },
    {
     "class": "tbt-doctrine-violation",
@@ -132,7 +137,7 @@
    }
   ],
   "data": {
-   "lastEventAgeMin": 0
+   "lastEventAgeMin": 1
   },
   "streaks": {
    "wsDown": 0,
@@ -154,43 +159,22 @@
   "newN": 4
  },
  "lastKeepwarm": {
-  "at": "2026-10-24T04:28:30.261Z",
-  "ok": true,
-  "ms": 73,
-  "bootAt": "2026-10-24T04:27:51.579Z",
-  "gitSha": "e244d1c",
-  "coldStreak": 0
+  "at": "2026-10-24T04:38:30.187Z",
+  "ok": false,
+  "ms": 0,
+  "bootAt": null,
+  "gitSha": null,
+  "coldStreak": 2
  },
- "coldStreak": 0,
+ "coldStreak": 2,
  "alertLedger": {
-  "sentinel-red": 1792814310432,
+  "sentinel-red": 1792816711052,
   "review-llm-unavailable": 1792754373436,
-  "app-down": 1792813710893
+  "app-down": 1792816710820
  },
  "wsDownStreak": 0,
  "staleStreak": 0,
  "history": [
-  {
-   "id": "keepwarm",
-   "at": 1792806810186,
-   "status": "ok",
-   "durationMs": 52,
-   "detail": "HEARTBEAT OK 52ms boot=01:53:00Z sha=aceb1f3"
-  },
-  {
-   "id": "keepwarm",
-   "at": 1792807110187,
-   "status": "error",
-   "durationMs": 1,
-   "detail": "HEARTBEAT COLD app:3000 0ms streak=1"
-  },
-  {
-   "id": "sweep",
-   "at": 1792807110186,
-   "status": "ok",
-   "durationMs": 16,
-   "detail": "RED: app :3000 down"
-  },
   {
    "id": "keepwarm",
    "at": 1792807410186,
@@ -519,6 +503,27 @@
    "status": "ok",
    "durationMs": 92,
    "detail": "AMBER: sentinel :3030 verdict AMBER · toobit-bridge doctrine: 2 violation(s) — last=MIRROR-LAG: card=TP1 but intent still OPEN "
+  },
+  {
+   "id": "keepwarm",
+   "at": 1792816410186,
+   "status": "error",
+   "durationMs": 2,
+   "detail": "HEARTBEAT COLD app:3000 1ms streak=1"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1792816710187,
+   "status": "error",
+   "durationMs": 2,
+   "detail": "HEARTBEAT COLD app:3000 0ms streak=2"
+  },
+  {
+   "id": "sweep",
+   "at": 1792816710187,
+   "status": "ok",
+   "durationMs": 865,
+   "detail": "RED: app :3000 down"
   }
  ],
  "watchRuns": [
