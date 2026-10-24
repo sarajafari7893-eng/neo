@@ -4,8 +4,14 @@
 // Cheapest: two extra columns on existing records." This module writes those
 // columns at deploy time: the detection/scan reference price the chase gate
 // anchored on, the actual entry, direction-adjusted adverse slippage in bps,
-// and (radar path) detection→deploy latency. One row per signal (unique).
+// and detection→deploy latency. One row per signal (unique).
 // Fire-and-forget: a ledger failure can never block a deploy.
+// P1-b ENTRY-DELAY TELEMETRY (audit 2026-10-25: 962/962 window rows were
+// refSource='none', slipBps=0, latencyMs=NULL): the caller now labels the
+// detection path explicitly (refSource) and the scan path feeds its REAL
+// detection instant (frozen MTF snapshot `at`, FlowScan.updatedAt fallback)
+// so latencyMs measures board→deploy lag instead of dying at NULL. slipBps
+// math unchanged.
 
 import { db } from "@/lib/db";
 
@@ -14,9 +20,10 @@ export interface FillRecordInput {
   symbol: string;
   engine: string;
   direction: string;
-  refPrice: number | null; // chase-gate anchor (detection instant for radar)
+  refPrice: number | null; // chase-gate anchor (radar track anchorPrice / scan tick)
   entryPrice: number;
-  detectedAt?: number | null; // epoch ms, radar path only
+  detectedAt?: number | null; // epoch ms — radar track.detectedAt, or scan board-snapshot instant
+  refSource?: "radar-anchor" | "scan" | "none"; // P1-b: explicit detection-path label from the caller
   createdAtMs: number;
 }
 
@@ -26,8 +33,14 @@ export function recordFillLedger(r: FillRecordInput): void {
     const isLong = r.direction !== "SHORT";
     // adverse slippage, direction-adjusted: positive = paid WORSE than detection
     const slipBps = ref > 0 ? ((r.entryPrice - ref) / ref) * 10_000 * (isLong ? 1 : -1) : 0;
+    // P1-b KPI: latencyMs = signal.createdAt − detectionInstant. Scan path =
+    // board→deploy lag (the operator's standing entry-delay complaint, now
+    // measured); radar path = track detection→deploy.
     const latencyMs = r.detectedAt ? Math.max(0, r.createdAtMs - r.detectedAt) : null;
-    const refSource = r.detectedAt ? "radar-anchor" : Math.abs(r.entryPrice - ref) < 1e-12 ? "none" : "scan";
+    // P1-b: the explicit caller label wins; legacy heuristic keeps any old
+    // caller (no refSource) honest.
+    const refSource =
+      r.refSource ?? (r.detectedAt ? "radar-anchor" : Math.abs(r.entryPrice - ref) < 1e-12 ? "none" : "scan");
     await db.fillLedger.upsert({
       where: { signalId: r.signalId },
       create: {

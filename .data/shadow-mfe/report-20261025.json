@@ -1,0 +1,281 @@
+{
+  "task": "P1-a",
+  "title": "Shadow MFE-capture replay — TP1/BE-BANK harvest headroom (first-order)",
+  "generatedAtUTC": "2026-10-24T22:47:57.803Z",
+  "readonly": true,
+  "window": {
+    "fromISO": "2026-10-09T20:30:00Z",
+    "filter": "createdAt >= T0 (epoch-ms) AND qualityFlag IS NULL",
+    "cleanRows": 974,
+    "eraSplit": {
+      "PEAK": 382,
+      "REST": 592
+    },
+    "statuses": {
+      "SL": 431,
+      "EXPIRED": 450,
+      "TP3": 37,
+      "CLOSED": 55,
+      "ACTIVE": 1
+    },
+    "beBankedRows": 456
+  },
+  "ladder": {
+    "source": "src/lib/accounting.ts LADDER_TRANCHES (imported and applied by engine.ts resolveSignals v6.6 tranche settlement)",
+    "weights": {
+      "W_tp1": 0.5,
+      "W_tp2": 0.3,
+      "W_tp3_runner": 0.2,
+      "note": "fractions sum to 1.0"
+    },
+    "tp1R55": "v12.6 (worklog OP-TP-RERANK-1020): TP1 rung DISTANCE moved 1R→0.55R (gate tp1RMult=0.55, cohort tag TP1-R55) — rung placement only; tranche weights unchanged",
+    "beBank": {
+      "beBankFrac": 0.25,
+      "semantics": "v11.2 BE-BANK (engine.ts): on unbanked signals 25% of the position banks at the BE-arm mark (beBankedMovePct, UNLEVERED); post-bank the ladder rescales by (1−f_b): TP1 = 0.5×0.75 = 0.375 of full book"
+    }
+  },
+  "model": {
+    "space": "levered NET % (pnlPercent/maxPnlPercent native; beBankedMovePct × leverage)",
+    "fired_row_no_be": "est = W_TP1×T + (1−W_TP1)×pnl×(1/(1−W_TP1))  ≡ 0.5×T + pnl",
+    "fired_row_with_be": "est = f_b×(beBankedMovePct×lev) + W_TP1×(1−f_b)×T + (1−f_b)×(1−W_TP1)×pnl×(1/(1−W_TP1))  (f_b=0.25 → 0.25×mBE_lev + 0.375×T + 0.75×pnl)",
+    "not_fired_row": "est = pnlPercent (runs exactly as it actually did)",
+    "keptPct": "estNet / mfeNet × 100 where mfeNet = Σ marginUsd×maxPnlPercent/100"
+  },
+  "assumptions": [
+    "STORED MFE IS A SINGLE MAX, NOT A PRICE PATH — first-order model only: drawdown after the T-fire, TP2/runner touch order and path shape are unknowable from the ledger.",
+    "Remaining book after the T-rung proxies the row's ACTUAL terminal pnlPercent (task formula) — path-blind.",
+    "OPTIMISM BIAS: rows whose actual pnlPercent already embeds banked tranches (reachedTp≥1 / BE-banked) re-earn those banked dollars on the remaining fraction — treat deltas as an upper-first-order bound, not a prediction.",
+    "FEES IGNORED: T-bank/BE-bank treated as NET fills; real extra exit fills would add taker fees + funding (actual pnlPercent is NET) — est is slightly flattered.",
+    "Zero slippage assumed at the T-rung (banked exactly at T).",
+    "BE-bank tranche priced at the RECORDED arm mark (beBankedMovePct×leverage) — evidence, not simulation.",
+    "One ACTIVE row included at its current pnlPercent; sanity verified: T=1e9 collapses est to the actual ledger exactly before this report was written."
+  ],
+  "sanity": {
+    "threshold": 1000000000,
+    "pass": true,
+    "note": "No row fires at T beyond max MFE → est collapses to the actual ledger (verified per era before writing)."
+  },
+  "mfeNetByEra": {
+    "PEAK": 657.9,
+    "REST": 852.41,
+    "COMBINED": 1510.31
+  },
+  "results": [
+    {
+      "era": "PEAK",
+      "T": null,
+      "scenario": "ACTUAL (baseline ledger)",
+      "n": 382,
+      "fired": 0,
+      "estNet": 143.42,
+      "actNet": 143.42,
+      "delta": 0,
+      "keptPct": 21.8,
+      "actKeptPct": 21.8
+    },
+    {
+      "era": "PEAK",
+      "T": 20,
+      "scenario": "TP1 fires at 20% NET",
+      "n": 382,
+      "fired": 97,
+      "estNet": 205.06,
+      "actNet": 143.42,
+      "delta": 61.64,
+      "keptPct": 31.2,
+      "actKeptPct": 21.8
+    },
+    {
+      "era": "PEAK",
+      "T": 30,
+      "scenario": "TP1 fires at 30% NET",
+      "n": 382,
+      "fired": 66,
+      "estNet": 195.19,
+      "actNet": 143.42,
+      "delta": 51.77,
+      "keptPct": 29.7,
+      "actKeptPct": 21.8
+    },
+    {
+      "era": "PEAK",
+      "T": 40,
+      "scenario": "TP1 fires at 40% NET",
+      "n": 382,
+      "fired": 45,
+      "estNet": 181.1,
+      "actNet": 143.42,
+      "delta": 37.68,
+      "keptPct": 27.5,
+      "actKeptPct": 21.8
+    },
+    {
+      "era": "PEAK",
+      "T": 50,
+      "scenario": "TP1 fires at 50% NET",
+      "n": 382,
+      "fired": 33,
+      "estNet": 174.83,
+      "actNet": 143.42,
+      "delta": 31.41,
+      "keptPct": 26.6,
+      "actKeptPct": 21.8
+    },
+    {
+      "era": "PEAK",
+      "T": 60,
+      "scenario": "TP1 fires at 60% NET",
+      "n": 382,
+      "fired": 21,
+      "estNet": 165.39,
+      "actNet": 143.42,
+      "delta": 21.97,
+      "keptPct": 25.1,
+      "actKeptPct": 21.8
+    },
+    {
+      "era": "REST",
+      "T": null,
+      "scenario": "ACTUAL (baseline ledger)",
+      "n": 592,
+      "fired": 0,
+      "estNet": 18.32,
+      "actNet": 18.32,
+      "delta": 0,
+      "keptPct": 2.1,
+      "actKeptPct": 2.1
+    },
+    {
+      "era": "REST",
+      "T": 20,
+      "scenario": "TP1 fires at 20% NET",
+      "n": 592,
+      "fired": 131,
+      "estNet": 116.16,
+      "actNet": 18.32,
+      "delta": 97.84,
+      "keptPct": 13.6,
+      "actKeptPct": 2.1
+    },
+    {
+      "era": "REST",
+      "T": 30,
+      "scenario": "TP1 fires at 30% NET",
+      "n": 592,
+      "fired": 89,
+      "estNet": 104.06,
+      "actNet": 18.32,
+      "delta": 85.74,
+      "keptPct": 12.2,
+      "actKeptPct": 2.1
+    },
+    {
+      "era": "REST",
+      "T": 40,
+      "scenario": "TP1 fires at 40% NET",
+      "n": 592,
+      "fired": 59,
+      "estNet": 84.9,
+      "actNet": 18.32,
+      "delta": 66.58,
+      "keptPct": 10,
+      "actKeptPct": 2.1
+    },
+    {
+      "era": "REST",
+      "T": 50,
+      "scenario": "TP1 fires at 50% NET",
+      "n": 592,
+      "fired": 40,
+      "estNet": 69.18,
+      "actNet": 18.32,
+      "delta": 50.87,
+      "keptPct": 8.1,
+      "actKeptPct": 2.1
+    },
+    {
+      "era": "REST",
+      "T": 60,
+      "scenario": "TP1 fires at 60% NET",
+      "n": 592,
+      "fired": 33,
+      "estNet": 71.41,
+      "actNet": 18.32,
+      "delta": 53.09,
+      "keptPct": 8.4,
+      "actKeptPct": 2.1
+    },
+    {
+      "era": "COMBINED",
+      "T": null,
+      "scenario": "ACTUAL (baseline ledger)",
+      "n": 974,
+      "fired": 0,
+      "estNet": 161.73,
+      "actNet": 161.73,
+      "delta": 0,
+      "keptPct": 10.7,
+      "actKeptPct": 10.7
+    },
+    {
+      "era": "COMBINED",
+      "T": 20,
+      "scenario": "TP1 fires at 20% NET",
+      "n": 974,
+      "fired": 228,
+      "estNet": 321.22,
+      "actNet": 161.73,
+      "delta": 159.48,
+      "keptPct": 21.3,
+      "actKeptPct": 10.7
+    },
+    {
+      "era": "COMBINED",
+      "T": 30,
+      "scenario": "TP1 fires at 30% NET",
+      "n": 974,
+      "fired": 155,
+      "estNet": 299.25,
+      "actNet": 161.73,
+      "delta": 137.51,
+      "keptPct": 19.8,
+      "actKeptPct": 10.7
+    },
+    {
+      "era": "COMBINED",
+      "T": 40,
+      "scenario": "TP1 fires at 40% NET",
+      "n": 974,
+      "fired": 104,
+      "estNet": 266,
+      "actNet": 161.73,
+      "delta": 104.27,
+      "keptPct": 17.6,
+      "actKeptPct": 10.7
+    },
+    {
+      "era": "COMBINED",
+      "T": 50,
+      "scenario": "TP1 fires at 50% NET",
+      "n": 974,
+      "fired": 73,
+      "estNet": 244.01,
+      "actNet": 161.73,
+      "delta": 82.27,
+      "keptPct": 16.2,
+      "actKeptPct": 10.7
+    },
+    {
+      "era": "COMBINED",
+      "T": 60,
+      "scenario": "TP1 fires at 60% NET",
+      "n": 974,
+      "fired": 54,
+      "estNet": 236.8,
+      "actNet": 161.73,
+      "delta": 75.06,
+      "keptPct": 15.7,
+      "actKeptPct": 10.7
+    }
+  ]
+}

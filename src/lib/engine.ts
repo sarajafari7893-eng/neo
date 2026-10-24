@@ -3654,7 +3654,29 @@ export async function deploySignal(symbol?: string, directionHint?: "LONG" | "SH
 
   await fireEvent(sig.id, sig.symbol, "CREATED", "ai", `[NX-${String(serial).padStart(4, "0")}] ${direction} ${sig.symbol} deployed @ ${sig.entryPrice} — ${conf.strategy} ${timeframe}${opts?.triggerTag ? " · EVENT-TRIGGER spawn" : ""} · conviction ${conviction}% (flow ${chosenFlow.score >= 0 ? "+" : ""}${chosenFlow.score}) · R:R 1:${rr} · flow ${chosenFlow.verdict.toLowerCase()} (OI ${chosenFlow.metrics.oiDelta1h !== null ? `${chosenFlow.metrics.oiDelta1h >= 0 ? "+" : ""}${chosenFlow.metrics.oiDelta1h.toFixed(2)}%/1h` : "n/a"} · funding ${chosenFlow.metrics.funding8h !== null ? `${chosenFlow.metrics.funding8h.toFixed(4)}%/8h` : "n/a"})${chosen.regimeTag !== "REGIME-UNKNOWN" ? ` · ${chosen.regimeTag.replace("REGIME-", "")}` : ""}${crowdCut ? " · crowd-cut regime" : ""}${opts?.forced ? " · OPERATOR-FORCED (gates bypassed)" : ""}${opts?.calCapture ? " · RAW-CAL CAPTURE (unfiltered, calibration sample)" : ""}${opts?.authorityBypass ? " · RADAR DIRECT AUTHORITY (unfiltered emission — operator mandate; honesty rails only)" : ""}${opts?.radarLane ? " · R6 RADAR LANE (success-renom cohort — mood gates bypassed, all physical gates live, probation-governed)" : ""}${chosenFlow.blind ? " · FLOW-BLIND (NO-DATA)" : ""}`);
   // v8.4 R5 — journal the shadow pair (live vs research ladder) for settle-time replay
-  // Task 79 FILL LEDGER — doctrine ②: intended (chase anchor) vs filled entry + latency
+  // Task 79 FILL LEDGER — doctrine ②: intended (chase anchor) vs filled entry + latency.
+  // P1-b ENTRY-DELAY TELEMETRY (operator mandate; audit 2026-10-25: 962/962 window
+  // rows refSource='none', slipBps=0, latencyMs=NULL — unmeasured = unmanageable):
+  //   · radar spawn — pump-dump.ts already threads the PumpTrack context through opts
+  //     (refPrice = track anchorPrice, detectedAt = track.detectedAt) → 'radar-anchor';
+  //     the wiring is intact, the path itself has been starved since the v10.18
+  //     gated-emission consolidation (spawnedSignals 0 across 600 resolved tracks).
+  //   · scan path — the deploy's own frozen MTF snapshot (mtfJson field `at`) is the
+  //     honest detection instant; FlowScan.updatedAt (freshest card of the symbol) is
+  //     the fallback; 'none' only when neither exists.
+  // KPI intent: latencyMs = signal.createdAt − snapshot.at = board→deploy lag — the
+  // measurable proxy of the operator's entry-delay complaint (تاخیر ورود). Telemetry
+  // only: no gate, no margin, no FLAT-10 impact; historical rows are never backfilled.
+  const nowMs = now.getTime();
+  const snapAt = mtfSnapshot?.at;
+  let scanDetectedMs =
+    snapAt != null && Number.isFinite(snapAt) && snapAt > 0 && snapAt <= Date.now() ? Math.round(snapAt) : null;
+  if (scanDetectedMs === null && !opts?.detectedAt) {
+    const fs = await db.flowScan
+      .findFirst({ where: { symbol: asset.symbol }, orderBy: { updatedAt: "desc" }, select: { updatedAt: true } })
+      .catch(() => null);
+    if (fs) scanDetectedMs = fs.updatedAt.getTime();
+  }
   recordFillLedger({
     signalId: sig.id,
     symbol: sig.symbol,
@@ -3662,8 +3684,9 @@ export async function deploySignal(symbol?: string, directionHint?: "LONG" | "SH
     direction,
     refPrice: chaseRef,
     entryPrice: sig.entryPrice,
-    detectedAt: opts?.detectedAt ?? null,
-    createdAtMs: now.getTime(),
+    detectedAt: opts?.detectedAt ?? scanDetectedMs,
+    refSource: opts?.detectedAt ? "radar-anchor" : scanDetectedMs != null ? "scan" : "none",
+    createdAtMs: nowMs,
   });
   if (researchLadder) {
     journalResearchShadowDeploy({
