@@ -3361,6 +3361,25 @@ export async function deploySignal(symbol?: string, directionHint?: "LONG" | "SH
   const mgProbe = mgProbeKeys.has(`${asset.symbol}:${conf.strategy}`);
   let margin = 10; // FLAT-10 — fixed unit margin (operator mandate)
 
+  // v13.1 P2-b NIGHT-SESSION ×0.7 size cap (operator mandate trace 1a16ff36143328fd):
+  // deploys originating in Tehran hours 00:00-02:59 carry a ×0.7 session weight
+  // composed into the FINAL strategy multiplier. Evidence — 15-day audit
+  // (2026-10-25): Tehran 00-02 is the weakest window in the book (n=146,
+  // WR 45%, avg +$0.03/trade) vs book-wide WR 55.1%. Applied AFTER the FLAT-10
+  // margin formula and strictly on the weight layer (multiplicative with
+  // stratW — the same point the v13.1 surrogate ×0.5 cap clamps), never inside
+  // the FLAT-10 formula: the deployed margin stays EXACTLY $10. The session
+  // weight is tag-only sizing telemetry (STRATW-x0.70 auto-tag) + the
+  // SESSION-CAP cohort tag so the hour-of-day cohort stays ledger-sliceable.
+  // NOTE: the mission text carried 19800000 ms (UTC+5:30, Mumbai) — a constant
+  // typo; the mandate semantics is "Tehran hours 00:00-02:59" = UTC+3:30, the
+  // fixed-offset daily-scheduler convention already used by tehranH (R6-EDGE,
+  // +210min), so the correct 12600000 ms (3.5h) constant is used here.
+  const tehranHourDeploy = Math.floor((Date.now() + 12600000) / 3600000) % 24; // Asia/Tehran = UTC+3:30 fixed (12,600,000 ms = 3.5h)
+  const sessionW = tehranHourDeploy <= 2 ? 0.7 : 1.0; // Tehran 00/01/02 → ×0.7, else ×1.0
+  const sessionCapApplied = sessionW !== 1;
+  if (sessionCapApplied) stratW *= sessionW;
+
   // v6.7.2 LEVERED RISK CAP (operator mandate): slDist% × leverage is the real
   // single-trade swing at the stop. Design targeted a constant ~60%; the 20x
   // clamp let tight stops through at 36% (NX-0185) and wide stops 61% (NX-0138)
@@ -3527,6 +3546,10 @@ export async function deploySignal(symbol?: string, directionHint?: "LONG" | "SH
     // v10.6 per-strategy sizing cohort — rows under an ACTIVE strategy weight
     // carry the weight so the ledger can A/B the cohort (FLAT-10: tag-only).
     ...(stratW !== 1 ? [`STRATW-x${stratW.toFixed(2)}`] : []),
+    // v13.1 P2-b night-session cohort — SESSION-CAP: deploy originated in
+    // Tehran hours 00-02 (weakest audit window 2026-10-25: n=146, WR 45%);
+    // the ×0.7 session weight is already composed into the STRATW tag above.
+    ...(sessionCapApplied ? ["SESSION-CAP"] : []),
     // v13.1 P0 SURROGATE data-quality cohorts — SURR-CAP: deploy riding a
     // surrogate (non-BINANCE) flow tape with the strategy weight clamped ×0.5;
     // SURR-BREAKOUT-FORCED: operator-forced override of the SURROGATE-BREAKOUT

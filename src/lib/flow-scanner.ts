@@ -79,6 +79,34 @@ interface FlowCandle {
 const klineFlowCache = new Map<string, { at: number; candles: FlowCandle[]; venue: "BINANCE" | "BYBIT" }>();
 const klineFlowInFlight = new Map<string, Promise<{ candles: FlowCandle[]; venue: "BINANCE" | "BYBIT" } | null>>();
 
+// RAM-SHED round-2 (P2-c): the tracked domain grew to ~900 symbols × 4 TFs ≈
+// 3.6k possible entries; every entry is 72-120 FlowCandle objects (~10-15KB),
+// so one slow tail rotation parks ~40-55MB of mostly-stale klines in the Map
+// between scans (TTL expiry only gates READS — stale entries linger forever).
+// Cap at 600 (hot lane 64×4=256 + recent tail) with oldest-`at` eviction on
+// insert: evicted entries are exactly the ones already past their TF TTL that
+// would refetch on their next rotation anyway. The __nexusShed hook below
+// keeps its exact semantics — the cap just bounds what it has to trim.
+const KLINE_FLOW_CACHE_MAX = 600;
+type KlineFlowEntry = { at: number; candles: FlowCandle[]; venue: "BINANCE" | "BYBIT" };
+function klineFlowCacheSet(key: string, entry: KlineFlowEntry): void {
+  if (!klineFlowCache.has(key)) {
+    while (klineFlowCache.size >= KLINE_FLOW_CACHE_MAX) {
+      let oldestKey: string | null = null;
+      let oldestAt = Number.POSITIVE_INFINITY;
+      for (const [k, v] of klineFlowCache) {
+        if (v.at < oldestAt) {
+          oldestAt = v.at;
+          oldestKey = k;
+        }
+      }
+      if (oldestKey === null) break; // unreachable — Map cannot shrink below empty
+      klineFlowCache.delete(oldestKey);
+    }
+  }
+  klineFlowCache.set(key, entry);
+}
+
 // DATA-REVIVAL 2026-10-21 — silent-starvation fix: when the fapi plane fails
 // (IP-ban 418), the failure is COUNTED and rate-limit-logged, and the scan
 // falls back to the Bybit v5 kline plane with an honest venue tag. The old
@@ -149,7 +177,7 @@ async function fetchKlinesFlow(symbol: string, tf: ScanTf): Promise<{ candles: F
           venue = "BINANCE"; // same venue, SPOT instrument class (vision mirror)
           fbStats.spotOk++;
           warnFallback(`fapi kline unavailable (${symbol} ${tf}) → BINANCE-SPOT mirror (CVD real, spot tape)`);
-          klineFlowCache.set(key, { at: Date.now(), candles: spot, venue });
+          klineFlowCacheSet(key, { at: Date.now(), candles: spot, venue });
           return { candles: spot, venue };
         }
         fbStats.spotOk += 0; // keep the counter shape stable
@@ -159,7 +187,7 @@ async function fetchKlinesFlow(symbol: string, tf: ScanTf): Promise<{ candles: F
           fbStats.bybitOk++;
           warnFallback(`spot+mirror miss (${symbol} ${tf}) → BYBIT perp fallback (CVD null on this row)`);
           const candles = alt.map((k) => ({ openTime: k.openTime, open: k.open, high: k.high, low: k.low, close: k.close, volume: k.volume, takerBuy: NaN }));
-          klineFlowCache.set(key, { at: Date.now(), candles, venue });
+          klineFlowCacheSet(key, { at: Date.now(), candles, venue });
           return { candles, venue };
         }
         fbStats.bybitFail++;
@@ -175,7 +203,7 @@ async function fetchKlinesFlow(symbol: string, tf: ScanTf): Promise<{ candles: F
         volume: Number(k[5]),
         takerBuy: Number(k[9]),
       }));
-      klineFlowCache.set(key, { at: Date.now(), candles, venue: "BINANCE" });
+      klineFlowCacheSet(key, { at: Date.now(), candles, venue: "BINANCE" });
       return { candles, venue: "BINANCE" as const };
     } catch {
       return null;
@@ -285,6 +313,33 @@ let boardLoaded = false;
 let lastScanAt = 0;
 let scanInFlight = false;
 const shiftLastAt = new Map<string, number>();
+
+// RAM-SHED round-2 (P2-c): board churn-guard. Entries are small (~1KB) but the
+// Map grows with every distinct symbol ever scanned (universe ~900 and
+// growing — delisted symbols never leave). Cap 1024 (≈2× the hot universe)
+// with oldest-`at` eviction: evicted rows are far past the 20min peek TTL
+// (peekSymbolFlow already returns null for them) and the rotation's
+// oldest-board-first sort treats a missing row exactly like a stale one
+// (+∞ age → first in line for a re-scan). DB (flowscan.board / FlowScan rows)
+// stays the durable source of truth — loadBoard refills ≤64 rows at boot.
+const BOARD_MAX = 1024;
+function boardSet(symbol: string, rollup: MtfRollup): void {
+  if (!board.has(symbol)) {
+    while (board.size >= BOARD_MAX) {
+      let oldestKey: string | null = null;
+      let oldestAt = Number.POSITIVE_INFINITY;
+      for (const [k, v] of board) {
+        if (v.at < oldestAt) {
+          oldestAt = v.at;
+          oldestKey = k;
+        }
+      }
+      if (oldestKey === null) break;
+      board.delete(oldestKey);
+    }
+  }
+  board.set(symbol, rollup);
+}
 
 // ── RAM-SHED hook (RAM-SHED-20261024) ──────────────────────────────────────
 // The instrumentation RSS governor calls this under memory pressure. The
@@ -399,7 +454,7 @@ export async function maybeFlowScan(symbols: string[]): Promise<void> {
     for (const symbol of batch) {
       const rollup = await scanSymbol(symbol).catch(() => null);
       if (!rollup) continue;
-      board.set(symbol, rollup);
+      boardSet(symbol, rollup);
       for (const t of rollup.tfs) {
         const data = {
           score: t.score,
@@ -436,7 +491,7 @@ export async function refreshSymbolFlow(symbol: string): Promise<MtfRollup | nul
     await loadBoard();
     const rollup = await scanSymbol(symbol).catch(() => null);
     if (!rollup) return null;
-    board.set(symbol, rollup);
+    boardSet(symbol, rollup);
     for (const t of rollup.tfs) {
       const data = {
         score: t.score,

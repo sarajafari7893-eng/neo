@@ -1,0 +1,379 @@
+{
+  "task": "P2-a",
+  "title": "Confidence calibration study — chi2, GS gate-score, isotonic-style recalibration map, era stability",
+  "generatedAt": "2026-10-24T23:10:05.775Z",
+  "window": {
+    "fromISO": "2026-10-09T20:30:00Z",
+    "filter": "createdAt >= T0 (epoch-ms) AND qualityFlag IS NULL",
+    "rows": 974,
+    "statuses": {
+      "SL": 431,
+      "EXPIRED": 450,
+      "TP3": 37,
+      "CLOSED": 55,
+      "ACTIVE": 1
+    },
+    "gsUntaggedRows": 249
+  },
+  "definitions": {
+    "win": "realized levered NET pnlPercent > 0 (same convention as the 2026-10-25 fresh audit — reproduces AI-SCALP 30% / MEAN-REVERT 38%)",
+    "avgUsdPerRow": "mean realized $ per row = Σ(margin×pnlPercent/100)/n, losses and zeros included",
+    "netUsd": "Σ margin×pnlPercent/100",
+    "chi2": "homogeneity test vs overall cohort WR; only buckets with n>=8 enter the sum; df = valid buckets − 1; 5% crit: df1=3.84 df2=5.99 df3=7.81 df4=9.49 df5=11.07",
+    "isotonicStyle": "binned recalibration, calibratedWR=(w+1)/(n+2) Laplace-smoothed; monotonicity NOT enforced (non-monotonic curve = evidence against rank-ordering)",
+    "eraSplit": "PEAK = engines NEXUS-LIVE v11.6/11.7/11.8; REST = everything else (same split as P1-a MFE replay)",
+    "snapshotNote": "the live Signal table churns — numbers are point-in-time at script run"
+  },
+  "buckets": {
+    "<55": {
+      "n": 0,
+      "wins": 0,
+      "realizedWR": null,
+      "avgUsdPerRow": 0,
+      "netUsd": 0,
+      "rawConfMid": null
+    },
+    "55-61": {
+      "n": 48,
+      "wins": 23,
+      "realizedWR": 47.92,
+      "avgUsdPerRow": -0.09,
+      "netUsd": -4.44,
+      "rawConfMid": 58
+    },
+    "62-69": {
+      "n": 73,
+      "wins": 44,
+      "realizedWR": 60.27,
+      "avgUsdPerRow": 0.7,
+      "netUsd": 50.87,
+      "rawConfMid": 65.5
+    },
+    "70-77": {
+      "n": 221,
+      "wins": 121,
+      "realizedWR": 54.75,
+      "avgUsdPerRow": -0.06,
+      "netUsd": -12.28,
+      "rawConfMid": 73.5
+    },
+    "78+": {
+      "n": 632,
+      "wins": 349,
+      "realizedWR": 55.22,
+      "avgUsdPerRow": 0.2,
+      "netUsd": 127.6,
+      "rawConfMid": 83.2769
+    }
+  },
+  "gsBuckets": {
+    "<50": {
+      "n": 299,
+      "wins": 165,
+      "realizedWR": 55.18,
+      "avgUsdPerRow": 0.14,
+      "netUsd": 40.52,
+      "rawConfMid": 34.0468
+    },
+    "50-59": {
+      "n": 198,
+      "wins": 111,
+      "realizedWR": 56.06,
+      "avgUsdPerRow": 0.02,
+      "netUsd": 3.91,
+      "rawConfMid": 54.5
+    },
+    "60-69": {
+      "n": 137,
+      "wins": 74,
+      "realizedWR": 54.01,
+      "avgUsdPerRow": 0.15,
+      "netUsd": 21.22,
+      "rawConfMid": 64.5
+    },
+    "70+": {
+      "n": 91,
+      "wins": 53,
+      "realizedWR": 58.24,
+      "avgUsdPerRow": 0.46,
+      "netUsd": 41.56,
+      "rawConfMid": 73.3846
+    }
+  },
+  "chi2": {
+    "confidence": {
+      "cohortN": 974,
+      "cohortWR": 55.13,
+      "chi2": 1.8055,
+      "df": 3,
+      "crit5pct": 7.81,
+      "pValueApprox": 0.6179,
+      "validBuckets": [
+        "55-61",
+        "62-69",
+        "70-77",
+        "78+"
+      ],
+      "dead": true
+    },
+    "gs": {
+      "cohortN": 725,
+      "cohortWR": 55.59,
+      "chi2": 0.4346,
+      "df": 3,
+      "crit5pct": 7.81,
+      "pValueApprox": 0.9295,
+      "validBuckets": [
+        "<50",
+        "50-59",
+        "60-69",
+        "70+"
+      ],
+      "dead": true
+    },
+    "note": "expected = overall WR of the analyzed cohort (all rows for confidence; GS-tagged rows for GS)"
+  },
+  "isotonicMap": {
+    "confidence": {
+      "<55": {
+        "n": 0,
+        "rawConfMid": null,
+        "realizedWR": null,
+        "calibratedWR": null
+      },
+      "55-61": {
+        "n": 48,
+        "rawConfMid": 58,
+        "realizedWR": 47.92,
+        "calibratedWR": 48
+      },
+      "62-69": {
+        "n": 73,
+        "rawConfMid": 65.5,
+        "realizedWR": 60.27,
+        "calibratedWR": 60
+      },
+      "70-77": {
+        "n": 221,
+        "rawConfMid": 73.5,
+        "realizedWR": 54.75,
+        "calibratedWR": 54.71
+      },
+      "78+": {
+        "n": 632,
+        "rawConfMid": 83.2769,
+        "realizedWR": 55.22,
+        "calibratedWR": 55.21
+      }
+    },
+    "gs": {
+      "<50": {
+        "n": 299,
+        "rawConfMid": 34.0468,
+        "realizedWR": 55.18,
+        "calibratedWR": 55.15
+      },
+      "50-59": {
+        "n": 198,
+        "rawConfMid": 54.5,
+        "realizedWR": 56.06,
+        "calibratedWR": 56
+      },
+      "60-69": {
+        "n": 137,
+        "rawConfMid": 64.5,
+        "realizedWR": 54.01,
+        "calibratedWR": 53.96
+      },
+      "70+": {
+        "n": 91,
+        "rawConfMid": 73.3846,
+        "realizedWR": 58.24,
+        "calibratedWR": 58.06
+      }
+    }
+  },
+  "eraStability": {
+    "rule": "bucket STABLE when both-era n>=8 and |z| <= 1.96, and the combined calibrated curve is non-decreasing; else UNSTABLE",
+    "confidence": {
+      "eraSplit": {
+        "PEAK": 382,
+        "REST": 592
+      },
+      "tables": {
+        "PEAK": {
+          "<55": {
+            "n": 0,
+            "wins": 0,
+            "realizedWR": null,
+            "sufficient": false,
+            "zVsOtherEra": null,
+            "significant": null
+          },
+          "55-61": {
+            "n": 5,
+            "wins": 3,
+            "realizedWR": 60,
+            "sufficient": false,
+            "zVsOtherEra": null,
+            "significant": null
+          },
+          "62-69": {
+            "n": 17,
+            "wins": 8,
+            "realizedWR": 47.06,
+            "sufficient": true,
+            "zVsOtherEra": -1.2579,
+            "significant": false
+          },
+          "70-77": {
+            "n": 85,
+            "wins": 47,
+            "realizedWR": 55.29,
+            "sufficient": true,
+            "zVsOtherEra": 0.1283,
+            "significant": false
+          },
+          "78+": {
+            "n": 275,
+            "wins": 168,
+            "realizedWR": 61.09,
+            "sufficient": true,
+            "zVsOtherEra": 2.627,
+            "significant": true
+          }
+        },
+        "REST": {
+          "<55": {
+            "n": 0,
+            "wins": 0,
+            "realizedWR": null,
+            "sufficient": false,
+            "zVsOtherEra": null,
+            "significant": null
+          },
+          "55-61": {
+            "n": 43,
+            "wins": 20,
+            "realizedWR": 46.51,
+            "sufficient": true,
+            "zVsOtherEra": null,
+            "significant": null
+          },
+          "62-69": {
+            "n": 56,
+            "wins": 36,
+            "realizedWR": 64.29,
+            "sufficient": true,
+            "zVsOtherEra": -1.2579,
+            "significant": false
+          },
+          "70-77": {
+            "n": 136,
+            "wins": 74,
+            "realizedWR": 54.41,
+            "sufficient": true,
+            "zVsOtherEra": 0.1283,
+            "significant": false
+          },
+          "78+": {
+            "n": 357,
+            "wins": 181,
+            "realizedWR": 50.7,
+            "sufficient": true,
+            "zVsOtherEra": 2.627,
+            "significant": true
+          }
+        }
+      },
+      "significantBuckets": [
+        "78+"
+      ],
+      "orderPreserved": false,
+      "stable": false,
+      "rule": "bucket STABLE when both-era n>=8 and |z| <= 1.96, and the combined calibrated curve is non-decreasing; else UNSTABLE"
+    },
+    "gs": {
+      "eraSplit": {
+        "PEAK": 382,
+        "REST": 343
+      },
+      "tables": {
+        "PEAK": {
+          "<50": {
+            "n": 113,
+            "wins": 67,
+            "realizedWR": 59.29,
+            "sufficient": true,
+            "zVsOtherEra": 1.1201,
+            "significant": false
+          },
+          "50-59": {
+            "n": 115,
+            "wins": 69,
+            "realizedWR": 60,
+            "sufficient": true,
+            "zVsOtherEra": 1.3161,
+            "significant": false
+          },
+          "60-69": {
+            "n": 87,
+            "wins": 49,
+            "realizedWR": 56.32,
+            "sufficient": true,
+            "zVsOtherEra": 0.7145,
+            "significant": false
+          },
+          "70+": {
+            "n": 67,
+            "wins": 41,
+            "realizedWR": 61.19,
+            "sufficient": true,
+            "zVsOtherEra": 0.9474,
+            "significant": false
+          }
+        },
+        "REST": {
+          "<50": {
+            "n": 186,
+            "wins": 98,
+            "realizedWR": 52.69,
+            "sufficient": true,
+            "zVsOtherEra": 1.1201,
+            "significant": false
+          },
+          "50-59": {
+            "n": 83,
+            "wins": 42,
+            "realizedWR": 50.6,
+            "sufficient": true,
+            "zVsOtherEra": 1.3161,
+            "significant": false
+          },
+          "60-69": {
+            "n": 50,
+            "wins": 25,
+            "realizedWR": 50,
+            "sufficient": true,
+            "zVsOtherEra": 0.7145,
+            "significant": false
+          },
+          "70+": {
+            "n": 24,
+            "wins": 12,
+            "realizedWR": 50,
+            "sufficient": true,
+            "zVsOtherEra": 0.9474,
+            "significant": false
+          }
+        }
+      },
+      "significantBuckets": [],
+      "orderPreserved": false,
+      "stable": false,
+      "rule": "bucket STABLE when both-era n>=8 and |z| <= 1.96, and the combined calibrated curve is non-decreasing; else UNSTABLE"
+    },
+    "verdict": "UNSTABLE — confidence + GS mapping differs by era (significant buckets: 78+; order preserved: conf=false gs=false) → a single global calibration map is NOT trustworthy; recalibration must be era-aware or re-fit on rolling windows"
+  },
+  "verdict": "CONFIDENCE chi2-DEAD CONFIRMED: chi2=1.8055 df=3 crit=7.81 (p≈0.6179) — bucket WRs indistinguishable from the 55.13% overall WR; GS gate-score chi2=0.4346 df=3 crit=7.81 (p≈0.9295) on cohort n=725 → also DEAD (does not discriminate outcomes); calibrated curves monotonic: confidence realized=false/calibrated=false, GS realized=false/calibrated=false; era stability: UNSTABLE — confidence + GS mapping differs by era (significant buckets: 78+; order preserved: conf=false gs=false) → a single global calibration map is NOT trustworthy; recalibration must be era-aware or re-fit on rolling windows; CONSEQUENCE: raw confidence must NOT feed sizing/conviction; the attached Laplace-smoothed isotonic map is the honest per-bucket recalibration for shadow evaluation only (EngineSetting enabled:false, telemetry-only)."
+}
