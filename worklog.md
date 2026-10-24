@@ -32228,3 +32228,24 @@ Stage Summary:
 - پاسخ ۱: اوج 14-18 = تیپ بومی ۱۰۰٪ + هسته سریع + رژیم SHORT — قابل بازتولید؛ سقوط با بن fapi + موج v12.0 هم‌زمان شد، نه مرگ هسته
 - پاسخ ۲: نه — سه درس لازم ولی ناکافی؛ سه لایه تازه: رژیم کیفیت داده (اولین متغیر ساختاری)، شکاف برداشت MFE، لایه امتیاز غیرپیش‌بین + دو شکاف تله‌متری (delay/slip)؛ کیفیت 85% اثر مستقیم دارد: Δ$0.45/ترید + زنده‌شدن BREAKOUT + مسلح‌شدن حلقه یادگیری
 - پاسخ ۳: گام‌های P0 (fapi-unban، سایز-گیت SURROGATE، احیای fwd-settle) و P1 (شکار MFE سایه، تله‌متری تاخیر، توازن کلاس) و P2 (بازکالیبراسیون confidence، سیاست ساعتی، RAM-SHED round-2) — بدون دست‌زدن به هسته/FLAT-10
+
+---
+Task ID: P0-a
+Agent: general-purpose (P0-a گیت کیفیت داده SURROGATE)
+Task: اجرای گیت سختِ کیفیت داده SURROGATE-FLOW در مسیر دیپلوی موتور (مأموریت اپراتور P0، trace 1a16ff36143328fd — شواهد ممیزی ۱۵روزهٔ 2026-10-25: جریان surrogate n=186 خالص −$36.63 در برابر Binance-native n=788 خالص +$197.88؛ BREAKOUT روی تیپ native WR 64% +$110.45 (n=188) ولی روی surrogate WR 35% −$33.07 (n=31))
+
+Work Log:
+- خواندن worklog (۱۵۰ خط آخر) + flow.ts: سورجیت از فیلد `source?: FlowSource | "MIXED"` روی FlowAssessment تشخیص داده می‌شود (BINANCE | SPOT-MIRROR | BYBIT) — همان تعریف established کپ v12.8 «SURROGATE-FLOW» در flow.ts: هر source ≠ BINANCE سورجیت است (SPOT-MIRROR هم تیپ اسپات است نه پرپ fapi؛ MIXED هم همین‌طور)
+- مرور زنجیرهٔ گیت‌های deploy-signal در engine.ts (الگوی STALE-CHASE v13.0 به‌عنوان نزدیک‌ترین پیشینه) + gate-journal.ts (بلوک‌ها با recordGateBlock → k='b' در .data/gate-journal.jsonl)
+- گیت جدید ① وتو: source ≠ BINANCE و strategy === BREAKOUT و NOT operator-forced → رد دیپلوی با 409؛ ژورنال k='b' با گیت جدید "SURROGATE-BREAKOUT" (union گسترش یافت) و reason آغازشده با «SURROGATE-BREAKOUT:»؛ near-miss paper-track برای پادسانسور (کوهورت ردشده قابل اندازه‌گیری می‌ماند)؛ fireEvent اخطار با throttle 10min
+- گیت جدید ② کپ: source ≠ BINANCE با هر استراتژی دیگر → stratW نهایی با ×0.5 کلمپ می‌شود (min(stratW, 0.5)) و تگ "SURR-CAP" به tags اضافه می‌شود (تگ STRATW-x0.50 خودکار می‌نشیند)؛ FLAT-10 دست‌نخورده — stratW زیر FLAT-10 فقط tag-only است
+- کامنت انگلیسی شواهد‌محور (اعداد بالا + ممیزی 2026-10-25 + مأموریت اپراتور P0) در سر گیت؛ گیت آگاهانه پشت EngineSetting «core-revert» نیست (آن فلپ فقط مالک پشتهٔ بازنشستهٔ v12.8 است؛ این یک گیت P0 جدید مستقل است) — تنظیم core-revert دست‌نخورده ماند
+- بامپ ENGINE_VERSION: «NEXUS-LIVE v13.0» → «NEXUS-LIVE v13.1» با کامنت یک‌خطی (operator mandate trace 1a16ff36143328fd)
+- انحراف مصوب از مأموریت (تقریباً هیچ): دیپلوی operator-forced BREAKOUT روی تیپ سورجیت از وتو عبور می‌کند (دکترین audited-override همهٔ گیت‌های سخت) ولی تگ "SURR-BREAKOUT-FORCED" می‌گیرد تا کوهورت override در لجر قابل اسلایس باشد (هم‌الگوی SINGLE-VENUE-FORCED / REARM-BRAKE)
+- دست‌نخورده‌ها: FLAT-10 (margin=$10)، core-revert، volCause.ts، instrumentation.ts (مالک موج دیگر)، prisma، داشبورد/API
+- راستی‌آزمایی: lint = ۱۷ (baseline — همه در scripts/* قدیمی؛ صفر خطای جدید در engine.ts/gate-journal.ts)؛ dev.log صفر «Failed to compile/Type error» (فقط وارنینگ‌های قدیمی Edge-Runtime instrumentation.ts)؛ اپ در میانهٔ راستی‌آزمایی یک recycle کنترل‌شدهٔ خودِ فرماندار RAM داشت و watchdog در ~۶۰s بازگرداند (ریتم شناخته‌شده، بی‌ربط به تغییر)؛ healthz پس از بوت: ok:true؛ نسخهٔ زندهٔ موتور از /api/signals → meta.engine = «NEXUS-LIVE v13.1» (تأیید کامپایل داغ) — فیلد engineVer در healthz اصلاً وجود ندارد (healthz فقط mem/watchdog/lineage می‌دهد) پس نسخه از API سیگنال‌ها استخراج شد؛ sanity ایستا: شکل ردِ گیت ({error, status:409}) یکسان با بقیهٔ گیت‌ها، ژورنال k='b' برقرار
+- یادداشت صادقانه: تا لحظهٔ commit هنوز هیچ دیپلوی BREAKOUT-روی-سورجیت رخ نداده تا گیت شلیک واقعی کند — اولین بلوک در gate-journal قابل مشاهده خواهد بود؛ فایل کد دیگری (مثل armor خودکار) نباید این commit را سواپ کند
+
+Stage Summary:
+- گیت P0 کیفیت داده SURROGATE در مسیر دیپلوی فعال شد: BREAKOUT+سورجیت = وتوی مطلق (به‌جز override اپراتور با تگ)، سایر استراتژی‌ها روی سورجیت = کپ ×0.5 + تگ SURR-CAP — v13.1
+- commit: 06c21c37 (armor v2 auto-commit — کد engine.ts + gate-journal.ts در آن سواپ و push شد) + این entry در commit پیام‌دار P0-a
