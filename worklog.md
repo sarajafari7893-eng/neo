@@ -32090,3 +32090,25 @@ Stage Summary:
 - گام ۱ و ۲ اپراتور کامل، اثبات‌شده و push شده: VENUE-ONSET-V1211-20261023
 - باقی‌ماندهٔ صادقانه: رامپ بوت هنوز در چند دقیقهٔ اول نوسان دارد (چرخهٔ mem-guard فعال است)؛ اگر بعد از گارد جدید چرخه ادامه یافت، گام بعدی = خط لجر «سقف مسیرهای گرم» (فقط روت‌های ترمینال + موتور گرم بمانند، بقیه lazy) یا ارتقای grace بوت mem-guard به 180s
 - commit: SPIKE-GUARD-V1211-20261023
+
+---
+Task ID: SENTINEL-M0M2-20261024-1222
+Agent: nexus-sentinel
+Task: بررسی وضعیت سیستم (چرا داشبورد پایدار نیست؟ آیا ریست شده؟) + ریشه‌یابی توقف ظاهری ردیابی جریان BIRBUSDT
+
+Work Log:
+- پالس سریع (M0): verdict RED — فقط سرویس app :3000 پایین (tcpOpen=false)؛ price-ws :3003، bridge :3005، liq :3010، trade :3011، watchdog :3020، sentinel :3030 همگی سالم؛ DB سالم (۳۰۷۵ سیگنال / ۸۰۰۰۷ ایونت / orphan=0)؛ freshness-ok با head `bc66edeb` و موتور v12.9
+- چرخه‌ی مرگ‌وبار (thrash loop) کشف شد: spawn → بوت → RSS ~1.79-1.83GB و availMb سقوط به ~120-190 → mem-guard «boot-spike-act» → recycle در ~۳۰ ثانیه از عمر فرآیند → self-pause ~۱۴۰-۱۵۰s → spawn مجدد. اثبات لحظه‌ای: 12:15:09 spawn pid 28602 → 12:15:39 kill؛ rescues1h=20؛ مجموع boot-spike-act=144 و app-spawned=361 در logs/mem-guard.log
+- ۵۹ بار `uncaughtException: AssertionError false==true` از node:internal/deps/undici (Parser.finish / onHttpSocketEnd) در dev.log — Node v24.21.0، قطع TLS وسط پاسخ در فراخوانی‌های خروجی؛ عامل ضربان‌ساز ناپایداری در کنار گارد حافظه
+- کامپایل سرد `/` به ۲۰-۲۵ ثانیه می‌رسد (GET / 200 in 25.3s، compile: 24.5s) — حتی در پنجره‌های زنده، داشبورد «سنگین/فریز» دیده می‌شود
+- پاسخ «آیا ریست شده؟»: بله — فرآیند اپ در یک ساعت گذشته ≥۲۰ بار اجباری recycled شده؛ اما دیتاست و پیکربندی دست‌نخورده‌اند (ریست سرویس، نه ریست سیستم)
+- BIRBUSDT (M2، فقط-خواندنی): ردیابی متوقف نشده است — PricePoint ۲ دقیقه پیش تازه؛ MarketAsset زنده (updatedAt 12:12:35، قیمت 0.17847، change24h +50.15%)؛ VolCauseEvent تا 11:32:53 (LIQ-CASCADE/VOL-ONSET، change24h تا +228%)؛ gate-journal تا 12:12:20 فعال
+- ریشه‌ی «توقف» از نگاه اپراتور: (۱) دیوار وتو — ۲۰۰ بلوک بین 03:35→12:12 که ۱۳۰ مورد (۶۵%) REGIME-CHOP با ارجاع به لجر EQ-100 (LONG −$111.22 اکتبر، TP1-touch فقط ۱۴%)؛ به‌علاوه CHASE-EXTREME 17، DISLOCATION 14، V-REVERSAL 10، STABLE-REGIME 10، REENTRY-WHIPSAW 10، PHANTOM-FEED 5، CASCADE-FREEZE 4؛ (۲) تنها سیگنال تاریخ BIRB یک SHORT @0.07616 ساعت 03:19 بود که SL خورد و قیمت سپس +134% تا 0.178 رفت؛ (۳) کارت‌های FlowScan BIRB ۴ ساعت و ۹ دقیقه کهنه‌اند (چرخش دومرحله‌ای، BIRB از بورد داغ خارج شده؛ cvdPct=null چون BIRB فاقد پلن Binance است — فقط BYBIT+GATE زنده)؛ (۴) خود داشبورد پایین بود و اپراتور وتوهای زنده را نمی‌دید
+- اسکریپت‌های فقط-خواندنی جدید: scripts/sentinel-m0-birb-audit.ts و scripts/sentinel-m2-flow-fresh.ts (الگوی PRAGMA table_info رعایت شد)
+
+Stage Summary:
+- علت ناپایداری داشبورد = حلقه‌ی boot-spike (پیش‌بینی درج‌شده در SPIKE-GUARD-V1211 اکنون محقق شد: «اگر بعد از گارد جدید چرخه ادامه یافت…») + کرش‌های undici + کامپایل سرد ۲۰-۲۵ ثانیه‌ای
+- «توقف ردیابی BIRB» = تصویر ناشی از دیوار وتو (REGIME-CHOP/EQ-100) + کهنگی FlowScan در چرخش سرد + نبودِ داشبورد؛ تله‌متری جریان خود زنده است
+- توصیه‌های P0: (۱) خنثی‌سازی حلقه‌ی بوت — ارتقای grace بوت mem-guard به 180s + معیار بر پایه‌ی availMb و سقف مسیرهای گرم؛ پذیرش: ۳۰ دقیقه بدون boot-spike-act و rescues1h≤2؛ (۲) مهار کرش undici (AbortSignal سراسری/نگهبان process-level)؛ پذیرش: صفر AssertionError در یک ساعت
+- توصیه‌های P1: قاعده‌ی heat-hold برای FlowScan (نماد تا X دقیقه پس از آخرین VolCauseEvent داغ بماند) و بازسازی وتوی مطلق EQ-100 به کالیبراسیون امتیازی (گام ۳ برنامه‌ی قبلی — همان انتقاد اپراتور)
+- اقدام اصلاحی انجام نشد (ناظر فقط مشاهده می‌کند؛ زنجیره‌ی ترمیم خودِ سیستم مالک پنجره‌ی اپ است)
