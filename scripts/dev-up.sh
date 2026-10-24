@@ -278,6 +278,16 @@ bash /home/z/my-project/scripts/mem-guard-up.sh || true
 cd /home/z/my-project/mini-services/warm-loop && nohup bun index.ts >> /home/z/my-project/logs/warm-loop.log 2>&1 &
 echo "[dev-up] warm-loop :3012 spawn issued"
 
+# (4-b) v12.12 card-sentinel :3022 — flow-card freshness governor (operator
+# order «ماژول نظارت کارت‌های کهنه»). Probes app healthz first, skips under RAM
+# pressure; duplicates are harmless but probe-gate anyway.
+if ! curl -sf -m 2 http://127.0.0.1:3022/health >/dev/null 2>&1; then
+  cd /home/z/my-project/mini-services/card-sentinel && nohup bun index.ts >> /home/z/my-project/logs/card-sentinel.log 2>&1 &
+  echo "[dev-up] card-sentinel :3022 spawn issued"
+else
+  echo "[dev-up] card-sentinel :3022 already alive — skip"
+fi
+
 # ── v8.5 (STAB-20261022-a) FOREGROUND CONTRACT — hold for the supervisor ────
 # Everything above (pre-kill gate, mem floor, spawn, pulse wait, self-warm,
 # boot-warmer, watchdog/mem-guard/warm-loop arming) already ran in normal

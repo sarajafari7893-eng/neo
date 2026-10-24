@@ -277,6 +277,29 @@ async function shadowArms() {
   }
 }
 
+// ── flow-card freshness (card-sentinel :3022 state mirror, v1.3.3) ──────────
+function cardsState(): Record<string, unknown> {
+  try {
+    const p = `${ROOT}/.data/card-sentinel-state.json`;
+    const j = JSON.parse(readFileSync(p, "utf8")) as {
+      at?: string; ticks?: number; refreshed1h?: number; failures1h?: number;
+      staleHot?: number; lastTickAt?: number; top?: { symbol: string; ageMin: number; heat: string }[];
+    };
+    const ageSec = j.lastTickAt ? Math.round((Date.now() - j.lastTickAt) / 1000) : -1;
+    return {
+      ok: true,
+      sentinelAgeSec: ageSec,
+      ticks: j.ticks ?? 0,
+      refreshed1h: j.refreshed1h ?? 0,
+      failures1h: j.failures1h ?? 0,
+      staleHot: j.staleHot ?? 0,
+      worst: (j.top ?? []).slice(0, 5),
+    };
+  } catch {
+    return { ok: false, note: "card-sentinel state absent" };
+  }
+}
+
 // ── rawcal state ─────────────────────────────────────────────────────────────
 async function rawcalState() {
   const out: Record<string, unknown> = {};
@@ -449,6 +472,7 @@ async function collect(deep: boolean) {
   const log = await logForensics();
   const shadow = await shadowArms();
   const rawcal = await rawcalState();
+  const cards = cardsState(); // v1.3.3 — card-sentinel :3022 flow-card freshness
   const { verdict, anomalies } = judge({ services, memAvailableMb, diskRootGb, diskTmpGb, db, backup, wd, log });
 
   const snap: Record<string, unknown> = {
@@ -461,7 +485,7 @@ async function collect(deep: boolean) {
     services,
     mem: { availableMb: memAvailableMb },
     disk: { rootFreeGb: diskRootGb, tmpFreeGb: diskTmpGb },
-    db, backup, watchdog: wd, log, shadow, rawcal,
+    db, backup, watchdog: wd, log, shadow, rawcal, cards,
     cures: cureState(), // v1.3.0 — turbopack cache-cure state
     uptimeSec: Math.floor((nowMs() - BOOT) / 1000),
     ver: VER,

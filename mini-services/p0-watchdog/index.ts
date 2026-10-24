@@ -78,7 +78,7 @@ const MEM_CRIT_MB = 250;
 // The 2026-09-20 restore resurrected bridge :3005 / trade :3011 / sentinel :3030
 // WITHOUT guardians — trade ran down for hours unnoticed. All six are now
 // probe+heal covered; heal commands mirror each service's battle-tested start.
-type SvcKey = "app" | "liq" | "ws" | "bridge" | "trade" | "sentinel" | "armor" | "cron" | "stable" | "kw" | "mem" | "warm" | "tbt";
+type SvcKey = "app" | "liq" | "ws" | "bridge" | "trade" | "sentinel" | "armor" | "cron" | "stable" | "kw" | "mem" | "warm" | "tbt" | "cards";
 type Mode = "init" | "ok" | "degraded" | "healing" | "escalated";
 
 interface SvcCfg {
@@ -207,6 +207,17 @@ const SVCS: Record<SvcKey, SvcCfg> = {
     expectNote: "200",
     healCmd: `cd ${ROOT}/mini-services/toobit-bridge && nohup bun index.ts >> ${ROOT}/logs/toobit-bridge.log 2>&1 &`,
   },
+  // v1.5.0 (2026-10-24, SENTINEL-M0M2 → operator order «ماژول نظارت کارت‌های کهنه»):
+  // card-sentinel :3022 — flow-card freshness governor (heat-hold + fast refresh
+  // via :3000/api/internal/flow-refresh). Read-only on the ledger; loopback
+  // writes to the app API only. Plain bun --hot.
+  cards: {
+    label: "card-sentinel :3022",
+    url: "http://127.0.0.1:3022/health",
+    expect: (s) => s === 200,
+    expectNote: "200",
+    healCmd: `cd ${ROOT}/mini-services/card-sentinel && nohup bun index.ts >> ${ROOT}/logs/card-sentinel.log 2>&1 &`,
+  },
 };
 
 interface SvcState {
@@ -237,6 +248,7 @@ const state: Record<SvcKey, SvcState> = {
   mem: freshSvc(), // v1.4.7 two-place rule (MEM-GUARD v2) — DO NOT remove
   warm: freshSvc(), // v1.4.8 two-place rule (Task-45 Q4 warm-loop orphan) — DO NOT remove
   tbt: freshSvc(), // v1.4.9 two-place rule (TOOBIT-BRIDGE) — DO NOT remove
+  cards: freshSvc(), // v1.5.0 two-place rule (CARD-SENTINEL) — DO NOT remove
 };
 function freshSvc(): SvcState {
   return { mode: "init", fails: 0, heals: 0, lastProbeAt: null, lastOkAt: null, lastStatus: null, lastLatencyMs: null, lastDownAt: null, lastHealAt: null, healingUntil: null, nextHealAllowedAt: null, recoveries: 0 };
@@ -634,7 +646,7 @@ try {
   process.exit(0);
 }
 log("info", "boot", { ver: VER, pid: process.pid, port: PORT });
-console.log(`[${tehran()}] ${VER} armed on :${PORT} — app:3000 ws:3003 bridge:3005 liq:3010 trade:3011 sentinel:3030 armor:3016 cron:3015 stable:3017 kw:3018 mem:3019 tbt:3021`);
+console.log(`[${tehran()}] ${VER} armed on :${PORT} — app:3000 ws:3003 bridge:3005 liq:3010 trade:3011 sentinel:3030 armor:3016 cron:3015 stable:3017 kw:3018 mem:3019 tbt:3021 cards:3022`);
 persistState();
 
 process.on("SIGTERM", () => { log("info", "shutdown", { sig: "SIGTERM" }); releaseLock(); process.exit(0); });

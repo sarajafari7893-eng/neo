@@ -396,6 +396,43 @@ export async function maybeFlowScan(symbols: string[]): Promise<void> {
   }
 }
 
+/** v12.12 CARD-SENTINEL (2026-10-24) — on-demand single-symbol refresh that ALSO
+ *  persists the FlowScan DB cards. ensureSymbolFlow() only warms the in-memory
+ *  board; the DB rows the dashboard renders were left to the two-speed rotation,
+ *  so any symbol that cooled off went stale for hours (BIRBUSDT cards 4h9m old
+ *  while its events kept firing — SENTINEL-M0M2 finding #6). One in-flight
+ *  refresh per process; callers rate-limit per symbol (route enforces 90s). */
+let refreshInFlight = false;
+export async function refreshSymbolFlow(symbol: string): Promise<MtfRollup | null> {
+  if (refreshInFlight) return null;
+  refreshInFlight = true;
+  try {
+    await loadBoard();
+    const rollup = await scanSymbol(symbol).catch(() => null);
+    if (!rollup) return null;
+    board.set(symbol, rollup);
+    for (const t of rollup.tfs) {
+      const data = {
+        score: t.score,
+        bias: t.bias,
+        cvdPct: t.cvdPct,
+        trend: t.trend,
+        structure: t.structure,
+        sweep: t.sweep,
+        volZ: t.volZ,
+        atrPct: t.atrPct,
+        funding8h: rollup.funding8h,
+        oiDelta1h: rollup.oiDelta1h,
+      };
+      await db.flowScan.upsert({ where: { symbol_tf: { symbol, tf: t.tf } }, create: { symbol, tf: t.tf, ...data }, update: data });
+    }
+    await persistBoard();
+    return rollup;
+  } finally {
+    refreshInFlight = false;
+  }
+}
+
 /** Sync hot-path read for the deploy scan — returns the cached rollup or null. */
 export function peekSymbolFlow(symbol: string): MtfRollup | null {
   const r = board.get(symbol);
