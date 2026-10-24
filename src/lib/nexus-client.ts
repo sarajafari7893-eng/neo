@@ -43,6 +43,7 @@ export async function nexusMutate<T = { ok?: boolean; error?: string }>(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body ?? {}),
     cache: "no-store",
+    signal: AbortSignal.timeout(30_000), // v12.12 — bounded control-API call (last unbounded fetch in src/lib)
   });
   const payload = (await res.json().catch(() => ({}))) as T & { error?: string };
   if (res.status === 401 || res.status === 403) {

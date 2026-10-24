@@ -128,7 +128,22 @@ const RSS_ACT = 2300;      // sustained (4 ticks = 60s) → preemptive graceful 
 const RSS_SUSTAIN_TICKS = 4;
 const RSS_HARD = 2400;     // single tick → restart now — ALSO ACTS DURING BOOT GRACE (kill-line spike zone)
 const AVAIL_FLOOR = 380;   // with the ~2.1GB app + fleet, ambient avail sits 350-550MB — today's kills happened inside avail valleys; trip earlier, recycle gracefully instead of feeding the OOM loop
-const BOOT_GRACE_MS = 75_000; // was 180s — today's kills ALL landed inside grace; 75s covers the warm plateau, then the governor owns the tape
+// v12.12 BOOT-TREADMILL FIX (2026-10-24, SENTINEL-M0M2 forensics — 144 boot-spike-act kills,
+// rescues1h=20): the v12.8.1 grace rule `availMb < 300` conflicts with THIS box's ambient
+// avail (350-550MB): every boot's Turbopack compile of `/` (20-25s, RSS ~1.8GB) dips avail
+// to 117-201MB → kill → postKill cache prune (<600 gate always true in squeeze) → next
+// boot COLD-recompiles → spike again = infinite treadmill. The 75s grace was a misdiagnosis
+// patch (shortening the window changed nothing — kills landed at ~30s).
+//   NEW grace doctrine: only act when the KERNEL is genuinely about to OOM —
+//   • single tick avail < BOOT_OOM_FLOOR (110 — kernel-kill imminent zone)
+//   • 3 consecutive ticks (45s) avail < BOOT_SUSTAIN_FLOOR (165 — real boot stall, not compile dip)
+//   • RSS ≥ RSS_HARD single tick (unchanged hard line)
+//   A healthy boot now rides through the compile plateau; memRestart keeps the Turbopack
+//   cache on boot-spike reasons so the NEXT boot is warm (smaller spike, shorter compile).
+const BOOT_GRACE_MS = 120_000;         // restored 120s — with kernel-imminent floors, observing the plateau is safe
+const BOOT_OOM_FLOOR = 110;            // single tick inside grace → kernel-kill imminent
+const BOOT_SUSTAIN_FLOOR = 165;        // 3 consecutive ticks inside grace → genuine boot stall
+const BOOT_SUSTAIN_TICKS = 3;
 const RESTARTS_PER_HOUR = 3;
 const CACHE_PRUNE_AVAIL = 900; // prune gate for the rescue path (preemptive restarts ALWAYS prune)
 
@@ -144,6 +159,7 @@ let app = { pid: 0, rssMb: -1, firstSeenAt: 0, parentPids: [] as number[] };
 let samples: { t: number; rss: number; avail: number }[] = [];
 let highRssTicks = 0;
 let lowAvailTicks = 0;
+let bootLowAvailTicks = 0; // v12.12 — consecutive low-avail ticks INSIDE boot grace only
 let restarting = false; // single-flight
 let quarantined = false;
 let quarantinedAt = 0;
@@ -411,7 +427,12 @@ async function memRestart(reason: string): Promise<void> {
     try {
       const pk = readFileSync("/proc/meminfo", "utf8").match(/^MemAvailable:\s+(\d+)\s+kB/m);
       const postKillMb = pk ? Math.round(Number(pk[1]) / 1024) : -1;
-      if (postKillMb >= 0 && postKillMb < 600) {
+      // v12.12 — NEVER prune on boot-spike reasons: the spike IS the compile of
+      // a cold cache; wiping it guarantees the next boot cold-recompiles `/`
+      // (20-25s, ~1.8GB) and re-spikes = the 10-24 treadmill (144 kills).
+      if (reason.startsWith("boot-spike")) {
+        log("info", "cache-kept", { mode: "boot-spike-keep", postKillMb });
+      } else if (postKillMb >= 0 && postKillMb < 600) {
         sh(`rm -rf ${ROOT}/.next/dev/cache`, 30);
         log("info", "cache-pruned", { mode: "avail-gated", postKillMb });
       } else {
@@ -710,7 +731,7 @@ async function tick(): Promise<void> {
   if (found) {
     if (found.pid !== app.pid) {
       app = { pid: found.pid, rssMb: readRssMb(found.pid), firstSeenAt: Date.now(), parentPids: found.parents };
-      highRssTicks = 0; lowAvailTicks = 0;
+      highRssTicks = 0; lowAvailTicks = 0; bootLowAvailTicks = 0;
       log("info", "app-pid-seen", { pid: found.pid, parents: found.parents.slice(0, 2) });
     } else {
       app.rssMb = readRssMb(found.pid);
@@ -728,14 +749,26 @@ async function tick(): Promise<void> {
         const why = highRssTicks >= RSS_SUSTAIN_TICKS ? `RSS ${app.rssMb}MB ≥ ${RSS_ACT}MB sustained` : `avail ${mem.availableMb}MB < ${AVAIL_FLOOR}MB sustained`;
         await memRestart(why);
       }
-    } else if (bootGrace && (app.rssMb >= RSS_HARD || (mem.availableMb >= 0 && mem.availableMb < 300))) {
-      // v12.8.1 — the hard line now ACTS during grace: today's four kernel
-      // kills (11:48-11:58Z, RSS 2.07-2.44GB) all landed inside the old
-      // observe-only grace window. One graceful recycle (snapshot → pause
-      // watchdog → prune → respawn) beats a kernel kill that loses the
-      // process AND corrupts the incremental cache for the next boot.
-      log("warn", "boot-spike-act", { rssMb: app.rssMb, availMb: mem.availableMb, note: `RSS ≥ hard line ${RSS_HARD}MB during boot grace — graceful recycle instead of kernel kill (v12.8.1)` });
-      await memRestart(`boot-spike ${app.rssMb}MB ≥ ${RSS_HARD}MB hard line (grace-window act, v12.8.1)`);
+    } else if (bootGrace) {
+      // v12.12 — act ONLY at kernel-OOM-imminent levels; a normal compile dip
+      // (avail 117-201MB observed 10-24) is OBSERVED, not killed. See constants
+      // block for the treadmill forensics (144 kills, rescues1h=20).
+      const avail = mem.availableMb;
+      if (app.rssMb >= RSS_HARD) {
+        log("warn", "boot-spike-act", { rssMb: app.rssMb, availMb: avail, note: `RSS ≥ hard line ${RSS_HARD}MB during boot grace — graceful recycle instead of kernel kill (v12.12)` });
+        await memRestart(`boot-spike ${app.rssMb}MB ≥ ${RSS_HARD}MB hard line (grace-window act, v12.12)`);
+      } else if (avail >= 0 && avail < BOOT_OOM_FLOOR) {
+        log("warn", "boot-spike-act", { rssMb: app.rssMb, availMb: avail, note: `avail ${avail}MB < ${BOOT_OOM_FLOOR}MB OOM-imminent floor during boot grace (v12.12)` });
+        await memRestart(`boot-spike avail ${avail}MB < ${BOOT_OOM_FLOOR}MB OOM-imminent (grace-window act, v12.12)`);
+      } else if (avail >= 0 && avail < BOOT_SUSTAIN_FLOOR) {
+        bootLowAvailTicks++;
+        if (bootLowAvailTicks >= BOOT_SUSTAIN_TICKS) {
+          log("warn", "boot-spike-act", { rssMb: app.rssMb, availMb: avail, ticks: bootLowAvailTicks, note: `avail < ${BOOT_SUSTAIN_FLOOR}MB sustained ×${bootLowAvailTicks} during boot grace — genuine boot stall (v12.12)` });
+          await memRestart(`boot-spike avail < ${BOOT_SUSTAIN_FLOOR}MB sustained ×${bootLowAvailTicks} (grace-window act, v12.12)`);
+        }
+      } else {
+        bootLowAvailTicks = 0;
+      }
     }
   } else if (!restarting) {
     app = { pid: 0, rssMb: -1, firstSeenAt: 0, parentPids: [] };

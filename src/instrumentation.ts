@@ -5,6 +5,33 @@
 // here avoids yet another separate mini-service process to babysit.
 export async function register(): Promise<void> {
   if (process.env.NEXT_RUNTIME !== "nodejs") return;
+  // ── v12.12 undici TLS-teardown guard (SENTINEL-M0M2-20261024) ─────────────
+  // 59× `uncaughtException: AssertionError false==true` from
+  // node:internal/deps/undici (Parser.finish / TLSSocket.onHttpSocketEnd):
+  // a peer closes the TLS connection mid-response and undici's parser races
+  // its own assertion during cleanup. The response is already dead — the
+  // assertion carries ZERO recovery value, but an unguarded path can take the
+  // whole server down. Swallow ONLY this exact signature (throttled log),
+  // let every other uncaughtException fall through to Next's own handler.
+  try {
+    let undiciSwallowed = 0;
+    let lastUndiciLogAt = 0;
+    process.on("uncaughtException", (err: unknown) => {
+      const isUndiciAssert =
+        err instanceof Error && err.name === "AssertionError" && /undici/.test(err.stack ?? "");
+      if (!isUndiciAssert) return; // not ours — existing handlers own it
+      undiciSwallowed++;
+      const now = Date.now();
+      if (now - lastUndiciLogAt >= 60_000) {
+        lastUndiciLogAt = now;
+        console.warn(
+          `[instrumentation] undici TLS-teardown assertion swallowed ×${undiciSwallowed} — process kept alive (v12.12)`
+        );
+      }
+    });
+  } catch {
+    /* guard must never break boot */
+  }
   try {
     const bridge = await import("./lib/telegram-bridge");
     bridge.startBridgePoller();
