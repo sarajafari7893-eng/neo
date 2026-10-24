@@ -180,4 +180,96 @@ export async function register(): Promise<void> {
   } catch {
     /* rails must never break boot */
   }
+  // ── P0-b FWD-SETTLE cadence (FWD-SETTLE-20261025) ──────────────────────────
+  // Server-side revival of the dead forward-return settle loop. Until now
+  // VolCauseEvent settlement only ran when a dashboard client happened to poll
+  // /api/vol-cause (the VolCauseCard was unmounted by the sensor-bus dormant
+  // consolidation ~09-19 → loop dead for a month), and FuturesSnapshot
+  // settlement head-of-line blocked on unfetchable sparse-era rows. This
+  // cadence is SEPARATE from the ram-shed governor above (that block and its
+  // globalThis state stay untouched): every 15 minutes it settles pending
+  // VolCauseEvent fwd2h/6h + FuturesSnapshot fwd15m/1h/4h, then refreshes the
+  // volcause.study learning row. Turbopack can re-run instrumentation on
+  // HMR/boot → double-registration is guarded by a globalThis flag.
+  try {
+    const g = globalThis as {
+      __nexusFwdSettle?: {
+        ver: string;
+        startedAt: number;
+        runs: number;
+        lastRunAt: number;
+        lastSettled: number;
+        lastError: string | null;
+      };
+    };
+    if (!g.__nexusFwdSettle) {
+      g.__nexusFwdSettle = {
+        ver: "fwd-settle v1.0 (P0-b)",
+        startedAt: Date.now(),
+        runs: 0,
+        lastRunAt: 0,
+        lastSettled: 0,
+        lastError: null,
+      };
+      const st = g.__nexusFwdSettle;
+      const HEARTBEAT_DIR = ".data/settle-loop";
+      const heartbeat = (line: string): void => {
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-require-imports
+          const fs = require("node:fs") as typeof import("node:fs");
+          fs.mkdirSync(HEARTBEAT_DIR, { recursive: true });
+          fs.appendFileSync(`${HEARTBEAT_DIR}/heartbeat.txt`, `${line}\n`);
+        } catch {
+          /* telemetry must never break the cadence */
+        }
+      };
+      const runOnce = async (): Promise<void> => {
+        const at = new Date().toISOString();
+        let vc = 0;
+        let fs = 0;
+        let fail = 0;
+        let err: string | null = null;
+        try {
+          const volCause = await import("./lib/volCause");
+          vc = await volCause.settlePendingVolCauses().catch(() => 0);
+        } catch (e) {
+          err = e instanceof Error ? e.message : String(e);
+        }
+        try {
+          const settle = await import("./lib/futures-snapshot-settle");
+          const r = await settle.settlePendingFuturesSnapshots();
+          fs = r.settled;
+          fail = r.failed;
+          if (r.floorAdvanced) console.warn("[fwd-settle] skip-floor advanced — whole batch unresolvable, queue unblocked");
+        } catch (e) {
+          err = e instanceof Error ? e.message : String(e);
+        }
+        try {
+          const volCause = await import("./lib/volCause");
+          void volCause.learnVolCauses().catch(() => undefined); // refresh the learning row after settlement
+        } catch {
+          /* learning is best-effort */
+        }
+        st.runs++;
+        st.lastRunAt = Date.now();
+        st.lastSettled = vc + fs;
+        st.lastError = err;
+        const line = `${at} volCause=${vc} futures=${fs} failed=${fail}${err ? ` error=${err}` : ""}`;
+        console.log(`[fwd-settle] cadence#${st.runs} ${line}`);
+        heartbeat(line);
+      };
+      // first pass ~90s after boot (stay out of the warm-hydration window),
+      // then a steady 15-minute cadence — both unref'd so they never hold the
+      // process open, both fully try/catch-wrapped inside runOnce.
+      setTimeout(() => {
+        void runOnce().catch(() => undefined);
+      }, 90_000).unref?.();
+      setInterval(() => {
+        void runOnce().catch(() => undefined);
+      }, 15 * 60_000).unref?.();
+      console.log("[fwd-settle] cadence registered (15min, first run +90s) — P0-b FWD-SETTLE-20261025");
+    }
+  } catch {
+    /* cadence must never break boot */
+  }
 }
