@@ -26,6 +26,7 @@
 // uses the same 1000X naming on linear.
 
 import { gateFetch } from "./fapi-gate";
+import { spotLadderJson } from "./spot-host-gate";
 
 const TIMEOUT_MS = 6500;
 
@@ -135,12 +136,12 @@ async function bybitJfetch<T>(url: string): Promise<T | null> {
 // The Binance public data mirror is the PRIMARY spot-plane host now;
 // api.binance.com stays as the secondary rung.
 const SPOT_HOSTS = ["https://data-api.binance.vision", "https://api.binance.com"];
+// v13.2.1 — per-host 418/429 backoff via the shared spot-host gate: a banned
+// rung is SKIPPED (not re-poked every tick) and traffic slides to the healthy
+// host until retry-after expires (live evidence: vision 418 @467wt/min while
+// jfetch swallowed the status and kept hammering).
 async function spotLadderFetch<T>(path: string): Promise<T | null> {
-  for (const host of SPOT_HOSTS) {
-    const j = await jfetch<T>(`${host}${path}`);
-    if (j) return j;
-  }
-  return null;
+  return spotLadderJson<T>(path, SPOT_HOSTS, TIMEOUT_MS);
 }
 
 function binanceKlineRows(raw: (string | number)[][]): KlineRow[] {

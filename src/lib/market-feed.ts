@@ -22,6 +22,7 @@ const FAPI_HOSTS = ["https://fapi.binance.com", "https://fapi1.binance.com"];
 const TIMEOUT_MS = 6500;
 
 import type { Candle } from "./indicators";
+import { noteSpotHostThrottle, spotHostsReady } from "./spot-host-gate";
 export type { Candle };
 
 export interface FeedStatus {

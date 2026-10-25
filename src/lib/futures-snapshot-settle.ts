@@ -26,6 +26,7 @@
 import { db } from "@/lib/db";
 import { fetchFuturesKlines, type Candle } from "@/lib/market-feed";
 import { gateFetch } from "@/lib/fapi-gate";
+import { spotLadderJson } from "@/lib/spot-host-gate";
 
 // ── horizon geometry (ms) + settle tolerance windows (mirrors the windows
 // futures-taxonomy's sibling settle already uses, so the two writers agree) ──

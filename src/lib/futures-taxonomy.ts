@@ -27,6 +27,7 @@ import { db } from "@/lib/db";
 import { fapiBanRemainingMs, gateFetch } from "./fapi-gate";
 import { getTape, getTapeHealth, syncTapeWatchlist } from "./trade-flow";
 import { getLiquidationSnapshot, getLiquidationStatus } from "./liquidations";
+import { spotLadderJson } from "./spot-host-gate";
 
 export const FUTURES_ANCHORS = ["BTCUSDT", "ETHUSDT"] as const;
 

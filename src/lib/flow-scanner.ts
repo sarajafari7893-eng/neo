@@ -21,6 +21,7 @@ import { db } from "@/lib/db";
 import { gateFetch } from "./fapi-gate";
 import { fetchFlowMetrics } from "./flow";
 import { bybitKlines, bybitHealth } from "./bybit-feed";
+import { noteSpotHostThrottle, spotHostsReady } from "./spot-host-gate";
 
 export const SCAN_TFS = ["4h", "1h", "15m", "5m"] as const;
 export type ScanTf = (typeof SCAN_TFS)[number];
@@ -124,13 +125,15 @@ const fbStats = (() => {
 // by the feed probe). Spot klines share the exact field layout (takerBuy at
 // index 9) so CVD stays REAL. For niche Binance listings absent from Bybit
 // linear this is the only honest revival path.
+// v13.2.1 — per-host 418/429 backoff via the shared spot-host gate.
 async function spotKlines(symbol: string, tf: ScanTf, limit: number): Promise<FlowCandle[] | null> {
-  for (const host of ["https://data-api.binance.vision", "https://api.binance.com"]) {
+  for (const host of spotHostsReady(["https://data-api.binance.vision", "https://api.binance.com"])) {
     try {
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), 6500);
       const res = await fetch(`${host}/api/v3/klines?symbol=${symbol}&interval=${tf}&limit=${limit}`, { signal: ctrl.signal, cache: "no-store" });
       clearTimeout(timer);
+      if (res.status === 418 || res.status === 429) { noteSpotHostThrottle(host, res.status, res.headers); continue; }
       if (!res.ok) continue;
       const raw = (await res.json()) as (string | number)[][];
       if (!Array.isArray(raw) || raw.length === 0) continue;

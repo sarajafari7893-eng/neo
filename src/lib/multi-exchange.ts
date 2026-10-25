@@ -19,6 +19,7 @@ import { getFeedStatus } from "./market-feed";
 import { gateFetch } from "./fapi-gate";
 import { HL_KEY_ALLOWLIST } from "./hl-allowlist";
 import { promises as fs } from "fs";
+import { noteSpotHostThrottle, spotHostsReady } from "./spot-host-gate";
 import path from "path";
 
 const TIMEOUT_MS = 6500;
