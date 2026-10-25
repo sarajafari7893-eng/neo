@@ -2,11 +2,11 @@
  "ver": "supervisor-cron 1.6.0",
  "pid": 1718,
  "startedAt": "2026-10-24T22:50:48.954Z",
- "updatedAt": "2026-10-25T12:21:19.076Z",
+ "updatedAt": "2026-10-25T12:26:19.074Z",
  "jobs": {
   "sweep": {
    "lastRunAt": 1792930878955,
-   "nextRunAt": 1792930878954,
+   "nextRunAt": 1792931478954,
    "lastStatus": "ok",
    "lastDurationMs": 121,
    "lastError": null,
@@ -59,12 +59,12 @@
    "failures": 0
   },
   "keepwarm": {
-   "lastRunAt": 1792930878955,
+   "lastRunAt": 1792931178954,
    "nextRunAt": 1792931178954,
-   "lastStatus": "error",
-   "lastDurationMs": 3,
-   "lastError": "HEARTBEAT COLD app:3000 1ms streak=1",
-   "runs": 220,
+   "lastStatus": "ok",
+   "lastDurationMs": 120,
+   "lastError": null,
+   "runs": 221,
    "failures": 57
   }
  },
@@ -159,14 +159,14 @@
   "newN": 5
  },
  "lastKeepwarm": {
-  "at": "2026-10-25T12:21:18.956Z",
-  "ok": false,
-  "ms": 1,
-  "bootAt": null,
-  "gitSha": null,
-  "coldStreak": 1
+  "at": "2026-10-25T12:26:19.074Z",
+  "ok": true,
+  "ms": 120,
+  "bootAt": "2026-10-25T12:26:13.547Z",
+  "gitSha": "9b9cbb3",
+  "coldStreak": 0
  },
- "coldStreak": 1,
+ "coldStreak": 0,
  "alertLedger": {
   "sentinel-red": 1792930279832,
   "review-llm-unavailable": 1792925569286,
@@ -176,13 +176,6 @@
  "wsDownStreak": 0,
  "staleStreak": 0,
  "history": [
-  {
-   "id": "sweep",
-   "at": 1792921878955,
-   "status": "ok",
-   "durationMs": 800,
-   "detail": "AMBER: sentinel :3030 verdict AMBER · toobit-bridge doctrine: 2 violation(s) — last=MIRROR-LAG: card=TP1 but intent still OPEN "
-  },
   {
    "id": "keepwarm",
    "at": 1792922178955,
@@ -525,6 +518,13 @@
    "status": "ok",
    "durationMs": 121,
    "detail": "RED: app :3000 down"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1792931178954,
+   "status": "ok",
+   "durationMs": 120,
+   "detail": "HEARTBEAT OK 120ms boot=12:26:13Z sha=9b9cbb3"
   }
  ],
  "watchRuns": [
