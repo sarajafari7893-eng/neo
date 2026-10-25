@@ -49,7 +49,35 @@ import { Database } from "bun:sqlite";
 import { createHmac } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 
-const VER = "toobit-bridge 1.4.2";
+const VER = "toobit-bridge 1.4.3";
+// v1.4.3 (operator order trace 1a172ca1af260c0d — «مارجین 5$/$0.5 به‌جای 10$، چرا هیچ سیگنالی در سود بسته نشده، وضعیت NX-3139 در لایو متفاوت است — اقدامات حیاتی فوری»):
+//   Forensics proved FOUR independent root causes, all fixed here:
+//   ① CONTRACT-MULTIPLIER SIZING BUG (the $0.5 margin) — exchangeInfo carries
+//      contractMultiplier (0.1 for SUI/FARTCOIN, 1 for WLD/...) which was ignored:
+//      the bridge believed it sent $50/$80 notional while the book saw $4.98/$7.93
+//      → margin $0.49 on the exchange (NX-3126/NX-3140). Now qty = notional ÷
+//      (price × mult) with mult parsed per symbol; floors/notionals are REAL USDT.
+//   ② newClientOrderId REQUIRED (why no signal closed in profit) — Toobit
+//      rejects every order without newClientOrderId (-1004). Opens always set it;
+//      ALL TP1/TP2 bank orders and both SL close-fallbacks omitted it → 5/5
+//      «سیو سود» banks rejected, no profit ever locked in LIVE. placeOrder now
+//      auto-generates a clientOrderId for every order.
+//   ③ ONE-SHOT TRANSITIONS (NX-3139 class divergence) — pollCards stamped
+//      lastStatusSeen BEFORE the action; a rejected bank/close never retried and
+//      the engine's stop-move (breakeven after TP1) never mirrored to the
+//      exchange → ledger said SL +3.92% while the real position lost -0.59.
+//      Now: failed bank/close revert the transition (retry next poll, capped),
+//      and engine stopLoss/tp mutations on OPEN cards mirror to the exchange.
+//   ④ RECON RE-ATTACH SPAM — 4176 re-attach events in ~10h because position-
+//      level TP/SL never appears in openOrders. Re-assert is throttled to once
+//      per 10min per symbol; stop-move mirrors bypass the throttle.
+//   ⑤ LIVE PnL TELEMETRY — per-intent realizedPnlUsdt (position realizedPnL
+//      via recon + userTrades at close) and /status.livePnl aggregate, so «چرا
+//      هیچ سیگنالی در سود بسته نشده» is answerable in money, not guesses.
+//   ⑥ BALANCE-CAP GATE — LIVE entries skip honestly (BALANCE-CAP) when the
+//      fixed margin no longer fits the available balance (fresh balance read
+//      at entry). marginUsdt stays $5 (standing v1.1.0 operator mandate;
+//      $10 per entry does not fit the current balance — operator knob via /config).
 // v1.4.2 (operator order trace 1a172a8554da03ad — «چرا سیستم با LIVE مشابه نیست؟» LIVE-signal audit):
 //   TOOBIT REAL FLOOR LEARNING — exchangeInfo reports minNotional=0, but the
 //   server enforces a real per-symbol order floor (~121-124+ USDT observed).
@@ -159,6 +187,12 @@ interface Intent {
   lat: Latency;
   lastStatusSeen: string;
   cardStatus?: string;          // v1.3.0 doctrine — mirrored DB card status (open-management audit)
+  contractMult?: number;        // v1.4.3 — exchange contractMultiplier at entry (real notional = qty × price × mult)
+  sizingRev?: number;           // v1.4.3 — 3 = multiplier-aware sizing; 2 = pre-1.4.3 legacy (doctrine exempts from NOTIONAL-DELTA)
+  realizedPnlUsdt?: number;     // v1.4.3 — exchange-verified realized PnL (position lifetime / close fills)
+  unrealizedPnlUsdt?: number;   // v1.4.3 — current mark-to-market PnL from recon positions read
+  prevStatusSeen?: string;      // v1.4.3 — status before the current transition (revert-on-reject retry)
+  actionAttempts?: number;      // v1.4.3 — retry cap for reverted bank/close transitions
   levSrc?: "card" | "fallback"; // v1.3.0 doctrine — where the entry leverage came from
   expectedNotional?: number;    // v1.3.0 doctrine — marginUsdt × leverage (the card math)
   actualNotional?: number;      // v1.3.0 doctrine — qty × fillPrice (what the book actually saw)
@@ -291,11 +325,11 @@ async function signed<T>(method: "GET" | "POST", path: string, params: Record<st
 }
 
 // ── instruments (tick/step/min rounding source of truth) ────────────────────
-interface Instr { tickSize: number; stepSize: number; minQty: number; maxQty: number; minNotional: number }
+interface Instr { tickSize: number; stepSize: number; minQty: number; maxQty: number; minNotional: number; mult: number } // v1.4.3 mult = contractMultiplier (real notional = qty × price × mult)
 let instruments = new Map<string, Instr>();
 let instrumentsAt = 0;
 async function refreshInstruments(): Promise<void> {
-  const j = await pubGet<{ contracts?: Array<{ symbol: string; filters?: Array<{ filterType?: string; filter?: string; tickSize?: string; stepSize?: string; minQty?: string; maxQty?: string; minNotional?: string }> }> }>("/api/v1/exchangeInfo");
+  const j = await pubGet<{ contracts?: Array<{ symbol: string; contractMultiplier?: string; filters?: Array<{ filterType?: string; filter?: string; tickSize?: string; stepSize?: string; minQty?: string; maxQty?: string; minNotional?: string }> }> }>("/api/v1/exchangeInfo");
   const out = new Map<string, Instr>();
   for (const c of j?.contracts ?? []) {
     let instr: Partial<Instr> = {};
@@ -305,9 +339,13 @@ async function refreshInstruments(): Promise<void> {
       if (t === "LOT_SIZE") { instr.stepSize = Number(f.stepSize); instr.minQty = Number(f.minQty); instr.maxQty = Number(f.maxQty); }
       if (t === "MIN_NOTIONAL") instr.minNotional = Number(f.minNotional);
     }
-    if (instr.stepSize && instr.stepSize > 0) out.set(c.symbol, { tickSize: instr.tickSize ?? 0, stepSize: instr.stepSize, minQty: instr.minQty ?? 0, maxQty: instr.maxQty ?? 0, minNotional: instr.minNotional ?? 0 });
+    if (instr.stepSize && instr.stepSize > 0) out.set(c.symbol, { tickSize: instr.tickSize ?? 0, stepSize: instr.stepSize, minQty: instr.minQty ?? 0, maxQty: instr.maxQty ?? 0, minNotional: instr.minNotional ?? 0, mult: Number(c.contractMultiplier) > 0 ? Number(c.contractMultiplier) : 1 });
   }
-  if (out.size > 0) { instruments = out; instrumentsAt = Date.now(); log("info", "instruments refreshed", { contracts: out.size }); }
+  if (out.size > 0) {
+    const non1 = [...out.values()].filter((i) => i.mult !== 1).length;
+    instruments = out; instrumentsAt = Date.now();
+    log("info", "instruments refreshed", { contracts: out.size, nonUnityContractMultiplier: non1 }); // v1.4.3 — visibility into the sizing trap
+  }
 }
 const toobitSymbol = (sym: string): string => `${sym.replace(/USDT$/, "")}-SWAP-USDT`;
 function floorStep(q: number, step: number): number {
