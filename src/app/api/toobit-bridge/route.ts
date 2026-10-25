@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { db } from "@/lib/db";
 
 // ── v12.3 TASK-52 TOOBIT BRIDGE API (operator mandate trace 1a15630c8d7dbd95) ──
 // GET  /api/toobit-bridge        → bridge /status proxy (mode, positions, metrics, doctrine)
@@ -20,7 +21,16 @@ export async function GET() {
     const r = await fetch(`${BRIDGE}/status`, { signal: AbortSignal.timeout(4000), cache: "no-store" });
     if (!r.ok) return NextResponse.json({ ok: false, bridge: "down" }, { status: 502, headers: { "cache-control": "no-store" } });
     const data = (await r.json()) as Record<string, unknown>;
-    return NextResponse.json({ ok: true, ...data }, { headers: { "cache-control": "no-store" } });
+    // v13.2.2 — ACTIVE-DB mirror invariant: the operator asked (trace 1a170800e221df4d)
+    // whether openIntents must equal the system's ACTIVE signals. Ship the DB count
+    // beside the bridge mirror so equality (and any gate-skew) is visible in the UI.
+    let activeCount: number | null = null;
+    try {
+      activeCount = await db.signal.count({ where: { status: "ACTIVE" } });
+    } catch {
+      activeCount = null; // DB hiccup — card renders without the badge
+    }
+    return NextResponse.json({ ok: true, activeCount, ...data }, { headers: { "cache-control": "no-store" } });
   } catch {
     return NextResponse.json({ ok: false, bridge: "down" }, { status: 502, headers: { "cache-control": "no-store" } });
   }

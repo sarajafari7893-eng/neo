@@ -46,6 +46,7 @@ interface BridgeStatus {
   cfg?: { marginUsdt: number; maxConcurrent: number; tp1Frac: number; tp2Frac: number; leverage: number; execEnabled: boolean };
   openIntents?: IntentDTO[];
   recent?: IntentDTO[];
+  activeCount?: number | null; // v13.2.2 — DB ACTIVE signals, to mirror-check openIntents against
   metrics?: { n: number; totalMsP50: number | null; totalMsP95: number | null; detectMsP50: number | null; slipBpsP50: number | null; slipBpsWorst: number | null };
   doctrine?: DoctrineSummary;
   instruments?: number;
@@ -155,10 +156,27 @@ export default function ToobitBridgeCard() {
         )}
       </div>
 
-      {/* open positions */}
+      {/* open positions — v13.2.2: ACTIVE-DB mirror invariant inline (operator Q trace 1a170800e221df4d) */}
       <div className="mt-3">
         <div className="flex items-center justify-between text-[10px] uppercase tracking-wider text-muted-foreground">
-          <span>Open intents</span>
+          <span className="flex items-center gap-1.5">
+            <span>Open intents</span>
+            {typeof data?.activeCount === "number" && (
+              <span
+                className={cn(
+                  "rounded px-1 py-px font-mono normal-case",
+                  open.length === data.activeCount
+                    ? "border border-neon/40 bg-neon/10 text-neon"
+                    : "border border-amber-500/40 bg-amber-500/10 text-amber-500",
+                )}
+                title={open.length === data.activeCount
+                  ? "هر کارت ACTIVE یک intent دارد — ناورستی آینه برقرار است (اختلاف موقتی فقط با گیت‌های دکترین)"
+                  : `اختلاف موقتی: ${Math.max(0, data.activeCount - open.length)} کارت در گیت دکترین (MAX-CONCURRENT/drift/delay) یا پنجرهٔ ورود`}
+              >
+                ACTIVE {data.activeCount}{open.length === data.activeCount ? " ✓" : " ⚠"}
+              </span>
+            )}
+          </span>
           <span>{open.length}/{data?.cfg?.maxConcurrent ?? "—"}</span>
         </div>
         <div className="mt-1 max-h-24 overflow-y-auto space-y-1 pr-1">
