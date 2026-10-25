@@ -451,7 +451,11 @@ async function placeOrder(tbSymbol: string, side: "BUY_OPEN" | "SELL_OPEN" | "BU
     priceType: "MARKET", // v1 market entry — matches at last price ±5% band
     quantity: fmtQty(qty),
   };
-  if (opts.clientOrderId) params.newClientOrderId = opts.clientOrderId;
+  // v1.4.3 — Toobit REQUIRES newClientOrderId on EVERY order (-1004 otherwise).
+  // Pre-1.4.3, only opens carried one: every TP1/TP2 bank and SL-close fallback
+  // was rejected → no profit was ever banked in LIVE. Deterministic nonce
+  // (no Math.random — P0-2 doctrine): time + process-wide counter.
+  params.newClientOrderId = opts.clientOrderId ?? `NXB${(Date.now() % 1e9).toString(36).toUpperCase()}${(cidSeq++ % 1296).toString(36)}`;
   if (opts.takeProfit && opts.takeProfit > 0) { params.takeProfit = String(opts.takeProfit); params.tpTriggerBy = "MARK_PRICE"; params.tpOrderType = "MARKET"; }
   if (opts.stopLoss && opts.stopLoss > 0) { params.stopLoss = String(opts.stopLoss); params.slTriggerBy = "MARK_PRICE"; params.slOrderType = "MARKET"; }
   const r = await signed<{ code?: number; orderId?: string; order_id?: string; msg?: string }>("POST", "/api/v1/futures/order", params);
@@ -472,6 +476,7 @@ async function flashClose(tbSymbol: string, side: "LONG" | "SHORT"): Promise<{ o
 type Action = { kind: "open" | "bank" | "close"; cardId: string; frac?: number; reason: string };
 const actionQ: Action[] = [];
 let qBusy = false;
+let cidSeq = 0; // v1.4.3 — deterministic clientOrderId nonce (P0-2: no Math.random in money paths)
 // v1.4.0 RETRY WINDOW — cards skipped by MAX-CONCURRENT get a second chance
 // while still inside the ENTRY-DELAY window (a freed slot <90s after birth is
 // a real edge, not a stale chase). In-memory only: after a restart the window
@@ -515,9 +520,15 @@ async function doOpen(it: Intent): Promise<void> {
   // v1.1.0 FIXED-$5 MARGIN (margin never varies per signal) + v1.2.0 PER-CARD
   // LEVERAGE (operator mandate trace 1a15ddbdbabf84a9): notional = fixed margin
   // × THE CARD'S leverage — size and risk mirror the signal card exactly.
+  // v1.4.3 REAL SIZING — qty is in CONTRACTS; the real notional the book sees is
+  // qty × price × contractMultiplier (0.1 on SUI/FARTCOIN …). Pre-1.4.3 the
+  // multiplier was ignored → NX-3126/NX-3140 opened at $0.5 margin instead of $5.
+  const mult = instr.mult > 0 ? instr.mult : 1;
+  it.contractMult = mult;
+  it.sizingRev = 3;
   const notional = S.cfg.marginUsdt * it.leverage;
   it.expectedNotional = Number(notional.toFixed(6));
-  let qty = notional / refPrice;
+  let qty = notional / (refPrice * mult);
 
   // v1.3.0 ENTRY GATES (operator mandate trace 1a15f7d945d27ead):
   // ① ENTRY-DELAY — فاصله زمانی با تأخیر: a card whose entry window has passed
@@ -542,10 +553,25 @@ async function doOpen(it: Intent): Promise<void> {
     audit("EXEC-SKIP", { serial: it.serial, why: `entry-drift: ${driftBps.toFixed(0)}bps from card entry exceeds ${S.cfg.maxEntryDriftBps}bps cap` });
     return;
   }
+  // ③ BALANCE-CAP (v1.4.3) — the fixed margin must fit the LIVE balance; when
+  // the account cannot fund another isolated position, skip honestly instead of
+  // throwing an insufficient-margin order at the book.
+  if (liveMode) {
+    await refreshBalance();
+    const avail = balanceUsdt ?? 0;
+    if (avail < S.cfg.marginUsdt) {
+      it.status = "SKIP";
+      it.events.push({ at: Date.now(), ev: "BALANCE-CAP", note: `margin ${S.cfg.marginUsdt}$ > available ${avail.toFixed(2)}$` });
+      countSkip("BALANCE-CAP");
+      audit("EXEC-SKIP", { serial: it.serial, why: `balance-cap: fixed margin ${S.cfg.marginUsdt} USDT exceeds available ${avail.toFixed(2)} USDT` });
+      return;
+    }
+  }
   // $5-fixed mandate: a symbol whose exchange floor (minNotional / minQty×price)
   // cannot fit inside the mandated margin notional is SKIPPED honestly —
   // silently upsizing would breach the fixed-margin contract.
-  const floorNotional = Math.max(instr.minNotional, instr.minQty * refPrice, S.floorLearn?.[it.tbSymbol] ?? 0);
+  // v1.4.3 — floors are REAL notional (multiplier-aware).
+  const floorNotional = Math.max(instr.minNotional, instr.minQty * refPrice * mult, S.floorLearn?.[it.tbSymbol] ?? 0);
   if (floorNotional > notional) {
     it.status = "SKIP";
     it.events.push({ at: Date.now(), ev: "MIN_FLOOR_SKIP", note: `${it.tbSymbol} floor=${floorNotional.toFixed(2)} > marginNotional=${notional}${S.floorLearn?.[it.tbSymbol] ? " (learned)" : ""} ` });
@@ -594,11 +620,12 @@ async function doOpen(it: Intent): Promise<void> {
   it.openedAt = tFill;
   // v1.3.0 doctrine bookkeeping — the truth of what the book actually saw:
   // step-size floor rounding makes actualNotional ≤ expectedNotional by design.
-  it.actualNotional = fillPrice ? Number((qty * fillPrice).toFixed(6)) : null;
+  // v1.4.3 — actual notional is REAL: qty(contracts) × fill × contractMultiplier.
+  it.actualNotional = fillPrice ? Number((qty * fillPrice * mult).toFixed(6)) : null;
   it.protected = it.mode === "LIVE" ? true : true; // LIVE: attached TP/SL in same order + recon re-check; PAPER: sim active
   S.doctrine.opens++;
   const ndelta = it.expectedNotional && it.actualNotional ? Math.abs(it.actualNotional - it.expectedNotional) / it.expectedNotional * 10_000 : 0;
-  audit("EXEC-OPEN-DOCTRINE", { serial: it.serial, lev: it.leverage, levSrc: it.levSrc ?? "card", margin: S.cfg.marginUsdt, expectedNotional: it.expectedNotional, actualNotional: it.actualNotional, notionalDeltaBps: Number(ndelta.toFixed(1)), entryAgeMs: it.entryAgeMs, entryDriftBps: it.entryDriftBps });
+  audit("EXEC-OPEN-DOCTRINE", { serial: it.serial, lev: it.leverage, levSrc: it.levSrc ?? "card", margin: S.cfg.marginUsdt, contractMult: mult, expectedNotional: it.expectedNotional, actualNotional: it.actualNotional, notionalDeltaBps: Number(ndelta.toFixed(1)), entryAgeMs: it.entryAgeMs, entryDriftBps: it.entryDriftBps });
   if (ndelta > 2000) doctrineViolation(it.serial, "NOTIONAL-DELTA", `exp=${it.expectedNotional} act=${it.actualNotional} (${ndelta.toFixed(0)}bps) — step-rounding or minQty floor`);
   it.lat = {
     detectMs: it.lat.detectMs ?? null,
@@ -606,7 +633,7 @@ async function doOpen(it: Intent): Promise<void> {
     totalMs: it.createdAt0 !== undefined ? tFill - it.createdAt0 : null,
     slipBps: fillPrice && it.cardEntry > 0 ? ((it.direction === "LONG" ? fillPrice - it.cardEntry : it.cardEntry - fillPrice) / it.cardEntry) * 10_000 : null,
   };
-  it.events.push({ at: tFill, ev: "OPEN", note: `${it.mode} qty=${qty} fill=${fillPrice}` });
+  it.events.push({ at: tFill, ev: "OPEN", note: `${it.mode} qty=${qty} mult=×${mult} fill=${fillPrice}` });
   S.metrics.push({ serial: it.serial, symbol: it.symbol, direction: it.direction, mode: it.mode, detectMs: it.lat.detectMs, execMs: it.lat.execMs, totalMs: it.lat.totalMs, slipBps: it.lat.slipBps, fillPrice, cardEntry: it.cardEntry, at: tFill });
   if (S.metrics.length > METRICS_WINDOW) S.metrics = S.metrics.slice(-METRICS_WINDOW);
 }
@@ -628,6 +655,41 @@ async function resolveFill(tbSymbol: string, orderId: string | null, fallback: n
   return fallback;
 }
 
+// v1.4.3 LIVE PnL TELEMETRY — exchange-verified realized PnL for an intent's
+// lifetime (fills since openedAt; realizedPnL arrives on closing fills).
+// This is the money-truth behind «چرا هیچ سیگنالی در سود بسته نشده».
+async function fetchRealizedPnl(it: Intent): Promise<number | null> {
+  try {
+    const r = await signed<Array<{ time?: string; realizedPnl?: string; commission?: string; makerRebate?: string }>>("GET", "/api/v1/futures/userTrades", { symbol: it.tbSymbol, limit: 100 });
+    const rows = Array.isArray(r.data) ? r.data : [];
+    const since = it.openedAt ?? 0;
+    let pnl = 0, seen = false;
+    for (const f of rows) {
+      if (Number(f.time ?? 0) < since) continue;
+      seen = true;
+      pnl += Number(f.realizedPnl ?? 0) - Number(f.commission ?? 0) + Number(f.makerRebate ?? 0);
+    }
+    if (!seen) return null;
+    return Number(pnl.toFixed(4));
+  } catch { return null; }
+}
+// revert the card-status transition so the next poll re-fires the failed
+// action (v1.4.3 — transitions are no longer one-shot on transient rejections;
+// capped so a permanently-rejected action cannot loop forever).
+function revertTransition(it: Intent, what: string, err: string): void {
+  const attempts = (it.actionAttempts ?? 0) + 1;
+  it.actionAttempts = attempts;
+  if (attempts <= 20 && it.prevStatusSeen) {
+    it.lastStatusSeen = it.prevStatusSeen;
+    it.events.push({ at: Date.now(), ev: `${what}_RETRY-ARMED`, note: err.slice(0, 140) });
+    audit("EXEC-RETRY-ARMED", { serial: it.serial, what, attempts, err: err.slice(0, 140) });
+  } else {
+    it.events.push({ at: Date.now(), ev: `${what}_ABANDONED`, note: `attempts=${attempts} — will not retry: ${err.slice(0, 100)}` });
+    audit("EXEC-RETRY-ABANDONED", { serial: it.serial, what, attempts, err: err.slice(0, 140) });
+  }
+  persistState();
+}
+
 async function doBank(it: Intent, fracOfOrig: number, reason: string): Promise<void> {
   if (it.status !== "OPEN" || it.qtyRemaining <= 0) return;
   let qty = floorStep(Math.min(it.qtyOrig * fracOfOrig, it.qtyRemaining), instruments.get(it.tbSymbol)?.stepSize ?? 0);
@@ -635,9 +697,11 @@ async function doBank(it: Intent, fracOfOrig: number, reason: string): Promise<v
   if (qty >= it.qtyRemaining) return doClose(it, reason);
   if (it.mode === "LIVE") {
     const side = it.direction === "LONG" ? "SELL_CLOSE" : "BUY_CLOSE";
-    const r = await placeOrder(it.tbSymbol, side, qty);
+    // v1.4.3 — clientOrderId is mandatory on Toobit (pre-1.4.3 every bank was
+    // rejected -1004 → no signal ever closed in profit).
+    const r = await placeOrder(it.tbSymbol, side, qty, { clientOrderId: `NX${it.serial}${reason}${Date.now() % 100000}` });
     audit("EXEC-BANK", { serial: it.serial, reason, qty, ok: r.ok, err: r.err });
-    if (!r.ok) { it.events.push({ at: Date.now(), ev: "BANK_REJECTED", note: (r.err ?? "").slice(0, 160) }); return; }
+    if (!r.ok) { it.events.push({ at: Date.now(), ev: "BANK_REJECTED", note: (r.err ?? "").slice(0, 160) }); revertTransition(it, "BANK", r.err ?? "bank order rejected"); return; }
   } else {
     // v1.4.0 — PAPER سیو سود was invisible in audit.jsonl (only in state.json);
     // the paper fill rides the REAL toobit book so it deserves the same trail.
@@ -646,6 +710,7 @@ async function doBank(it: Intent, fracOfOrig: number, reason: string): Promise<v
   it.qtyRemaining = Number((it.qtyRemaining - qty).toFixed(10));
   if (reason === "TP1") it.qtyBankedTp1 = qty;
   if (reason === "TP2") it.qtyBankedTp2 = qty;
+  it.actionAttempts = 0;
   it.events.push({ at: Date.now(), ev: reason, note: `banked ${qty} (سیو سود)` });
 }
 
@@ -658,15 +723,28 @@ async function doClose(it: Intent, reason: string): Promise<void> {
     if (!flash.ok) {
       // fallback: explicit MARKET close of the remaining qty
       const side = it.direction === "LONG" ? "SELL_CLOSE" : "BUY_CLOSE";
-      const r = await placeOrder(it.tbSymbol, side, it.qtyRemaining);
+      // v1.4.3 — clientOrderId mandatory (pre-1.4.3 the SL-close fallback was
+      // rejected -1004 and the transition was lost forever).
+      const r = await placeOrder(it.tbSymbol, side, it.qtyRemaining, { clientOrderId: `NX${it.serial}X${Date.now() % 100000}` });
       audit("EXEC-CLOSE-FALLBACK", { serial: it.serial, reason, ok: r.ok, err: r.err });
-      if (!r.ok) { it.status = "OPEN"; it.events.push({ at: Date.now(), ev: "CLOSE_REJECTED", note: (r.err ?? "").slice(0, 160) }); return; }
+      if (!r.ok) {
+        it.status = "OPEN";
+        it.events.push({ at: Date.now(), ev: "CLOSE_REJECTED", note: (r.err ?? "").slice(0, 160) });
+        revertTransition(it, "CLOSE", r.err ?? "close order rejected");
+        return;
+      }
     }
   }
   it.qtyRemaining = 0;
   it.status = "CLOSED";
   it.closedAt = Date.now();
   it.closeReason = reason;
+  it.actionAttempts = 0;
+  if (it.mode === "LIVE") {
+    const pnl = await fetchRealizedPnl(it); // v1.4.3 — money truth of this close
+    if (pnl !== null) it.realizedPnlUsdt = pnl;
+    audit("EXEC-PNL", { serial: it.serial, reason, realizedPnlUsdt: pnl });
+  }
   it.events.push({ at: it.closedAt, ev: "CLOSED", note: reason });
   persistState();
 }
