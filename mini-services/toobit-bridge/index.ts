@@ -49,7 +49,14 @@ import { Database } from "bun:sqlite";
 import { createHmac } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 
-const VER = "toobit-bridge 1.4.3";
+// v1.4.4 RISK-CAP (trace 1a17357988d00515 «حساب لایو داره از بین میره»):
+//   • notional = margin×cardLev is now a CEILING — scaled DOWN so that
+//     notional × cardStopDistance ≤ maxRiskPct% (default 2%) of WALLET equity.
+//     Audit of 2026-10-25: a ~5% stop on $60–100 notional burned $2.7–4.3 per
+//     SL hit on a $47 account (−22% in one day) — risk was unbounded.
+//   • walletUsdt captured from futures/balance (balance ≠ availableBalance).
+//   • doctrine notional audit is risk-cap aware; /config accepts maxRiskPct 0.1..10.
+const VER = "toobit-bridge 1.4.4";
 // v1.4.3 (operator order trace 1a172ca1af260c0d — «مارجین 5$/$0.5 به‌جای 10$، چرا هیچ سیگنالی در سود بسته نشده، وضعیت NX-3139 در لایو متفاوت است — اقدامات حیاتی فوری»):
 //   Forensics proved FOUR independent root causes, all fixed here:
 //   ① CONTRACT-MULTIPLIER SIZING BUG (the $0.5 margin) — exchangeInfo carries
@@ -138,6 +145,7 @@ const METRICS_WINDOW = 50;
 interface BridgeConfig {
   notionalUsdt: number;   // LEGACY (pre-1.1.0 sizing) — kept only for old persisted state; UI must read marginUsdt × cardLev instead
   marginUsdt: number;     // FIXED per-signal entry MARGIN (v1.1.0 operator mandate trace 1a15bc29d2bb2c29) — notional = marginUsdt × cardLev
+  maxRiskPct: number;     // v1.4.4 — max % of WALLET equity risked per trade (notional × stopDistance); sizing scales DOWN to fit
   maxConcurrent: number;  // max simultaneous open intents — 0 = UNLIMITED (v1.4.1 operator mandate)
   cfgRev?: number;        // config migration revision (2 = cap lifted to unlimited)
   tp1Frac: number;        // fraction of ORIGINAL qty banked at TP1
@@ -151,6 +159,7 @@ interface BridgeConfig {
 const DEFAULT_CFG: BridgeConfig = {
   notionalUsdt: 15,
   marginUsdt: 5,
+  maxRiskPct: 2,          // v1.4.4 — 2% of wallet equity per trade (trace 1a17357988d00515)
   maxConcurrent: 0,       // v1.4.1 — 0 = UNLIMITED simultaneous open intents (operator mandate)
   tp1Frac: 0.4,
   tp2Frac: 0.3,
@@ -520,6 +529,21 @@ async function drainQ(): Promise<void> {
   } finally { qBusy = false; }
 }
 
+// v1.4.4 RISK-CAP — shared sizing truth for doOpen + doctrineScan: notional is
+// the v1.1.0 mandate ceiling (margin × cardLev), scaled DOWN when
+// notional × stopDistance would exceed maxRiskPct% of WALLET equity
+// (trace 1a17357988d00515 «حساب لایو داره از بین میره»). Never scaled up.
+function riskCappedNotional(lev: number, slDistPct: number, liveMode: boolean): { base: number; eff: number; capped: boolean } {
+  const base = S.cfg.marginUsdt * lev;
+  if (!liveMode) return { base, eff: base, capped: false };
+  const equity = walletUsdt ?? balanceUsdt ?? 0;
+  const maxRiskUsdt = equity * (S.cfg.maxRiskPct / 100);
+  if (maxRiskUsdt > 0 && base * slDistPct > maxRiskUsdt) {
+    return { base, eff: Math.floor((maxRiskUsdt / slDistPct) * 100) / 100, capped: true };
+  }
+  return { base, eff: base, capped: false };
+}
+
 async function doOpen(it: Intent): Promise<void> {
   const liveMode = isLiveMode();
   it.mode = liveMode ? "LIVE" : "PAPER";
@@ -536,8 +560,22 @@ async function doOpen(it: Intent): Promise<void> {
   // multiplier was ignored → NX-3126/NX-3140 opened at $0.5 margin instead of $5.
   const mult = instr.mult > 0 ? instr.mult : 1;
   it.contractMult = mult;
-  it.sizingRev = 3;
-  const notional = S.cfg.marginUsdt * it.leverage;
+  it.sizingRev = 4;
+  // v1.4.4 RISK-CAP — equity-aware sizing (trace 1a17357988d00515
+  // «حساب لایو داره از بین میره»): the card's stop distance defines the real
+  // money at risk = notional × slDistPct; on a small LIVE account a ~5% stop
+  // on a $100 notional burns ~14% of equity in ONE SL hit. The per-trade risk
+  // budget is capped at maxRiskPct% of wallet equity by scaling notional DOWN.
+  const slDistPct = it.stopLoss > 0 && it.cardEntry > 0
+    ? Math.abs(it.cardEntry - it.stopLoss) / it.cardEntry
+    : 0.05; // no usable stop on the card → conservative 5% assumption
+  const cap = riskCappedNotional(it.leverage, slDistPct, liveMode);
+  const notional = cap.eff;
+  const effMargin = notional / it.leverage;
+  if (cap.capped) {
+    it.events.push({ at: Date.now(), ev: "RISK-CAP", note: `notional ${cap.base.toFixed(2)}→${notional.toFixed(2)}$ (SLdist=${(slDistPct * 100).toFixed(2)}% × wallet ${(walletUsdt ?? balanceUsdt ?? 0).toFixed(2)}$ × cap ${S.cfg.maxRiskPct}%)` });
+    audit("EXEC-RISK-CAP", { serial: it.serial, baseNotional: Number(cap.base.toFixed(4)), cappedNotional: Number(notional.toFixed(4)), slDistPct: Number((slDistPct * 100).toFixed(3)), equity: Number((walletUsdt ?? balanceUsdt ?? 0).toFixed(4)), maxRiskPct: S.cfg.maxRiskPct });
+  }
   it.expectedNotional = Number(notional.toFixed(6));
   let qty = notional / (refPrice * mult);
 
@@ -570,11 +608,19 @@ async function doOpen(it: Intent): Promise<void> {
   if (liveMode) {
     await refreshBalance();
     const avail = balanceUsdt ?? 0;
-    if (avail < S.cfg.marginUsdt) {
+    if (avail < effMargin) {
       it.status = "SKIP";
-      it.events.push({ at: Date.now(), ev: "BALANCE-CAP", note: `margin ${S.cfg.marginUsdt}$ > available ${avail.toFixed(2)}$` });
+      it.events.push({ at: Date.now(), ev: "BALANCE-CAP", note: `margin ${effMargin.toFixed(2)}$ > available ${avail.toFixed(2)}$` });
       countSkip("BALANCE-CAP");
-      audit("EXEC-SKIP", { serial: it.serial, why: `balance-cap: fixed margin ${S.cfg.marginUsdt} USDT exceeds available ${avail.toFixed(2)} USDT` });
+      audit("EXEC-SKIP", { serial: it.serial, why: `balance-cap: margin ${effMargin.toFixed(2)} USDT exceeds available ${avail.toFixed(2)} USDT` });
+      return;
+    }
+    // v1.4.4 — a risk-capped margin below $1 is exchange dust; skip honestly.
+    if (cap.capped && effMargin < 1) {
+      it.status = "SKIP";
+      it.events.push({ at: Date.now(), ev: "RISK-CAP-DUST", note: `margin ${effMargin.toFixed(2)}$ < $1 after risk cap` });
+      countSkip("RISK-CAP");
+      audit("EXEC-SKIP", { serial: it.serial, why: `risk-cap dust: margin ${effMargin.toFixed(2)} USDT below $1 floor` });
       return;
     }
   }
@@ -636,7 +682,7 @@ async function doOpen(it: Intent): Promise<void> {
   it.protected = it.mode === "LIVE" ? true : true; // LIVE: attached TP/SL in same order + recon re-check; PAPER: sim active
   S.doctrine.opens++;
   const ndelta = it.expectedNotional && it.actualNotional ? Math.abs(it.actualNotional - it.expectedNotional) / it.expectedNotional * 10_000 : 0;
-  audit("EXEC-OPEN-DOCTRINE", { serial: it.serial, lev: it.leverage, levSrc: it.levSrc ?? "card", margin: S.cfg.marginUsdt, contractMult: mult, expectedNotional: it.expectedNotional, actualNotional: it.actualNotional, notionalDeltaBps: Number(ndelta.toFixed(1)), entryAgeMs: it.entryAgeMs, entryDriftBps: it.entryDriftBps });
+  audit("EXEC-OPEN-DOCTRINE", { serial: it.serial, lev: it.leverage, levSrc: it.levSrc ?? "card", margin: Number(effMargin.toFixed(4)), riskCapped: cap.capped, contractMult: mult, expectedNotional: it.expectedNotional, actualNotional: it.actualNotional, notionalDeltaBps: Number(ndelta.toFixed(1)), entryAgeMs: it.entryAgeMs, entryDriftBps: it.entryDriftBps });
   if (ndelta > 2000) doctrineViolation(it.serial, "NOTIONAL-DELTA", `exp=${it.expectedNotional} act=${it.actualNotional} (${ndelta.toFixed(0)}bps) — step-rounding or minQty floor`);
   it.lat = {
     detectMs: it.lat.detectMs ?? null,
@@ -923,6 +969,7 @@ function orphanSweep(): void {
 }
 
 let balanceUsdt: number | null = null;
+let walletUsdt: number | null = null; // v1.4.4 — WALLET equity for the RISK-CAP budget (balance ≠ available)
 let balanceAt = 0;
 async function refreshBalance(): Promise<void> {
   if (!API_KEY) { balanceUsdt = null; return; }
@@ -931,6 +978,9 @@ async function refreshBalance(): Promise<void> {
   const usdt = rows.find((b) => (b.coin ?? b.asset) === "USDT");
   const avail = Number(usdt?.availableBalance ?? usdt?.balance ?? 0);
   balanceUsdt = Number.isFinite(avail) ? avail : null;
+  // v1.4.4 — wallet equity (balance incl. margin-in-use) feeds the risk budget
+  const wb = Number(usdt?.balance ?? NaN);
+  walletUsdt = Number.isFinite(wb) && wb > 0 ? wb : balanceUsdt;
   balanceAt = Date.now();
 }
 function isLiveMode(): boolean {
@@ -1037,8 +1087,9 @@ async function doctrineScan(): Promise<void> {
         if (c && c.leverage >= 1 && c.leverage !== it.leverage) {
           doctrineViolation(it.serial, "LEV-MISMATCH", `card=${c.leverage} intent=${it.leverage} — card ledger is authoritative; next entries use ${c.leverage}`);
         }
-        // ② notional math on the live position (margin ثابت × اهرم کارت)
-        const exp = S.cfg.marginUsdt * it.leverage;
+        // ② notional math on the live position (margin × اهرم کارت — v1.4.4 risk-cap aware)
+        const slDist = it.stopLoss > 0 && it.cardEntry > 0 ? Math.abs(it.cardEntry - it.stopLoss) / it.cardEntry : 0.05;
+        const exp = riskCappedNotional(it.leverage, slDist, it.mode === "LIVE").eff;
         it.expectedNotional = Number(exp.toFixed(6));
         if (it.qtyOrig > 0 && it.fillPrice) {
           const mult = instruments.get(it.tbSymbol)?.mult ?? it.contractMult ?? 1; // v1.4.3 — real notional
@@ -1153,6 +1204,7 @@ Bun.serve({
       if (path === "/config") {
         const c = S.cfg;
         if (typeof body.marginUsdt === "number" && body.marginUsdt >= 1 && body.marginUsdt <= 100) c.marginUsdt = body.marginUsdt;
+        if (typeof body.maxRiskPct === "number" && body.maxRiskPct >= 0.1 && body.maxRiskPct <= 10) c.maxRiskPct = body.maxRiskPct; // v1.4.4 — % of wallet equity risked per trade (entry→SL)
         if (typeof body.notionalUsdt === "number" && body.notionalUsdt >= 5 && body.notionalUsdt <= 500) c.notionalUsdt = body.notionalUsdt;
         if (typeof body.maxConcurrent === "number" && body.maxConcurrent >= 0 && body.maxConcurrent <= 50) c.maxConcurrent = Math.floor(body.maxConcurrent); // 0 = UNLIMITED (v1.4.1)
         if (typeof body.tp1Frac === "number" && body.tp1Frac > 0 && body.tp1Frac < 1) c.tp1Frac = body.tp1Frac;

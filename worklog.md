@@ -32539,3 +32539,25 @@ Stage Summary:
 - حقیقت مالی صادقانه: خالص LIVE از 05:23 تا ممیزی -$3.91 (تنها برد TP3: +$2.10 روی 3133 WLD)؛ بالانس فعلی 37.72 با uPnL باز ~-1.4.
 - یادداشت مارجین برای تصمیم اپراتور: مارجین پل $5 (مأموریت v1.1.0) است و با BALANCE-CAP محافظت می‌شود؛ سمبل‌های گران (BNB/ETH/TAO/ZEC/AKE با کف ~121$) در مارجین $5 حتی با ضریب درست MIN-FLOOR SKIP می‌گیرند — در صورت تمایل به اجرای آن‌ها: /config marginUsdt (مثلاً 7 در lev20)؛ با بالانس فعلی حداکثر ~۵ پوزیشن هم‌زمان ممکن است.
 - آیتم‌های باز: ① تیپ آیندها روی نردبان REST (fstream WS بی‌فریم) ② realizedClosedUsdt فقط از بسته‌های پس از v1.4.3 جمع می‌زند (بسته‌های تاریخی در worklog ثبت‌اند) ③ اپ در چرخهٔ OOM محیطی می‌چرخد (watchdog فعال) — مستقل از کد پل.
+
+---
+Task ID: 1a17357988d00515
+Agent: Z.ai Code (main session)
+Task: ممیزی اضطراری «وضعیت فاجعه‌بار امروز — حساب لایو در حال از بین رفتن» + اقدام حیاتی فوری
+
+Work Log:
+- برآورد فوری: /health و /status پل → mode LIVE، v1.4.3، balanceUsdt 26.62 (available)؛ wallet واقعی صرافی 36.475 USDT (از 47 → افت 22.4٪).
+- جدول خسارت حقیقی از فیل‌های واقعی صرافی (userTrades برای ۱۲ سمبل امروز): realized -10.24 + fees -0.82 = NET -9.43 USDT در یک روز؛ بدترین‌ها IRYS -4.10 (سه استاپ)، BTW -3.14، JCT -2.68؛ مجموع بردها +1.85 در برابر باخت‌ها -12.10 (ضرر هر استاپ $2.7-4.3 در برابر سودهای ریز TP).
+- سه‌طرفهٔ سازگاری تأیید شد: DB ↔ state.json ↔ positions صرافی برای 3126/3139/3140/3141/3143/3144 — واگرایی‌های قبلی در v1.4.3 برطرف؛ class مارجین $0.5 (3140) معلول باگ ضریب قدیمی با مهر MULT-SIZING-LEGACY.
+- ریشهٔ فاجعه در کد: notional = marginUsdt(5) × cardLev(تا 20) = $25-100 نشنال با فاصلهٔ SL کارت‌ها ~۵٪ → ریسک هر استاپ تا $5 (≈۱۴٪ موجودی) بدون هیچ سقف ریسکی نسبت به اکوییتی؛ کارمزد taker و فاندینگ روی ۵۲ باز/۱۴ بست اضافه شد.
+- اقدام حیاتی ①: POST /exec-toggle {enabled:false} → ورودهای جدید LIVE متوقف شد (closes/TP/SL پوزیشن‌های باز فعال ماندند)؛ audit: CFG-EXEC-TOGGLE enabled=false؛ پس از ری‌استارت پل پایدار ماند.
+- جراحی v1.4.4 RISK-CAP (فقط لایهٔ پل، engine.ts دست‌نخورده): notional اکنون «سقف» است و با فرمول مشترک riskCappedNotional() پایین‌مقیاس می‌شود تا notional × فاصلهٔ SL ≤ maxRiskPct٪ (پیش‌فرض ۲٪) از wallet اکوییتی؛ walletUsdt جدا از available از futures/balance خوانده می‌شود؛ BALANCE-CAP روی مارجین مؤثر؛ SKIP صادقانهٔ RISK-CAP-DUST برای مارجین <$1؛ doctrine notional audit آگاه از سقف؛ /config maxRiskPct (0.1..10)؛ sizingRev=4؛ audit EXEC-RISK-CAP + رویداد RISK-CAP در intent.
+- ری‌استارت کنترل‌شده: kill TERM + heal واچداگ → BOOT v1.4.4 (hasKeys:true)، execEnabled:false پایدار، RECON-REATTACH-TPSL برای 3144 بلافاصله پس از بوت ok:true.
+- تحول زندهٔ حین ممیزی: 3141 WLD توسط SL صرافی بسته شد (realized -0.57 ثبت شد، closedN=15)؛ پوزیشن باز فقط FARTCOIN 3144 با SL سربه‌سر آینه‌شده و uPnL +0.20.
+- lint = 17 (baseline، صفر خطای جدید).
+
+Stage Summary:
+- حقیقت مالی امروز: 47 → ≈36.0 USDT (≈ -11.0 / -23.4٪)؛ bridge خودش فقط -6.55 می‌دید (بسته‌های pre-1.4.3 با pnl=0) — جدول صرافی حقیقت را نشان داد.
+- وضعیت امن فعلی: ورود جدید LIVE خاموش (execEnabled=false) · تنها پوزیشن باز (3144 FARTCOIN) با SL فعال و protected=true · v1.4.4 با سقف ریسک ۲٪ اکوییتی برای بازگشت آینده مسلح است (با 36$ اکوییتی و SL ۵٪: نشنال ~۱۴$، مارجین ~۱.۲$، ریسک هر استاپ ~۰.۷$).
+- تصمیم اپراتور برای بازگشایی: POST /exec-toggle {"enabled":true} با x-nexus-key (و در صورت تمایل /config maxRiskPct یا marginUsdt).
+- آیتم‌های باز: ① MIRROR-LAG (کارت SL شد ولی intent تا ۵۷ دقیقه OPEN ماند — recon نجات داد؛ polling گذار کارت باید زودتر بفهمد) ② funding fees در livePnl محاسبه نمی‌شود ③ fstream WS بی‌فریم (tape روی REST) ④ استراتژی با وین‌ریت ۷۹٪ باز هم منفی است — ساختار TP/SL موتور (TP1 نزدیک، SL پهن) روی حساب کوچک انتظار منفی دارد؛ اصلاح آن فقط در لایهٔ موتور/استراتژی ممکن است و نیازمند تصمیم اپراتور.
