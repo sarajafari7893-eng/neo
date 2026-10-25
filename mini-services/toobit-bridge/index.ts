@@ -49,7 +49,17 @@ import { Database } from "bun:sqlite";
 import { createHmac } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 
-const VER = "toobit-bridge 1.4.1";
+const VER = "toobit-bridge 1.4.2";
+// v1.4.2 (operator order trace 1a172a8554da03ad — «چرا سیستم با LIVE مشابه نیست؟» LIVE-signal audit):
+//   TOOBIT REAL FLOOR LEARNING — exchangeInfo reports minNotional=0, but the
+//   server enforces a real per-symbol order floor (~121-124+ USDT observed).
+//   High-price symbols (BNB/ETH/TAO/ZEC) at fixed-$5 margin × card leverage
+//   (notional 60-100) were OPEN-REJECTED -1199/-1202 "quantity too small" →
+//   six FAILED intents whose cards were PAPER-profitable in the engine ledger
+//   (3128 ZEC +6.5%, 3137 ETH +3.5% — phantom vs LIVE). Now: the first
+//   "quantity too small" rejection teaches a per-symbol floor (floorLearn),
+//   reclassifies the intent as an honest MIN-FLOOR SKIP (not FAILED), and
+//   pre-skips future cards for that symbol while their notional ≤ learned floor.
 // v1.4.1 (operator mandate trace 1a170bba02dff781 — «چرا سقف هم‌زمانی 3 است؟ باید بدون سقف باشد»):
 //   UNLIMITED CONCURRENCY — maxConcurrent 0 = بدون سقف (مقدار پیش‌فرض). One-time
 //   cfgRev=2 migration lifts the persisted legacy cap (3). /config accepts 0..50
@@ -168,9 +178,10 @@ interface BridgeState {
   intents: Record<string, Intent>;   // by cardId
   metrics: MetricsRow[];
   levMap: Record<string, number>; // v1.2.0 — last-set leverage per toobit symbol (re-set only on change)
+  floorLearn: Record<string, number>; // v1.4.2 — learned per-symbol real order floor (USDT notional) from server rejections
   doctrine: DoctrineState;        // v1.3.0 — supervisor counters + violation journal
 }
-let S: BridgeState = { cfg: { ...DEFAULT_CFG }, lastCreatedAtMs: 0, intents: {}, metrics: [], levMap: {}, doctrine: { opens: 0, skipBy: {}, violations: [], lastScanAt: 0, orphans: 0 } };
+let S: BridgeState = { cfg: { ...DEFAULT_CFG }, lastCreatedAtMs: 0, intents: {}, metrics: [], levMap: {}, floorLearn: {}, doctrine: { opens: 0, skipBy: {}, violations: [], lastScanAt: 0, orphans: 0 } };
 
 const tehran = (d: number = Date.now()) =>
   new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Tehran", hour12: false, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(d);
@@ -211,6 +222,7 @@ function loadState(): void {
         intents: raw.intents ?? {},
         metrics: raw.metrics ?? [],
         levMap: raw.levMap ?? {},
+        floorLearn: raw.floorLearn ?? {},
         doctrine: { opens: raw.doctrine?.opens ?? 0, skipBy: raw.doctrine?.skipBy ?? {}, violations: raw.doctrine?.violations ?? [], lastScanAt: raw.doctrine?.lastScanAt ?? 0, orphans: raw.doctrine?.orphans ?? 0 },
       };
       // v1.4.1 migration: lift the legacy concurrency cap (3) once — operator
@@ -495,10 +507,10 @@ async function doOpen(it: Intent): Promise<void> {
   // $5-fixed mandate: a symbol whose exchange floor (minNotional / minQty×price)
   // cannot fit inside the mandated margin notional is SKIPPED honestly —
   // silently upsizing would breach the fixed-margin contract.
-  const floorNotional = Math.max(instr.minNotional, instr.minQty * refPrice);
+  const floorNotional = Math.max(instr.minNotional, instr.minQty * refPrice, S.floorLearn?.[it.tbSymbol] ?? 0);
   if (floorNotional > notional) {
     it.status = "SKIP";
-    it.events.push({ at: Date.now(), ev: "MIN_FLOOR_SKIP", note: `${it.tbSymbol} floor=${floorNotional.toFixed(2)} > marginNotional=${notional}` });
+    it.events.push({ at: Date.now(), ev: "MIN_FLOOR_SKIP", note: `${it.tbSymbol} floor=${floorNotional.toFixed(2)} > marginNotional=${notional}${S.floorLearn?.[it.tbSymbol] ? " (learned)" : ""} ` });
     countSkip("MIN-FLOOR");
     audit("EXEC-SKIP", { serial: it.serial, why: `exchange floor ${floorNotional.toFixed(2)} USDT exceeds fixed-margin notional ${notional} USDT` });
     return;
@@ -514,7 +526,22 @@ async function doOpen(it: Intent): Promise<void> {
     const side = it.direction === "LONG" ? "BUY_OPEN" : "SELL_OPEN";
     const r = await placeOrder(it.tbSymbol, side, qty, { takeProfit: it.tp3, stopLoss: it.stopLoss, clientOrderId: it.clientOrderId });
     audit("EXEC-OPEN", { serial: it.serial, symbol: it.tbSymbol, side, qty, lev: it.leverage, tp3: it.tp3, sl: it.stopLoss, ok: r.ok, orderId: r.orderId, err: r.err });
-    if (!r.ok) { it.status = "FAILED"; it.events.push({ at: Date.now(), ev: "OPEN_REJECTED", note: (r.err ?? "").slice(0, 160) }); return; }
+    if (!r.ok) {
+      // v1.4.2 — server-side real floor: exchangeInfo hides it (minNotional=0)
+      // but the book rejects with -1199/-1202 "quantity too small". Teach the
+      // floor, reclassify as an honest MIN-FLOOR SKIP, keep the ledger truthful.
+      if (/quantity too small/i.test(r.err ?? "")) {
+        const prevFloor = S.floorLearn?.[it.tbSymbol] ?? 0;
+        S.floorLearn[it.tbSymbol] = Math.max(prevFloor, notional);
+        it.status = "SKIP";
+        it.events.push({ at: Date.now(), ev: "MIN_FLOOR_LEARNED", note: `${it.tbSymbol} real floor ≥ ${notional} USDT (server -1199/-1202; exchangeInfo said ${floorNotional.toFixed(2)})` });
+        countSkip("MIN-FLOOR");
+        audit("EXEC-SKIP", { serial: it.serial, why: `server floor learned: ${it.tbSymbol} ≥ ${notional} USDT notional (rejected quantity-too-small; exchangeInfo floor ${floorNotional.toFixed(2)})` });
+        persistState();
+        return;
+      }
+      it.status = "FAILED"; it.events.push({ at: Date.now(), ev: "OPEN_REJECTED", note: (r.err ?? "").slice(0, 160) }); return;
+    }
     orderId = r.orderId;
     fillPrice = await resolveFill(it.tbSymbol, orderId, refPrice);
   } else {
