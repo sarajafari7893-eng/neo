@@ -49,7 +49,12 @@ import { Database } from "bun:sqlite";
 import { createHmac } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 
-const VER = "toobit-bridge 1.4.0";
+const VER = "toobit-bridge 1.4.1";
+// v1.4.1 (operator mandate trace 1a170bba02dff781 — «چرا سقف هم‌زمانی 3 است؟ باید بدون سقف باشد»):
+//   UNLIMITED CONCURRENCY — maxConcurrent 0 = بدون سقف (مقدار پیش‌فرض). One-time
+//   cfgRev=2 migration lifts the persisted legacy cap (3). /config accepts 0..50
+//   (0 = unlimited). MAX-CONCURRENT skip + retry window now only exist when a
+//   positive cap is explicitly configured. LIVE keys installed (gitignored .env).
 // v1.4.0 (operator mandate trace 1a1704d407f00dad — «ممیزی TOOBIT EXEC BRIDGE + راستی‌آزمایی تمام دستورات مدیریت سیگنال‌ها»):
 //   ① SINGLETON PID LOCK — forensics found the service running under `bun --hot`:
 //      every file touch re-exec'd a NEW module generation INSIDE the same process
@@ -95,7 +100,8 @@ const METRICS_WINDOW = 50;
 interface BridgeConfig {
   notionalUsdt: number;   // LEGACY (pre-1.1.0 sizing) — kept only for old persisted state; UI must read marginUsdt × cardLev instead
   marginUsdt: number;     // FIXED per-signal entry MARGIN (v1.1.0 operator mandate trace 1a15bc29d2bb2c29) — notional = marginUsdt × cardLev
-  maxConcurrent: number;  // max simultaneous open intents
+  maxConcurrent: number;  // max simultaneous open intents — 0 = UNLIMITED (v1.4.1 operator mandate)
+  cfgRev?: number;        // config migration revision (2 = cap lifted to unlimited)
   tp1Frac: number;        // fraction of ORIGINAL qty banked at TP1
   tp2Frac: number;        // additional fraction banked at TP2
   leverage: number;       // FALLBACK for legacy cards with leverage<=0 (v1.2.0: per-card Signal.leverage is authoritative)
@@ -107,7 +113,7 @@ interface BridgeConfig {
 const DEFAULT_CFG: BridgeConfig = {
   notionalUsdt: 15,
   marginUsdt: 5,
-  maxConcurrent: 3,
+  maxConcurrent: 0,       // v1.4.1 — 0 = UNLIMITED simultaneous open intents (operator mandate)
   tp1Frac: 0.4,
   tp2Frac: 0.3,
   leverage: 5,
@@ -207,6 +213,9 @@ function loadState(): void {
         levMap: raw.levMap ?? {},
         doctrine: { opens: raw.doctrine?.opens ?? 0, skipBy: raw.doctrine?.skipBy ?? {}, violations: raw.doctrine?.violations ?? [], lastScanAt: raw.doctrine?.lastScanAt ?? 0, orphans: raw.doctrine?.orphans ?? 0 },
       };
+      // v1.4.1 migration: lift the legacy concurrency cap (3) once — operator
+      // mandate «باید بدون سقف باشد». Explicit later /config writes persist normally.
+      if ((S.cfg.cfgRev ?? 0) < 2) { S.cfg.maxConcurrent = 0; S.cfg.cfgRev = 2; }
       // v1.2.0 hardening: pre-v1.2.0 persisted intents have no leverage field —
       // backfill so notional math (margin × leverage) can never see undefined.
       // v1.3.0 hardening: backfill doctrine fields on legacy intents too.
@@ -613,7 +622,7 @@ async function pollCards(): Promise<void> {
     // window re-opens a MAX-CONCURRENT-skipped card (was: skipped forever).
     if (retryList.length > 0 && !killFile() && S.cfg.execEnabled) {
       const openCount0 = Object.values(S.intents).filter((x) => x.status === "OPEN" || x.status === "OPENING").length;
-      if (openCount0 < S.cfg.maxConcurrent) {
+      if (S.cfg.maxConcurrent > 0 && openCount0 < S.cfg.maxConcurrent) {
         const nowMs = Date.now();
         retryList = retryList.filter((r) => {
           const it = S.intents[r.cardId];
@@ -641,7 +650,7 @@ async function pollCards(): Promise<void> {
       let skip: string | null = null;
       if (age > STALE_SKIP_MS) skip = "STALE-CARD";
       else if (!known) skip = "SYMBOL-ABSENT-ON-TOOBIT";
-      else if (!killFile() && S.cfg.execEnabled && openCount >= S.cfg.maxConcurrent) skip = "MAX-CONCURRENT";
+      else if (!killFile() && S.cfg.execEnabled && S.cfg.maxConcurrent > 0 && openCount >= S.cfg.maxConcurrent) skip = "MAX-CONCURRENT";
       if (skip) countSkip(skip); // v1.3.0 doctrine funnel
       if (skip === "MAX-CONCURRENT") retryList.push({ cardId: c.id, createdAt0: created }); // v1.4.0 — eligible for the retry window
       const dir = c.direction === "SHORT" ? "SHORT" : "LONG";
@@ -947,7 +956,7 @@ Bun.serve({
         const c = S.cfg;
         if (typeof body.marginUsdt === "number" && body.marginUsdt >= 1 && body.marginUsdt <= 100) c.marginUsdt = body.marginUsdt;
         if (typeof body.notionalUsdt === "number" && body.notionalUsdt >= 5 && body.notionalUsdt <= 500) c.notionalUsdt = body.notionalUsdt;
-        if (typeof body.maxConcurrent === "number" && body.maxConcurrent >= 1 && body.maxConcurrent <= 10) c.maxConcurrent = Math.floor(body.maxConcurrent);
+        if (typeof body.maxConcurrent === "number" && body.maxConcurrent >= 0 && body.maxConcurrent <= 50) c.maxConcurrent = Math.floor(body.maxConcurrent); // 0 = UNLIMITED (v1.4.1)
         if (typeof body.tp1Frac === "number" && body.tp1Frac > 0 && body.tp1Frac < 1) c.tp1Frac = body.tp1Frac;
         if (typeof body.tp2Frac === "number" && body.tp2Frac > 0 && body.tp2Frac < 1) c.tp2Frac = body.tp2Frac;
         if (typeof body.leverage === "number" && body.leverage >= 1 && body.leverage <= 50) c.leverage = Math.floor(body.leverage);

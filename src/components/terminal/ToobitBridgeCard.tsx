@@ -177,7 +177,7 @@ export default function ToobitBridgeCard() {
               </span>
             )}
           </span>
-          <span>{open.length}/{data?.cfg?.maxConcurrent ?? "—"}</span>
+          <span title={data?.cfg?.maxConcurrent ? `سقف هم‌زمانی: ${data.cfg.maxConcurrent} intent باز` : "بدون سقف هم‌زمانی — هر کارت ACTIVE فوراً intent می‌گیرد (v1.4.1)"}>{open.length}/{data?.cfg?.maxConcurrent ? data.cfg.maxConcurrent : "∞"}</span>
         </div>
         <div className="mt-1 max-h-24 overflow-y-auto space-y-1 pr-1">
           {open.length === 0 ? (

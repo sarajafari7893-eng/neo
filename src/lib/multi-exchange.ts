@@ -338,7 +338,8 @@ async function binanceSpotMirrorBatch(): Promise<Map<string, number>> {
   // v13.2.1 — per-host 418/429 backoff via the shared spot-host gate (the old
   // last-rung-only 10min ban let the primary rung be re-poked during its own
   // ban every sweep — live evidence: vision 418 @467wt/min, retry-after 889s).
-  const HOSTS = ["https://data-api.binance.vision", "https://api.binance.com"];
+  // v13.2.3 (trace 1a170bba02dff781): api1-4 added as mid rungs (200 @356-408ms probed 2026-10-25), api last.
+  const HOSTS = ["https://data-api.binance.vision", "https://api1.binance.com", "https://api2.binance.com", "https://api3.binance.com", "https://api4.binance.com", "https://api.binance.com"];
   const ready = spotHostsReady(HOSTS);
   if (ready.length === 0) return binanceSpotMirrorCache?.data ?? out;
   for (const host of ready) {

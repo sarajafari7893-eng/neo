@@ -127,7 +127,7 @@ const fbStats = (() => {
 // linear this is the only honest revival path.
 // v13.2.1 — per-host 418/429 backoff via the shared spot-host gate.
 async function spotKlines(symbol: string, tf: ScanTf, limit: number): Promise<FlowCandle[] | null> {
-  for (const host of spotHostsReady(["https://data-api.binance.vision", "https://api.binance.com"])) {
+  for (const host of spotHostsReady(["https://data-api.binance.vision", "https://api1.binance.com", "https://api2.binance.com", "https://api3.binance.com", "https://api4.binance.com", "https://api.binance.com"])) {
     try {
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), 6500);

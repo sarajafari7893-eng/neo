@@ -15,10 +15,13 @@ import { gateFetch } from "./fapi-gate";
 import { spotMirrorKlines, bybitKlines, bybitTickerMap } from "./flow-bridge"; // v12.3 TASK-52 klines · v12.4 TASK-53 pool mirror
 import { isTradeableTicker } from "./price-armor"; // v12.0 Task 44-① zombie-ticker rejection at the feed layer
 
-const BINANCE_HOSTS = ["https://api.binance.com", "https://data-api.binance.vision"];
+// v13.2.3 — vision first (200 @291ms) + api1-4 (200 @356-408ms), api last (403 from this egress, probed 2026-10-25)
+const BINANCE_HOSTS = ["https://data-api.binance.vision", "https://api1.binance.com", "https://api2.binance.com", "https://api3.binance.com", "https://api4.binance.com", "https://api.binance.com"];
 const FAPI = "https://fapi.binance.com";
-// dual-host failover for the futures REST plane (same pattern as BINANCE_HOSTS)
-const FAPI_HOSTS = ["https://fapi.binance.com", "https://fapi1.binance.com"];
+// dual-host failover for the futures REST plane — fapi is the ONLY official
+// USDT-M futures REST host: fapi1.binance.com probed 2026-10-25 = HTTP 302
+// redirect (not an API host) → removed as a dead rung.
+const FAPI_HOSTS = ["https://fapi.binance.com"];
 const TIMEOUT_MS = 6500;
 
 import type { Candle } from "./indicators";

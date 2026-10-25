@@ -41,7 +41,8 @@ export const HORIZON_WINDOW: Record<FwdHorizon, [number, number]> = {
 
 const INTERVAL_MS: Record<string, number> = { "15m": 900_000, "1h": 3_600_000, "4h": 4 * 3_600_000 };
 
-const SPOT_HOSTS = ["https://api.binance.com", "https://data-api.binance.vision"];
+// v13.2.3 (trace 1a170bba02dff781): vision first + api1-4 mid rungs (probed 200 on 2026-10-25), api last (403 from this egress).
+const SPOT_HOSTS = ["https://data-api.binance.vision", "https://api1.binance.com", "https://api2.binance.com", "https://api3.binance.com", "https://api4.binance.com", "https://api.binance.com"];
 const BYBIT_URL = "https://api.bybit.com";
 const EGRESS_TIMEOUT_MS = 15_000;
 const PAGE_MAX = 1000; // spot/bybit page cap (fapi caps at 1500, we stay at 1000)

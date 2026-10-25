@@ -133,9 +133,11 @@ async function bybitJfetch<T>(url: string): Promise<T | null> {
 // «از data-api.binance.vision استفاده کن؛ جریان زندهٔ لحظه‌ای باید با بایننس
 // باشد»): measured live 2026-10-25 — data-api.binance.vision 32/32 HTTP 200
 // p50 57ms while api.binance.com rides 418 ban-storms from this shared egress.
-// The Binance public data mirror is the PRIMARY spot-plane host now;
-// api.binance.com stays as the secondary rung.
-const SPOT_HOSTS = ["https://data-api.binance.vision", "https://api.binance.com"];
+// The Binance public data mirror is the PRIMARY spot-plane host now.
+// v13.2.3 (trace 1a170bba02dff781 — «آیا می‌توان از آدرس‌های جایگزین استفاده کرد؟»):
+// live probe 2026-10-25 01:5xZ — vision /api/v3/ping 200 @291ms, api1-4 200 @356-408ms,
+// api.binance.com + api-gcp 403 from this egress → api1-4 added as mid rungs, api last.
+const SPOT_HOSTS = ["https://data-api.binance.vision", "https://api1.binance.com", "https://api2.binance.com", "https://api3.binance.com", "https://api4.binance.com", "https://api.binance.com"];
 // v13.2.1 — per-host 418/429 backoff via the shared spot-host gate: a banned
 // rung is SKIPPED (not re-poked every tick) and traffic slides to the healthy
 // host until retry-after expires (live evidence: vision 418 @467wt/min while

@@ -2,15 +2,15 @@
  "ver": "supervisor-cron 1.6.0",
  "pid": 1718,
  "startedAt": "2026-10-24T22:50:48.954Z",
- "updatedAt": "2026-10-25T01:41:19.207Z",
+ "updatedAt": "2026-10-25T01:52:11.249Z",
  "jobs": {
   "sweep": {
-   "lastRunAt": 1792892478954,
-   "nextRunAt": 1792892478954,
+   "lastRunAt": 1792893078954,
+   "nextRunAt": 1792893678954,
    "lastStatus": "ok",
-   "lastDurationMs": 253,
+   "lastDurationMs": 30,
    "lastError": null,
-   "runs": 86,
+   "runs": 87,
    "failures": 0
   },
   "progress": {
@@ -41,12 +41,12 @@
    "failures": 0
   },
   "backup": {
-   "lastRunAt": 1792882278978,
+   "lastRunAt": 1792893078984,
    "nextRunAt": 1792893078978,
    "lastStatus": "ok",
-   "lastDurationMs": 60568,
+   "lastDurationMs": 52265,
    "lastError": null,
-   "runs": 4,
+   "runs": 5,
    "failures": 0
   },
   "digest": {
@@ -59,17 +59,17 @@
    "failures": 0
   },
   "keepwarm": {
-   "lastRunAt": 1792892478955,
-   "nextRunAt": 1792892778954,
+   "lastRunAt": 1792893078954,
+   "nextRunAt": 1792893378954,
    "lastStatus": "error",
-   "lastDurationMs": 2,
-   "lastError": "HEARTBEAT COLD app:3000 0ms streak=1",
-   "runs": 92,
-   "failures": 19
+   "lastDurationMs": 3,
+   "lastError": "HEARTBEAT COLD app:3000 1ms streak=1",
+   "runs": 94,
+   "failures": 20
   }
  },
  "lastSweep": {
-  "at": "2026-10-25T01:41:18.975Z",
+  "at": "2026-10-25T01:51:18.980Z",
   "verdict": "RED",
   "reason": "app :3000 down",
   "services": {
@@ -101,7 +101,7 @@
    "sentinel": {
     "up": true,
     "status": 200,
-    "ms": 0
+    "ms": 1
    },
    "ws": {
     "up": true,
@@ -111,12 +111,12 @@
    "bridge": {
     "up": true,
     "status": 200,
-    "ms": 1
+    "ms": 0
    },
    "tbt": {
     "up": true,
     "status": 200,
-    "ms": 0
+    "ms": 1
    }
   },
   "anomalies": [
@@ -137,7 +137,7 @@
    }
   ],
   "data": {
-   "lastEventAgeMin": 1
+   "lastEventAgeMin": 2
   },
   "streaks": {
    "wsDown": 0,
@@ -159,9 +159,9 @@
   "newN": 6
  },
  "lastKeepwarm": {
-  "at": "2026-10-25T01:41:18.955Z",
+  "at": "2026-10-25T01:51:18.955Z",
   "ok": false,
-  "ms": 0,
+  "ms": 1,
   "bootAt": null,
   "gitSha": null,
   "coldStreak": 1
@@ -175,34 +175,6 @@
  "wsDownStreak": 0,
  "staleStreak": 0,
  "history": [
-  {
-   "id": "keepwarm",
-   "at": 1792882878955,
-   "status": "ok",
-   "durationMs": 46,
-   "detail": "HEARTBEAT OK 46ms boot=22:59:26Z sha=07408ee"
-  },
-  {
-   "id": "keepwarm",
-   "at": 1792883178954,
-   "status": "ok",
-   "durationMs": 55,
-   "detail": "HEARTBEAT OK 55ms boot=23:05:23Z sha=fc8e814"
-  },
-  {
-   "id": "keepwarm",
-   "at": 1792883478954,
-   "status": "error",
-   "durationMs": 4,
-   "detail": "HEARTBEAT COLD app:3000 2ms streak=1"
-  },
-  {
-   "id": "sweep",
-   "at": 1792883478954,
-   "status": "ok",
-   "durationMs": 685,
-   "detail": "RED: app :3000 down"
-  },
   {
    "id": "keepwarm",
    "at": 1792883778954,
@@ -524,6 +496,34 @@
    "status": "ok",
    "durationMs": 253,
    "detail": "RED: app :3000 down"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1792892778954,
+   "status": "ok",
+   "durationMs": 10901,
+   "detail": "HEARTBEAT OK 8002ms boot=Z sha=?"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1792893078954,
+   "status": "error",
+   "durationMs": 3,
+   "detail": "HEARTBEAT COLD app:3000 1ms streak=1"
+  },
+  {
+   "id": "sweep",
+   "at": 1792893078954,
+   "status": "ok",
+   "durationMs": 30,
+   "detail": "RED: app :3000 down"
+  },
+  {
+   "id": "backup",
+   "at": 1792893078984,
+   "status": "ok",
+   "durationMs": 52265,
+   "detail": "snapshot ok in 52s: SNAPSHOT OK — nexus-snapshot-20261025-015118.zip (48M) · 12 snapshots retained (max 12) · wal:VACUUM-COPY-CONSISTENT+CHECKPOINTED · cal:OK · enc:ENCRYPTED · off-site: DISABLED(oper"
   }
  ],
  "watchRuns": [
