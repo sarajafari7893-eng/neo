@@ -56,7 +56,9 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync
 //     SL hit on a $47 account (−22% in one day) — risk was unbounded.
 //   • walletUsdt captured from futures/balance (balance ≠ availableBalance).
 //   • doctrine notional audit is risk-cap aware; /config accepts maxRiskPct 0.1..10.
-const VER = "toobit-bridge 1.4.4";
+// v1.4.5 PHANTOM-PNL FIX (trace 1a174e9c2aa28295): never-executed intents must
+// never inherit the symbol's fill history; books self-heal at boot.
+const VER = "toobit-bridge 1.4.5";
 // v1.4.3 (operator order trace 1a172ca1af260c0d — «مارجین 5$/$0.5 به‌جای 10$، چرا هیچ سیگنالی در سود بسته نشده، وضعیت NX-3139 در لایو متفاوت است — اقدامات حیاتی فوری»):
 //   Forensics proved FOUR independent root causes, all fixed here:
 //   ① CONTRACT-MULTIPLIER SIZING BUG (the $0.5 margin) — exchangeInfo carries
@@ -269,6 +271,20 @@ function loadState(): void {
         floorLearn: raw.floorLearn ?? {},
         doctrine: { opens: raw.doctrine?.opens ?? 0, skipBy: raw.doctrine?.skipBy ?? {}, violations: raw.doctrine?.violations ?? [], lastScanAt: raw.doctrine?.lastScanAt ?? 0, orphans: raw.doctrine?.orphans ?? 0 },
       };
+      // v1.4.5 — phantom-PnL purge: DETECTed-but-never-executed intents carry
+      // no exchange fills; a close-path userTrades sum with openedAt=null once
+      // re-counted the symbol's WHOLE history into them (proven exact matches
+      // ENA/BTW/PEPE). Heal the persisted books at boot.
+      let purged = 0;
+      for (const it of Object.values(S.intents)) {
+        if (it.mode === "LIVE" && it.status === "CLOSED" && !it.orderId && !it.openedAt && it.realizedPnlUsdt != null) {
+          it.realizedPnlUsdt = null;
+          it.closeReason = `${it.closeReason ?? "CLOSED"} (بدون اجرا)`;
+          it.events.push({ at: Date.now(), ev: "PHANTOM-PNL-PURGED", note: "never-executed intent — symbol-history sum removed" });
+          purged++;
+        }
+      }
+      if (purged > 0) { audit("PHANTOM-PNL-PURGE", { purged }); persistState(); }
       // v1.4.1 migration: lift the legacy concurrency cap (3) once — operator
       // mandate «باید بدون سقف باشد». Explicit later /config writes persist normally.
       if ((S.cfg.cfgRev ?? 0) < 2) { S.cfg.maxConcurrent = 0; S.cfg.cfgRev = 2; }
@@ -717,9 +733,13 @@ async function resolveFill(tbSymbol: string, orderId: string | null, fallback: n
 // This is the money-truth behind «چرا هیچ سیگنالی در سود بسته نشده».
 async function fetchRealizedPnl(it: Intent): Promise<number | null> {
   try {
+    // v1.4.5 — a NEVER-EXECUTED intent (no openedAt) owns ZERO exchange fills;
+    // with since=0 the symbol's whole fill history was once re-summed into it
+    // (phantom PnL: ENA -0.7445 = morning -0.6893-0.0552, BTW -3.2605, PEPE -0.1066).
+    if (!it.openedAt) return null;
     const r = await signed<Array<{ time?: string; realizedPnl?: string; commission?: string; makerRebate?: string }>>("GET", "/api/v1/futures/userTrades", { symbol: it.tbSymbol, limit: 100 });
     const rows = Array.isArray(r.data) ? r.data : [];
-    const since = it.openedAt ?? 0;
+    const since = it.openedAt;
     let pnl = 0, seen = false;
     for (const f of rows) {
       if (Number(f.time ?? 0) < since) continue;
@@ -798,9 +818,17 @@ async function doClose(it: Intent, reason: string): Promise<void> {
   it.closeReason = reason;
   it.actionAttempts = 0;
   if (it.mode === "LIVE") {
-    const pnl = await fetchRealizedPnl(it); // v1.4.3 — money truth of this close
-    if (pnl !== null) it.realizedPnlUsdt = pnl;
-    audit("EXEC-PNL", { serial: it.serial, reason, realizedPnlUsdt: pnl });
+    // v1.4.5 — DETECTed-but-never-sent intents (exec gate off / gates skip) own
+    // no exchange fills: closing them must NOT sum the symbol's fill history.
+    const neverExecuted = !it.orderId && !it.openedAt;
+    if (neverExecuted) {
+      it.closeReason = `${reason} (بدون اجرا)`;
+      audit("EXEC-PNL-SKIP", { serial: it.serial, reason: it.closeReason, why: "intent never executed — no exchange fills belong to it" });
+    } else {
+      const pnl = await fetchRealizedPnl(it); // v1.4.3 — money truth of this close
+      if (pnl !== null) it.realizedPnlUsdt = pnl;
+      audit("EXEC-PNL", { serial: it.serial, reason, realizedPnlUsdt: pnl });
+    }
   }
   it.events.push({ at: it.closedAt, ev: "CLOSED", note: reason });
   persistState();
