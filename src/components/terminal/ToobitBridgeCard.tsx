@@ -13,6 +13,9 @@ import { cn } from "@/lib/utils";
  * cfg.notionalUsdt, whose stale 15$ display was the "Notional shows another
  * number" bug), entry gates (drift/delay), open intents with expected-vs-
  * actual notional, and the recent card-lifecycle trail.
+ * v1.4.3 (trace 1a172ca1af260c0d): LIVE money-truth badge — exchange-verified
+ * realized PnL of closed intents + open mark PnL (/status.livePnl) — and the
+ * sizing note now names the exchange contractMultiplier (the $0.5-margin bug).
  * Feed: /api/toobit-bridge (5s poll).
  */
 
@@ -48,6 +51,7 @@ interface BridgeStatus {
   recent?: IntentDTO[];
   activeCount?: number | null; // v13.2.2 — DB ACTIVE signals, to mirror-check openIntents against
   metrics?: { n: number; totalMsP50: number | null; totalMsP95: number | null; detectMsP50: number | null; slipBpsP50: number | null; slipBpsWorst: number | null };
+  livePnl?: { realizedClosedUsdt: number; openUnrealizedUsdt: number; closedN: number; openN: number }; // v1.4.3 — exchange-verified money truth
   doctrine?: DoctrineSummary;
   instruments?: number;
 }
@@ -86,6 +90,8 @@ export default function ToobitBridgeCard() {
   const levMin = levs.length ? Math.min(...levs) : null;
   const levMax = levs.length ? Math.max(...levs) : null;
   const driftSkips = (d?.skipBy?.["ENTRY-DRIFT"] ?? 0) + (d?.skipBy?.["ENTRY-DELAY"] ?? 0);
+  const lp = data?.livePnl;
+  const netUsdt = lp ? lp.realizedClosedUsdt + lp.openUnrealizedUsdt : null;
 
   return (
     <BentoCard className="p-4" tone={live ? "magenta" : "neon"} ariaLabel="Toobit execution bridge">
@@ -100,7 +106,7 @@ export default function ToobitBridgeCard() {
       </div>
 
       <p className="mt-1 text-[11px] leading-4 text-muted-foreground">
-        آینهٔ اجرای کارت سیگنال روی پرپچوال USDT-M تووبیت · مارجین ثابت {margin}$ · اهرم = اهرم کارت · ورود MARKET با گیت‌های drift/delay · سیو سود TP1/TP2 · راستی‌آزمایی ۱۵s + پویش دکترین ۳۰s
+        آینهٔ اجرای کارت سیگنال روی پرپچوال USDT-M تووبیت · مارجین ثابت {margin}$ · اهرم = اهرم کارت · نوتوینال واقعی = مارجین × اهرم × ضریب قرارداد صرافی (v1.4.3) · سیو سود TP1/TP2 · راستی‌آزمایی ۱۵s + پویش دکترین ۳۰s
       </p>
 
       <div className="mt-3 grid grid-cols-2 gap-2 text-[11px]">
@@ -152,6 +158,18 @@ export default function ToobitBridgeCard() {
         ) : (
           <span className="rounded border border-border/60 bg-background/40 px-1.5 py-0.5 font-mono text-muted-foreground">
             دکترین ✓ {d?.opens ?? 0} ورود پاک
+          </span>
+        )}
+        {/* v1.4.3 — LIVE money truth (exchange-verified): realized of closed + mark PnL of open */}
+        {live && lp && (
+          <span
+            className={cn(
+              "rounded px-1.5 py-0.5 font-mono",
+              netUsdt !== null && netUsdt >= 0 ? "border border-neon/40 bg-neon/10 text-neon" : "border border-danger-neon/40 bg-danger-neon/10 text-danger-neon",
+            )}
+            title={`حقایق مالی صرافی: بسته‌شده ${lp.closedN} intent → realized ${lp.realizedClosedUsdt}$ · باز ${lp.openN} → سود/زیان لحظه‌ای ${lp.openUnrealizedUsdt}$`}
+          >
+            PnL {netUsdt !== null && netUsdt >= 0 ? "+" : ""}{netUsdt?.toFixed(2)}$
           </span>
         )}
       </div>

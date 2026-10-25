@@ -193,6 +193,7 @@ interface Intent {
   unrealizedPnlUsdt?: number;   // v1.4.3 — current mark-to-market PnL from recon positions read
   prevStatusSeen?: string;      // v1.4.3 — status before the current transition (revert-on-reject retry)
   actionAttempts?: number;      // v1.4.3 — retry cap for reverted bank/close transitions
+  lastAttemptedStatus?: string; // v1.4.3 — the card status whose action attempts are counted
   levSrc?: "card" | "fallback"; // v1.3.0 doctrine — where the entry leverage came from
   expectedNotional?: number;    // v1.3.0 doctrine — marginUsdt × leverage (the card math)
   actualNotional?: number;      // v1.3.0 doctrine — qty × fillPrice (what the book actually saw)
@@ -265,9 +266,19 @@ function loadState(): void {
       // v1.2.0 hardening: pre-v1.2.0 persisted intents have no leverage field —
       // backfill so notional math (margin × leverage) can never see undefined.
       // v1.3.0 hardening: backfill doctrine fields on legacy intents too.
+      // v1.4.3 hardening: stamp pre-multiplier intents (sizingRev 2) so the
+      // doctrine never mistakes their bookkeeping notional for a live violation,
+      // and backfill the revert-retry bookkeeping.
       for (const it of Object.values(S.intents)) {
         if (!(it.leverage >= 1)) { it.leverage = S.cfg.leverage; it.levSrc = "fallback"; }
         if (it.levSrc === undefined) it.levSrc = "card";
+        if (it.sizingRev === undefined) {
+          it.sizingRev = 2;
+          if (it.status === "OPEN" || it.status === "OPENING") {
+            it.events.push({ at: Date.now(), ev: "MULT-SIZING-LEGACY", note: "opened pre-1.4.3: entry qty ignored contractMultiplier — real exchange notional/margin smaller than bookkeeping (NX-3126/NX-3140 class)" });
+          }
+        }
+        if (it.prevStatusSeen === undefined) it.prevStatusSeen = it.lastStatusSeen;
         if (it.expectedNotional === undefined) it.expectedNotional = Number((S.cfg.marginUsdt * it.leverage).toFixed(6));
         if (it.actualNotional === undefined && it.qtyOrig > 0 && it.fillPrice) it.actualNotional = Number((it.qtyOrig * it.fillPrice).toFixed(6));
         if (it.entryAgeMs === undefined && it.lat.totalMs !== null) it.entryAgeMs = it.lat.totalMs;
@@ -830,9 +841,30 @@ async function pollCards(): Promise<void> {
         const it = S.intents[id]!;
         const c = byId.get(id);
         if (!c) continue;
+        // v1.4.3 — mirror engine-side protective mutations (breakeven stop after
+        // TP1, TP edits) for open intents. Pre-1.4.3 the stop moved only in the
+        // ledger — NX-3139 closed LIVE at a level the ledger had long replaced.
+        const slNow = c.stopLoss > 0 ? c.stopLoss : null;
+        const tp3Now = c.tp3 > 0 ? c.tp3 : null;
+        const slMoved = slNow !== null && Math.abs((it.stopLoss ?? 0) - slNow) / slNow > 1e-9;
+        const tp3Moved = tp3Now !== null && Math.abs((it.tp3 ?? 0) - tp3Now) / tp3Now > 1e-9;
+        if (it.status === "OPEN" && (slMoved || tp3Moved)) {
+          if (slMoved && slNow) it.stopLoss = slNow;
+          if (tp3Moved && tp3Now) it.tp3 = tp3Now;
+          if (it.mode === "LIVE") {
+            const side = it.direction === "LONG" ? "LONG" : "SHORT";
+            const r = await signed("POST", "/api/v1/futures/position/trading-stop", { symbol: it.tbSymbol, side, takeProfit: String(it.tp3), stopLoss: String(it.stopLoss), tpTriggerBy: "MARK_PRICE", slTriggerBy: "MARK_PRICE" });
+            audit("STOP-MOVE-MIRROR", { serial: it.serial, symbol: it.tbSymbol, stopLoss: it.stopLoss, tp3: it.tp3, ok: r.ok, err: r.err });
+          } else {
+            audit("STOP-MOVE-PAPER", { serial: it.serial, symbol: it.tbSymbol, stopLoss: it.stopLoss, tp3: it.tp3 });
+          }
+          persistState();
+        }
         const prev = it.lastStatusSeen;
         if (c.status === prev) continue;
+        it.prevStatusSeen = prev; // v1.4.3 — revert point for rejected actions
         it.lastStatusSeen = c.status;
+        if (it.lastAttemptedStatus !== c.status) { it.actionAttempts = 0; it.lastAttemptedStatus = c.status; } // fresh budget only for a genuinely new status
         it.cardStatus = c.status; // v1.3.0 doctrine — visible open-management mirror
         if (c.status === "TP1") pushAction({ kind: "bank", cardId: id, frac: S.cfg.tp1Frac, reason: "TP1" });
         else if (c.status === "TP2") pushAction({ kind: "bank", cardId: id, frac: S.cfg.tp2Frac, reason: "TP2" });
@@ -906,12 +938,13 @@ function isLiveMode(): boolean {
 }
 
 // ── reconciliation (راستی‌آزمایی) ────────────────────────────────────────────
+const tpslAssertedAt = new Map<string, number>(); // v1.4.3 — per-symbol re-assert throttle (position-level TP/SL is invisible in openOrders)
 let reconBusy = false;
 async function reconcile(): Promise<void> {
   if (reconBusy || !isLiveMode()) return;
   reconBusy = true;
   try {
-    const pos = await signed<Array<{ symbol: string; side: string; position: string; avgPrice: string; unrealizedPnL?: string }>>("GET", "/api/v1/futures/positions");
+    const pos = await signed<Array<{ symbol: string; side: string; position: string; avgPrice: string; unrealizedPnL?: string; realizedPnL?: string }>>("GET", "/api/v1/futures/positions");
     const rows = Array.isArray(pos.data) ? pos.data : [];
     const openIntents = Object.values(S.intents).filter((i) => i.status === "OPEN" || i.status === "OPENING");
     for (const p of rows) {
@@ -919,22 +952,29 @@ async function reconcile(): Promise<void> {
       if (!(qty > 0)) continue;
       const match = openIntents.find((i) => i.tbSymbol === p.symbol && i.direction === p.side);
       if (!match) { audit("RECON-UNKNOWN-POSITION", { symbol: p.symbol, side: p.side, qty }); continue; }
+      // v1.4.3 — live PnL truth straight from the position row
+      const rp = Number(p.realizedPnL); if (Number.isFinite(rp)) match.realizedPnlUsdt = Number(rp.toFixed(4));
+      const up = Number(p.unrealizedPnL); if (Number.isFinite(up)) match.unrealizedPnlUsdt = Number(up.toFixed(4));
       const avg = Number(p.avgPrice);
       if (avg > 0 && match.fillPrice && Math.abs(avg - match.fillPrice) / avg > 0.002) {
         audit("RECON-DRIFT-ENTRY", { serial: match.serial, exchange: avg, local: match.fillPrice });
         match.fillPrice = avg;
-        match.actualNotional = Number((match.qtyOrig * avg).toFixed(6)); // v1.3.0 — keep the doctrine truth synced
+        const m2 = instruments.get(match.tbSymbol)?.mult ?? match.contractMult ?? 1; // v1.4.3
+        match.actualNotional = Number((match.qtyOrig * avg * m2).toFixed(6)); // v1.3.0 — keep the doctrine truth synced
       }
       // exchange-side protective orders present?
       const oo = await signed<Array<{ symbol?: string; type?: string; orderType?: string }>>("GET", "/api/v1/futures/openOrders", { symbol: p.symbol });
       const orows = Array.isArray(oo.data) ? oo.data : [];
       const hasStop = orows.some((o) => (o.type ?? o.orderType ?? "").toUpperCase().includes("STOP"));
-      match.protected = hasStop; // v1.3.0 doctrine — protection is audited, not assumed
-      if (!hasStop) {
+      // v1.4.3 — position-level TP/SL never appears in openOrders (pre-1.4.3 this
+      // gap fired 4176 re-attach POSTs in ~10h). Re-assert at most once/10min;
+      // between asserts `protected` keeps its last asserted truth.
+      if (!hasStop && Date.now() - (tpslAssertedAt.get(p.symbol) ?? 0) > 600_000) {
+        tpslAssertedAt.set(p.symbol, Date.now());
         const side = match.direction === "LONG" ? "LONG" : "SHORT";
         const r = await signed("POST", "/api/v1/futures/position/trading-stop", { symbol: p.symbol, side, takeProfit: String(match.tp3), stopLoss: String(match.stopLoss), tpTriggerBy: "MARK_PRICE", slTriggerBy: "MARK_PRICE" });
         audit("RECON-REATTACH-TPSL", { serial: match.serial, symbol: p.symbol, ok: r.ok, err: r.err });
-        match.protected = r.ok; // re-attach succeeded → protected again
+        match.protected = r.ok; // re-assert succeeded → protected again
       }
     }
     // intents whose position vanished on-exchange → verify + close bookkeeping
@@ -942,7 +982,9 @@ async function reconcile(): Promise<void> {
       if (it.mode !== "LIVE") continue;
       const still = rows.some((p) => p.symbol === it.tbSymbol && p.side === it.direction && Number(p.position) > 0);
       if (!still && it.status === "OPEN") {
-        audit("RECON-POSITION-GONE", { serial: it.serial, symbol: it.tbSymbol });
+        const pnl = await fetchRealizedPnl(it); // v1.4.3 — money truth of exchange-side closes (stop/TP fired before the card)
+        if (pnl !== null) it.realizedPnlUsdt = pnl;
+        audit("RECON-POSITION-GONE", { serial: it.serial, symbol: it.tbSymbol, realizedPnlUsdt: pnl });
         it.status = "CLOSED";
         it.qtyRemaining = 0;
         it.closedAt = Date.now();
@@ -999,9 +1041,12 @@ async function doctrineScan(): Promise<void> {
         const exp = S.cfg.marginUsdt * it.leverage;
         it.expectedNotional = Number(exp.toFixed(6));
         if (it.qtyOrig > 0 && it.fillPrice) {
-          it.actualNotional = Number((it.qtyOrig * it.fillPrice).toFixed(6));
+          const mult = instruments.get(it.tbSymbol)?.mult ?? it.contractMult ?? 1; // v1.4.3 — real notional
+          it.actualNotional = Number((it.qtyOrig * it.fillPrice * mult).toFixed(6));
           const deltaBps = Math.abs(it.actualNotional - exp) / exp * 10_000;
-          if (deltaBps > 2000) doctrineViolation(it.serial, "NOTIONAL-DELTA", `exp=${exp.toFixed(2)} act=${it.actualNotional.toFixed(2)} (${deltaBps.toFixed(0)}bps)`);
+          // v1.4.3 — legacy-sized intents (sizingRev 2) are exempt: their bookkeeping
+          // notional predates the multiplier fix and is stamped MULT-SIZING-LEGACY.
+          if (deltaBps > 2000 && (it.sizingRev ?? 3) >= 3) doctrineViolation(it.serial, "NOTIONAL-DELTA", `exp=${exp.toFixed(2)} act=${it.actualNotional.toFixed(2)} (${deltaBps.toFixed(0)}bps)`);
         }
         // ③ card-status mirror (مدیریت سیگنال‌های باز): record + lag audit
         if (c) {
@@ -1063,12 +1108,22 @@ Bun.serve({
     }
     if (req.method === "GET" && path === "/status") {
       const intents = Object.values(S.intents).sort((a, b) => (b.openedAt ?? b.closedAt ?? 0) - (a.openedAt ?? a.closedAt ?? 0));
+      // v1.4.3 — LIVE money truth: exchange-verified realized (closed) + mark PnL (open)
+      const liveAll = intents.filter((i) => i.mode === "LIVE");
+      const liveClosed = liveAll.filter((i) => i.status === "CLOSED");
+      const liveOpen = liveAll.filter((i) => i.status === "OPEN" || i.status === "OPENING");
       return Response.json({
         ver: VER,
         mode: isLiveMode() ? "LIVE" : "PAPER",
         liveApproved: S.cfg.liveApproved,
         balanceUsdt, balanceAt,
         cfg: S.cfg,
+        livePnl: {
+          realizedClosedUsdt: Number(liveClosed.reduce((a, i) => a + (i.realizedPnlUsdt ?? 0), 0).toFixed(4)),
+          openUnrealizedUsdt: Number(liveOpen.reduce((a, i) => a + (i.unrealizedPnlUsdt ?? 0), 0).toFixed(4)),
+          closedN: liveClosed.length,
+          openN: liveOpen.length,
+        },
         killFile: killFile(),
         openIntents: intents.filter((i) => i.status === "OPEN" || i.status === "OPENING"),
         recent: intents.slice(-12).reverse(),
