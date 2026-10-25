@@ -2,15 +2,15 @@
  "ver": "supervisor-cron 1.6.0",
  "pid": 1718,
  "startedAt": "2026-10-24T22:50:48.954Z",
- "updatedAt": "2026-10-25T08:53:01.256Z",
+ "updatedAt": "2026-10-25T09:01:19.651Z",
  "jobs": {
   "sweep": {
-   "lastRunAt": 1792918278954,
+   "lastRunAt": 1792918878955,
    "nextRunAt": 1792918878954,
    "lastStatus": "ok",
-   "lastDurationMs": 1299,
+   "lastDurationMs": 696,
    "lastError": null,
-   "runs": 129,
+   "runs": 130,
    "failures": 0
   },
   "progress": {
@@ -51,7 +51,7 @@
   },
   "digest": {
    "lastRunAt": 1792918380956,
-   "nextRunAt": 1792918380956,
+   "nextRunAt": 1792925580956,
    "lastStatus": "ok",
    "lastDurationMs": 300,
    "lastError": null,
@@ -59,29 +59,29 @@
    "failures": 0
   },
   "keepwarm": {
-   "lastRunAt": 1792918278954,
-   "nextRunAt": 1792918578954,
+   "lastRunAt": 1792918878955,
+   "nextRunAt": 1792919178954,
    "lastStatus": "error",
-   "lastDurationMs": 131,
-   "lastError": "HEARTBEAT COLD app:3000 65ms streak=1",
-   "runs": 178,
-   "failures": 38
+   "lastDurationMs": 128,
+   "lastError": "HEARTBEAT COLD app:3000 61ms streak=3",
+   "runs": 180,
+   "failures": 40
   }
  },
  "lastSweep": {
-  "at": "2026-10-25T08:51:19.574Z",
+  "at": "2026-10-25T09:01:19.646Z",
   "verdict": "RED",
   "reason": "app :3000 down",
   "services": {
    "app": {
     "up": false,
     "status": 500,
-    "ms": 64
+    "ms": 57
    },
    "liq": {
     "up": true,
     "status": 200,
-    "ms": 0
+    "ms": 1
    },
    "trade": {
     "up": true,
@@ -96,12 +96,12 @@
    "watchdog": {
     "up": true,
     "status": 200,
-    "ms": 1
+    "ms": 0
    },
    "sentinel": {
     "up": true,
     "status": 200,
-    "ms": 0
+    "ms": 1
    },
    "ws": {
     "up": true,
@@ -159,14 +159,14 @@
   "newN": 7
  },
  "lastKeepwarm": {
-  "at": "2026-10-25T08:51:19.083Z",
+  "at": "2026-10-25T09:01:19.080Z",
   "ok": false,
-  "ms": 65,
+  "ms": 61,
   "bootAt": null,
   "gitSha": null,
-  "coldStreak": 1
+  "coldStreak": 3
  },
- "coldStreak": 1,
+ "coldStreak": 3,
  "alertLedger": {
   "sentinel-red": 1792918280025,
   "review-llm-unavailable": 1792882279253,
@@ -176,27 +176,6 @@
  "wsDownStreak": 0,
  "staleStreak": 0,
  "history": [
-  {
-   "id": "keepwarm",
-   "at": 1792909278954,
-   "status": "ok",
-   "durationMs": 60,
-   "detail": "HEARTBEAT OK 59ms boot=06:16:16Z sha=30d5f19"
-  },
-  {
-   "id": "sweep",
-   "at": 1792909278954,
-   "status": "ok",
-   "durationMs": 735,
-   "detail": "AMBER: sentinel :3030 verdict AMBER · toobit-bridge doctrine: 2 violation(s) — last=MIRROR-LAG: card=TP1 but intent still OPEN "
-  },
-  {
-   "id": "keepwarm",
-   "at": 1792909578954,
-   "status": "ok",
-   "durationMs": 47,
-   "detail": "HEARTBEAT OK 47ms boot=06:24:29Z sha=c28bf4d"
-  },
   {
    "id": "keepwarm",
    "at": 1792909878954,
@@ -525,6 +504,27 @@
    "status": "ok",
    "durationMs": 300,
    "detail": "digest new=7 settled=2 bridge=ok"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1792918578954,
+   "status": "error",
+   "durationMs": 65,
+   "detail": "HEARTBEAT COLD app:3000 30ms streak=2"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1792918878955,
+   "status": "error",
+   "durationMs": 128,
+   "detail": "HEARTBEAT COLD app:3000 61ms streak=3"
+  },
+  {
+   "id": "sweep",
+   "at": 1792918878955,
+   "status": "ok",
+   "durationMs": 696,
+   "detail": "RED: app :3000 down"
   }
  ],
  "watchRuns": [
