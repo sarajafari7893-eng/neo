@@ -2,11 +2,11 @@
  "ver": "supervisor-cron 1.6.0",
  "pid": 1718,
  "startedAt": "2026-10-24T22:50:48.954Z",
- "updatedAt": "2026-10-25T22:01:19.011Z",
+ "updatedAt": "2026-10-25T22:06:19.256Z",
  "jobs": {
   "sweep": {
    "lastRunAt": 1792965678954,
-   "nextRunAt": 1792965678954,
+   "nextRunAt": 1792966278954,
    "lastStatus": "ok",
    "lastDurationMs": 57,
    "lastError": null,
@@ -59,13 +59,13 @@
    "failures": 0
   },
   "keepwarm": {
-   "lastRunAt": 1792965678954,
+   "lastRunAt": 1792965978954,
    "nextRunAt": 1792965978954,
-   "lastStatus": "ok",
-   "lastDurationMs": 45,
-   "lastError": null,
-   "runs": 336,
-   "failures": 65
+   "lastStatus": "error",
+   "lastDurationMs": 302,
+   "lastError": "HEARTBEAT COLD app:3000 298ms streak=1",
+   "runs": 337,
+   "failures": 66
   }
  },
  "lastSweep": {
@@ -154,14 +154,14 @@
   "newN": 1
  },
  "lastKeepwarm": {
-  "at": "2026-10-25T22:01:18.999Z",
-  "ok": true,
-  "ms": 45,
-  "bootAt": "2026-10-25T21:52:44.661Z",
-  "gitSha": "3020ca4",
-  "coldStreak": 0
+  "at": "2026-10-25T22:06:19.253Z",
+  "ok": false,
+  "ms": 298,
+  "bootAt": null,
+  "gitSha": null,
+  "coldStreak": 1
  },
- "coldStreak": 0,
+ "coldStreak": 1,
  "alertLedger": {
   "sentinel-red": 1792940480504,
   "review-llm-unavailable": 1792925569286,
@@ -171,13 +171,6 @@
  "wsDownStreak": 0,
  "staleStreak": 0,
  "history": [
-  {
-   "id": "keepwarm",
-   "at": 1792956378954,
-   "status": "ok",
-   "durationMs": 28,
-   "detail": "HEARTBEAT OK 28ms boot=19:23:15Z sha=b93b2ce"
-  },
   {
    "id": "keepwarm",
    "at": 1792956678955,
@@ -520,6 +513,13 @@
    "status": "ok",
    "durationMs": 57,
    "detail": "AMBER: sentinel :3030 verdict AMBER · toobit-bridge doctrine: 3 violation(s) — last=MIRROR-LAG: card=SL but intent still OPEN 3"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1792965978954,
+   "status": "error",
+   "durationMs": 302,
+   "detail": "HEARTBEAT COLD app:3000 298ms streak=1"
   }
  ],
  "watchRuns": [
