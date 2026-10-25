@@ -32478,3 +32478,22 @@ Stage Summary:
 - پاسخ ①: آی‌پی تمیز مسکن فوری است اما ریشه نیست — دو آی‌پی مختلف قبلاً با همان الگو بن شدند؛ درمان = نظم وزنی + نردبان چندمیزبانه + backoff per-host که همین امروز (v13.2.1) بسته شد؛ آی‌پی خروجی VM از داخل سندباکس قابل تعویض نیست و مسیر واقعی تعویض، پروکسی خروجی اختصاصی (بن را ایزوله می‌کند) یا تعویض egress در سطح پلتفرم است — در صورت فراهم‌شدن پروکسی، اتصال با ban-ledger مستقل انجام می‌شود.
 - پاسخ ②: بله، Open intents باید برابر ACTIVE SIGNALS باشد و هست — تطبیق سریالی ۱:۱ با سه intent؛ اختلاف‌های موقتی همیشه داخل گیت‌های ممیزی‌پذیر دکترین است (سقف 3 هم‌زمانی + drift/delay/stale/symbol-absent + RETRY 90s + ORPHAN-sweep) و از امروز بج ACTIVE N در UI این ناورستی را دائمی قابل رؤیت می‌کند.
 - کلیدهای LIVE: روی دستگاه موجود نیستند (اثبات با audit BOOT hasKeys:false و گشتن همهٔ مسیرها)؛ زنجیرهٔ LIVE دولایه آماده و منتظر دو خط کلید در mini-services/toobit-bridge/.env است — بدون کلید واقعی، اجرای LIVE راستی‌آزمایی نمی‌شود و این صادقانه گزارش شد.
+
+---
+Task ID: LIVE-UNLIMITED-VISION-20261025
+Agent: orchestrator (دستور اپراتور trace 1a170bba02dff781: «۱. تأکید مهندس ارشد به اتصال پایدار به بایننس — آیا می‌توان از آدرس‌های جایگزین استفاده کرد؟ ۲. چرا سقف هم‌زمانی 3 است؟ باید بدون سقف باشد» + تحویل کلیدهای LIVE)
+
+Work Log:
+- ① پروب زندهٔ ۹ میزبان بایننس (01:52Z): fapi 200@160ms (وزن-1m:1830 — بالا، ریسک بن بازگشتی) · data-api.binance.vision 200@291ms · api1-4.binance.com هر چهار 200@356-408ms · api.binance.com و api-gcp هر دو **403** از این egress · fapi.binancefuture.com مرده (DNS) · fapi1.binance.com فقط 302 ریدایرکت (API نیست).
+- v13.2.3 نردبان ۶-رانگه در شش فایل وصله شد: flow-bridge/flow-scanner/futures-taxonomy/multi-exchange/futures-snapshot-settle (ترتیب: vision → api1-4 → api آخر) و market-feed (BINANCE_HOSTS همان نردبان؛ FAPI_HOSTS رانگ مردهٔ fapi1 حذف شد — fapi تنها میزبان رسمی REST آیندهاست). گیت per-host بک‌آف v13.2.1 دست‌نخورده.
+- ② جراحی سقف → پل v1.4.1: maxConcurrent 0 = بدون سقف (پیش‌فرض جدید)؛ مهاجرت یک‌بارهٔ cfgRev=2 سقف موروثی 3 را از state.json برمی‌دارد؛ /config بازهٔ 0..50 (0=∞)؛ گیت‌های MAX-CONCURRENT و پنجرهٔ RETRY فقط با سقف مثبت مسلح می‌شوند؛ UI بج «N/∞» + تولتیپ فارسی. شمارندهٔ تاریخی 19 SKIP حفظ شد (پس از آن صفر SKIP جدید).
+- ③ کلیدهای LIVE — نصب و راستی‌آزمایی: کلیدها فقط در mini-services/toobit-bridge/.env (gitignore قطعی — git check-ignore و git ls-files اثبات)؛ احراز امضاشدهٔ read-only: GET /api/v1/futures/balance → 200 (**47 USDT**)، positions → صفر پوزیشن، آفست ساعت −31ms؛ BOOT پل hasKeys:true و armed {"mode":"LIVE","balanceUsdt":47}.
+- جنگ زیرساختی: طوفان OOM سطح cgroup از 05:23 (اسپایک 2GB کامپایل سرد next-server، avail تا 225MB، dmesg کشتن app 24892) — چهار اینتانس پل قربانی شدند؛ تشخیص نهایی با wrapper ثبت-کد-خروج (exit file هرگز نوشته نشد = SIGKILL کل درخت) و لاگ mem-guard (mem-crit 05:33/05:36). رفع: آزادسازی pause-until واچداگ → heal خودکار tbt به‌عنوان فرزند واچداگ (pid 16041) → **بقا اثبات‌شده از مرز چند tool-call** (health 200 پیوسته).
+- راستی‌آزمایی نهایی: /status → mode LIVE، maxConcurrent:0، cfgRev:2، balance 47 · parity سریالی ۱:۱ (DB ACTIVE 3118 BNBUSDT ↔ open intent 3118) · doctrine: opens 36، orphans 0، violations فقط ۲ تاریخی · /api/toobit-bridge اپ → 200 با mode LIVE و activeCount:1 · intent 3119 به‌عنوان LIVE ثبت و صادقانه SKIP (entry-delay 95s>90s) شد.
+- lint = 17 (بی‌لاین، صفر خطای جدید)؛ push-armor دلتای کد را در add43869 (و snapshotهای بعدی) کامیت و push کرد؛ کلیدها در هیچ فایل ردیابی‌شده‌ای نیستند (grep اثبات).
+- نکتهٔ باز: WS آیندها (fstream.binance.com) TCP/TLS باز شد ولی در پروب 7s فریمی نیامد — تیپ آیندها روی نردبان REST می‌ماند؛ آیتم آینده.
+
+Stage Summary:
+- پاسخ ①: بله — آدرس‌های جایگزین وجود دارند، امروز سنجیده و وصل شدند: نردبان ۶-رانگه (fapi بومی → آینهٔ vision → api1-4) با بک‌آف per-host؛ پایداری = تنوع میزبان + نظم وزنی، نه تعویض IP (دو IP مختلف قبلاً با همان الگو بن شدند؛ api/api-gcp هم اکنون 403-اند).
+- پاسخ ②: سقف 3 یک پیکربندی پل بود (maxConcurrent پیش‌فرض v1.1.0) نه قانون دکترین — اکنون برداشته شد: بدون سقف، هر کارت ACTIVE بلافاصله intent می‌گیرد؛ مهاجرت پایدار است و UI آن را «∞» نشان می‌دهد.
+- LIVE: زنجیرهٔ اجرای واقعی مسلح شد (کلید + liveApproved + balance>0) — intents جدید با mode LIVE و سفارش واقعی تووبیت؛ فقط intents پیش از بوت (مثل 3118) با برچسب صادقانهٔ PAPER ادامه می‌یابند.
