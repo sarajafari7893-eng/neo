@@ -1,14 +1,14 @@
 {
- "at": 1792921849408,
+ "at": 1792925449414,
  "ver": "supervisor-sr 1.0.0",
  "services": [
   {
    "key": "app",
    "label": "app :3000",
    "url": "http://127.0.0.1:3000/api/healthz",
-   "up": false,
-   "status": 500,
-   "ms": 37
+   "up": true,
+   "status": 200,
+   "ms": 27
   },
   {
    "key": "ws",
@@ -16,7 +16,7 @@
    "url": "http://127.0.0.1:3003/socket.io/?EIO=4&transport=polling",
    "up": true,
    "status": 200,
-   "ms": 3
+   "ms": 2
   },
   {
    "key": "bridge",
@@ -24,7 +24,7 @@
    "url": "http://127.0.0.1:3005/health",
    "up": true,
    "status": 200,
-   "ms": 3
+   "ms": 2
   },
   {
    "key": "liq",
@@ -32,7 +32,7 @@
    "url": "http://127.0.0.1:3010/health",
    "up": true,
    "status": 200,
-   "ms": 3
+   "ms": 2
   },
   {
    "key": "trade",
@@ -40,7 +40,7 @@
    "url": "http://127.0.0.1:3011/health",
    "up": true,
    "status": 200,
-   "ms": 3
+   "ms": 2
   },
   {
    "key": "warm",
@@ -48,7 +48,7 @@
    "url": "http://127.0.0.1:3012/health",
    "up": true,
    "status": 200,
-   "ms": 3
+   "ms": 2
   },
   {
    "key": "watchdog",
@@ -56,7 +56,7 @@
    "url": "http://127.0.0.1:3020/health",
    "up": true,
    "status": 200,
-   "ms": 3
+   "ms": 2
   },
   {
    "key": "sentinel",
@@ -64,7 +64,7 @@
    "url": "http://127.0.0.1:3030/health",
    "up": true,
    "status": 200,
-   "ms": 3
+   "ms": 2
   }
  ],
  "binance": {
@@ -79,34 +79,34 @@
   "banCount": 1,
   "recoveryCount": 0,
   "note": null,
-  "at": 1792921673930
+  "at": 1792925274347
  },
  "perf": {
   "last24h": {
-   "issued": 57,
-   "settled": 56,
-   "wins": 24,
-   "losses": 32,
-   "winRate": 42.857142857142854,
-   "pnl": -234.43999999999988,
+   "issued": 56,
+   "settled": 53,
+   "wins": 22,
+   "losses": 31,
+   "winRate": 41.509433962264154,
+   "pnl": -298.9099999999999,
    "lastAt": null
   },
   "prev24h": {
-   "issued": 54,
-   "settled": 54,
-   "wins": 33,
+   "issued": 52,
+   "settled": 52,
+   "wins": 31,
    "losses": 21,
-   "winRate": 61.111111111111114,
-   "pnl": 220.95999999999998,
+   "winRate": 59.61538461538461,
+   "pnl": 215.27,
    "lastAt": null
   },
   "today": {
-   "issued": 30,
-   "settled": 29,
+   "issued": 33,
+   "settled": 30,
    "wins": 14,
-   "losses": 15,
-   "winRate": 48.275862068965516,
-   "pnl": -4.930000000000003,
+   "losses": 16,
+   "winRate": 46.666666666666664,
+   "pnl": -9.060000000000006,
    "lastAt": null
   },
   "yesterday": {
@@ -118,9 +118,9 @@
    "pnl": -173.98000000000002,
    "lastAt": null
   },
-  "active": 1,
-  "total": 3137,
-  "lastSignalAgeMin": 32,
+  "active": 3,
+  "total": 3140,
+  "lastSignalAgeMin": 14,
   "triggerBus": {
    "bannedUntil": null,
    "cyclesPaused": null,
@@ -134,10 +134,10 @@
    "armedBy": "OPERATOR (dashboard/API)",
    "disarmReason": null,
    "disarmedAt": null,
-   "issued": 656,
-   "issuedTotal": 2067,
-   "lastIssueAt": "2026-10-25T09:15:47.078Z",
-   "lastIssueSerial": 3137,
+   "issued": 659,
+   "issuedTotal": 2070,
+   "lastIssueAt": "2026-10-25T10:33:34.547Z",
+   "lastIssueSerial": 3140,
    "target": 3157,
    "spacingMin": 10,
    "maxOpen": 8,
@@ -145,22 +145,22 @@
    "retargetNote": "ARMS-COUPLED EXTENSION (operator mandate 2026-09-26 «تا زمان کامل شدن بازوهای Shadow veto فعال باشد»): book target 3127 reached but shadow-veto real arms incomplete (real arms incomplete (paper-veto 0/30) — AI CALIBRATION bar stays active (operator mandate 2026-09-26)) — target auto-extended +30 to 3157 so the capture keeps feeding evidence; PACE MONITOR tracks arm completion",
    "manualCampaign": true
   },
-  "pricePoints15m": 841,
-  "lastPricePointAgeMin": 1,
-  "at": 1792921675046
+  "pricePoints15m": 837,
+  "lastPricePointAgeMin": 0,
+  "at": 1792925275043
  },
  "issues": [
   {
    "id": "svc:app",
    "title": "سرویس app :3000",
    "severity": "crit",
-   "fails": 1,
-   "oks": 693,
-   "firstFailAt": 1792921675162,
-   "lastFailAt": 1792921675162,
-   "lastOkAt": 1792921495083,
-   "lastDetail": "HTTP 500 ",
-   "open": true,
+   "fails": 0,
+   "oks": 699,
+   "firstFailAt": null,
+   "lastFailAt": 1792924915136,
+   "lastOkAt": 1792925275149,
+   "lastDetail": null,
+   "open": false,
    "lastAlertAt": null,
    "escalated": false
   },
@@ -169,10 +169,10 @@
    "title": "سرویس price-ws :3003",
    "severity": "crit",
    "fails": 0,
-   "oks": 877,
+   "oks": 897,
    "firstFailAt": null,
    "lastFailAt": null,
-   "lastOkAt": 1792921675163,
+   "lastOkAt": 1792925275149,
    "lastDetail": null,
    "open": false,
    "lastAlertAt": null,
@@ -183,10 +183,10 @@
    "title": "سرویس bridge :3005",
    "severity": "crit",
    "fails": 0,
-   "oks": 877,
+   "oks": 897,
    "firstFailAt": null,
    "lastFailAt": null,
-   "lastOkAt": 1792921675163,
+   "lastOkAt": 1792925275149,
    "lastDetail": null,
    "open": false,
    "lastAlertAt": null,
@@ -197,10 +197,10 @@
    "title": "سرویس liq :3010",
    "severity": "crit",
    "fails": 0,
-   "oks": 877,
+   "oks": 897,
    "firstFailAt": null,
    "lastFailAt": null,
-   "lastOkAt": 1792921675163,
+   "lastOkAt": 1792925275149,
    "lastDetail": null,
    "open": false,
    "lastAlertAt": null,
@@ -211,10 +211,10 @@
    "title": "سرویس trade :3011",
    "severity": "crit",
    "fails": 0,
-   "oks": 877,
+   "oks": 897,
    "firstFailAt": null,
    "lastFailAt": null,
-   "lastOkAt": 1792921675163,
+   "lastOkAt": 1792925275149,
    "lastDetail": null,
    "open": false,
    "lastAlertAt": null,
@@ -225,10 +225,10 @@
    "title": "سرویس warm-loop :3012",
    "severity": "crit",
    "fails": 0,
-   "oks": 875,
+   "oks": 895,
    "firstFailAt": null,
    "lastFailAt": 1792711088075,
-   "lastOkAt": 1792921675163,
+   "lastOkAt": 1792925275149,
    "lastDetail": null,
    "open": false,
    "lastAlertAt": null,
@@ -239,10 +239,10 @@
    "title": "سرویس p0-watchdog :3020",
    "severity": "crit",
    "fails": 0,
-   "oks": 877,
+   "oks": 897,
    "firstFailAt": null,
    "lastFailAt": null,
-   "lastOkAt": 1792921675163,
+   "lastOkAt": 1792925275149,
    "lastDetail": null,
    "open": false,
    "lastAlertAt": null,
@@ -253,10 +253,10 @@
    "title": "سرویس sentinel :3030",
    "severity": "crit",
    "fails": 0,
-   "oks": 877,
+   "oks": 897,
    "firstFailAt": null,
    "lastFailAt": null,
-   "lastOkAt": 1792921675163,
+   "lastOkAt": 1792925275149,
    "lastDetail": null,
    "open": false,
    "lastAlertAt": null,
@@ -267,10 +267,10 @@
    "title": "REST اسپات بایننس (api.binance.com)",
    "severity": "warn",
    "fails": 0,
-   "oks": 760,
+   "oks": 780,
    "firstFailAt": null,
    "lastFailAt": 1792891611186,
-   "lastOkAt": 1792921675163,
+   "lastOkAt": 1792925275149,
    "lastDetail": null,
    "open": false,
    "lastAlertAt": null,
@@ -280,10 +280,10 @@
    "id": "bin:fapi-rest",
    "title": "REST فیوچرز بایننس (fapi.binance.com)",
    "severity": "warn",
-   "fails": 158,
+   "fails": 178,
    "oks": 74,
    "firstFailAt": 1792893412174,
-   "lastFailAt": 1792921675163,
+   "lastFailAt": 1792925275149,
    "lastOkAt": 1792893231187,
    "lastDetail": "بن تا 07:28 — بازیابی خودکار",
    "open": true,
@@ -295,10 +295,10 @@
    "title": "WS اسپات بایننس (مسیر جایگزین)",
    "severity": "crit",
    "fails": 0,
-   "oks": 877,
+   "oks": 897,
    "firstFailAt": null,
    "lastFailAt": null,
-   "lastOkAt": 1792921675163,
+   "lastOkAt": 1792925275149,
    "lastDetail": null,
    "open": false,
    "lastAlertAt": null,
@@ -309,10 +309,10 @@
    "title": "WS فیوچرز بایننس (fstream)",
    "severity": "warn",
    "fails": 0,
-   "oks": 877,
+   "oks": 897,
    "firstFailAt": null,
    "lastFailAt": null,
-   "lastOkAt": 1792921675163,
+   "lastOkAt": 1792925275149,
    "lastDetail": null,
    "open": false,
    "lastAlertAt": null,
@@ -323,11 +323,11 @@
    "title": "خشک‌سالی سیگنال (بدون صدور جدید)",
    "severity": "warn",
    "fails": 0,
-   "oks": 875,
+   "oks": 895,
    "firstFailAt": null,
    "lastFailAt": 1792882430053,
-   "lastOkAt": 1792921675163,
-   "lastDetail": "آخرین سیگنال 32 دقیقه پیش",
+   "lastOkAt": 1792925275149,
+   "lastDetail": "آخرین سیگنال 14 دقیقه پیش",
    "open": false,
    "lastAlertAt": null,
    "escalated": false
@@ -337,10 +337,10 @@
    "title": "جریان PricePoint متوقف شده",
    "severity": "crit",
    "fails": 0,
-   "oks": 872,
+   "oks": 892,
    "firstFailAt": null,
    "lastFailAt": 1792882256065,
-   "lastOkAt": 1792921675163,
+   "lastOkAt": 1792925275149,
    "lastDetail": null,
    "open": false,
    "lastAlertAt": null,
@@ -351,11 +351,11 @@
    "title": "وین‌ریت ۲۴ساعته زیر کف 40%",
    "severity": "warn",
    "fails": 0,
-   "oks": 751,
+   "oks": 771,
    "firstFailAt": null,
    "lastFailAt": 1792919875074,
-   "lastOkAt": 1792921675163,
-   "lastDetail": "وین‌ریت 42.9% روی 56 سیگنال تسویه‌شده",
+   "lastOkAt": 1792925275149,
+   "lastDetail": "وین‌ریت 41.5% روی 53 سیگنال تسویه‌شده",
    "open": false,
    "lastAlertAt": null,
    "escalated": false
@@ -364,15 +364,15 @@
    "id": "perf:pnl-day",
    "title": "EST PNL% امروز زیر -5%",
    "severity": "crit",
-   "fails": 0,
+   "fails": 20,
    "oks": 358,
-   "firstFailAt": null,
-   "lastFailAt": 1792920775126,
+   "firstFailAt": 1792921855132,
+   "lastFailAt": 1792925275149,
    "lastOkAt": 1792921675163,
-   "lastDetail": "امروز: -4.9% روی 29 تسویه‌شده",
-   "open": false,
+   "lastDetail": "امروز: -9.1% روی 30 تسویه‌شده",
+   "open": true,
    "lastAlertAt": null,
-   "escalated": false
+   "escalated": true
   }
  ]
 }
