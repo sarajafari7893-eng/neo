@@ -32581,3 +32581,17 @@ Stage Summary:
 - پاسخ سه پرسش اپراتور: کارمزد کل ~0.84$ (سهم ~۹٪ از ضرر) · دلیل اصلی منفی‌شدن = ساختار ریسک نامتقارن (استاپ‌های ~۵٪ روی نشنال 60-100$ در برابر TPهای ریز) + سیگنال‌های استاپ‌خور و ورود مجدد بی‌cooldown — نه خطای ردیابی و نه کارمزد.
 - حساب از 17:33 کاملاً ثابت است (هیچ معاملهٔ واقعی بعد از قطع اضطراری)؛ دفتر پل اکنون با حقیقت صرافی سازگار است.
 - آیتم باز: cooldown سمبل پس از SL در لایهٔ پل (پیشنهاد: skip همان سمبل تا ۹۰ دقیقه بعد از SL) — آماده پیاده‌سازی پس از تصمیم اپراتور درباره بازگشایی.
+
+---
+Task ID: 1a174fe88d71c7dd
+Agent: Z.ai Code (main session)
+Task: وضعیت گیت‌ها/شیرهای ورودی + سلامت اتصال بایننس + ارزیابی CoinMarketCap API
+
+Work Log:
+- شیرها: execEnabled=false (شیر اصلی ورود لایو بسته) · liveApproved=true · killFile=false · RISK-CAP ۲٪ · margin 5$ × lev کارت · drift 80bps · age 90s · maxConcurrent ∞ · violations=0 · skipBy: MAX-CONCURRENT 19 (تاریخی)، ENTRY-DRIFT 5، STALE 2، ABSENT 2، MIN-FLOOR 2، DELAY 1 · cooldown پس از SL هنوز پیاده‌نشده.
+- بایننس: fapi-gate بدون بن فعال (یک 418 موقت دیشب منقضی، probe resumed) · fstream آیندها هنوز بی‌فریم (0 رویداد WS·FUT) → تیپ با حلقهٔ WS اسپات تغذیه می‌شود (۲۵۵ رویداد WS·SPOT؛ آلارم cascade امشب QUICK −۵.۴۵٪/BMT +۵٪/BEAMX +۳٪) · SPOT-MIRROR با backoff جدا ۶۰s.
+- تازگی داده: PricePoint 45s · FuturesSnapshot 249s (sources=1) · FlowScan 16s · Signal آخرین کارت ۱۸min پیش (۴۳ کارت/۲۴h، maxSerial 3152) · اپ :3000 pulse 200 · stable-feed ۹۲ poll بدون خطا (RISK-OFF) · card-sentinel ۲۲.۷h · nexus-sentinel AMBER.
+- ارزیابی CMC: برای فید داغ نامناسب (تجمیعی، تأخیر دقیقه‌ای، ۳۰ req/min و 10k credit رایگان، بدون orderbook/tape)؛ برای غنی‌سازی کیفیت فیلتر (مارکت‌کپ/بخش/لیستینگ جدید با کش 15-60min خارج مسیر داغ) مفید — منتظر API key اپراتور.
+
+Stage Summary:
+- ورود لایو همچنان ایمن بسته است؛ موتور و تیپ داده زنده‌اند (اسپات زنده، آیندها REST)؛ CMC فقط به‌عنوان متادیتا-غنی‌ساز توصیه شد نه فید قیمت.
