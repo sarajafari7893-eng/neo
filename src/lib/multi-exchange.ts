@@ -333,26 +333,36 @@ async function binanceSpotMirrorBatch(): Promise<Map<string, number>> {
   if (binanceSpotMirrorCache && Date.now() - binanceSpotMirrorCache.at < 30_000) return binanceSpotMirrorCache.data;
   if (Date.now() < binanceSpotMirrorBannedUntil) return binanceSpotMirrorCache?.data ?? new Map();
   const out = new Map<string, number>();
-  try {
-    const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
-    const res = await fetch("https://api.binance.com/api/v3/ticker/24hr", { signal: ctrl.signal, cache: "no-store", headers: { Connection: "close" } });
-    clearTimeout(t);
-    if (res.status === 418 || res.status === 429) {
-      // own pool, own backoff — 10min soft ban (spot pool historically clean)
-      binanceSpotMirrorBannedUntil = Date.now() + 10 * 60_000;
-      console.warn("[multi-exchange] spot-pool mirror rate-limited — backoff 10min (separate pool from fapi)");
+  // v13.2 SPOT-HOST LADDER (operator mandate trace 1a1704d407f00dad — «جریان زندهٔ لحظه‌ای باید با بایننس باشد»):
+  // data-api.binance.vision is the PRIMARY spot host — measured 32/32 HTTP 200 p50 57ms on 2026-10-25
+  // while api.binance.com rides 418 ban-storms from this shared egress; api stays as the fallback rung.
+  const HOSTS = ["https://data-api.binance.vision", "https://api.binance.com"];
+  for (const host of HOSTS) {
+    try {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
+      const res = await fetch(`${host}/api/v3/ticker/24hr`, { signal: ctrl.signal, cache: "no-store", headers: { Connection: "close" } });
+      clearTimeout(t);
+      if (res.status === 418 || res.status === 429) {
+        // own pool, own backoff — 10min soft ban armed only when the LAST rung also throttles
+        if (host === HOSTS[HOSTS.length - 1]) {
+          binanceSpotMirrorBannedUntil = Date.now() + 10 * 60_000;
+          console.warn("[multi-exchange] spot-pool mirror rate-limited — backoff 10min (separate pool from fapi)");
+          return out;
+        }
+        continue; // primary rung throttled — try the fallback host
+      }
+      if (!res.ok) continue;
+      const rows = (await res.json()) as Array<{ symbol: string; lastPrice: string }>;
+      for (const r of rows) {
+        const p = Number(r.lastPrice);
+        if (Number.isFinite(p) && p > 0) out.set(r.symbol, p);
+      }
+      binanceSpotMirrorCache = { at: Date.now(), data: out };
       return out;
+    } catch {
+      continue; // next rung — honest nulls downstream if all fail
     }
-    if (!res.ok) return out;
-    const rows = (await res.json()) as Array<{ symbol: string; lastPrice: string }>;
-    for (const r of rows) {
-      const p = Number(r.lastPrice);
-      if (Number.isFinite(p) && p > 0) out.set(r.symbol, p);
-    }
-    binanceSpotMirrorCache = { at: Date.now(), data: out };
-  } catch {
-    /* keep stale/empty — honest nulls downstream */
   }
   return out;
 }

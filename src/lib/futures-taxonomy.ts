@@ -96,14 +96,25 @@ async function jsonUrl<T>(url: string, timeoutMs = 6500): Promise<T | null> {
 // windows the sampler now mirrors PRICE and KLINE closes from the spot API so
 // quadrant rows keep flowing; futures-only families (OI, funding, LS ratios)
 // stay honestly NULL — no invented data. Spot klines share the candle shape.
-const SPOT_HOST = "https://api.binance.com";
+// v13.2 SPOT-HOST LADDER (operator mandate trace 1a1704d407f00dad): the Binance
+// public data mirror (data-api.binance.vision) is the PRIMARY spot host —
+// measured 32/32 HTTP 200 p50 57ms on 2026-10-25 while api.binance.com rides
+// 418 ban-storms from this shared egress. api.binance.com stays as fallback.
+const SPOT_HOSTS = ["https://data-api.binance.vision", "https://api.binance.com"];
 async function spotPrice(symbol: string): Promise<number | null> {
-  const j = await jsonUrl<{ price?: string }>(`${SPOT_HOST}/api/v3/ticker/price?symbol=${symbol}`);
-  const p = j?.price ? Number(j.price) : NaN;
-  return Number.isFinite(p) && p > 0 ? p : null;
+  for (const h of SPOT_HOSTS) {
+    const j = await jsonUrl<{ price?: string }>(`${h}/api/v3/ticker/price?symbol=${symbol}`);
+    const p = j?.price ? Number(j.price) : NaN;
+    if (Number.isFinite(p) && p > 0) return p;
+  }
+  return null;
 }
 async function spotKlines(symbol: string, interval: string, limit: number): Promise<Array<[number, string, string, string, string]> | null> {
-  return jsonUrl<Array<[number, string, string, string, string]>>(`${SPOT_HOST}/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`);
+  for (const h of SPOT_HOSTS) {
+    const j = await jsonUrl<Array<[number, string, string, string, string]>>(`${h}/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`);
+    if (j) return j;
+  }
+  return null;
 }
 
 interface PremIndex { markPrice: string; lastFundingRate: string; nextFundingTime: number }

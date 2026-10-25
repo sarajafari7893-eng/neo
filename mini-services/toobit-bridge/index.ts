@@ -47,9 +47,27 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import { Database } from "bun:sqlite";
 import { createHmac } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 
-const VER = "toobit-bridge 1.3.0"; // v1.3.0 trace-1a15f7d945d27ead: DOCTRINE SUPERVISOR — entry gates (drift/delay), expected-vs-actual notional, /doctrine audit endpoint; v1.2.0 per-card leverage & v1.1.0 fixed-$5 margin unchanged
+const VER = "toobit-bridge 1.4.0";
+// v1.4.0 (operator mandate trace 1a1704d407f00dad — «ممیزی TOOBIT EXEC BRIDGE + راستی‌آزمایی تمام دستورات مدیریت سیگنال‌ها»):
+//   ① SINGLETON PID LOCK — forensics found the service running under `bun --hot`:
+//      every file touch re-exec'd a NEW module generation INSIDE the same process
+//      while the OLD generation's timers kept firing → two writers flip-flopped
+//      state.json every ~30s ({146 intents, 3 open} ↔ {92 intents, 0 open}) and
+//      one restart could lose the open intents to the ghost's stale snapshot.
+//      Lock = one verified-alive pid file; second instance refuses to boot.
+//      Dev script is now plain bun (LEASH-0929b restored).
+//   ② ORPHAN SWEEP — ~52 cards (3055-3107) born during the ghost/downtime window
+//      never got an intent (silent holes in the execution mirror). Every 60s the
+//      sweep makes each unmirrored ACTIVE card an auditable ORPHAN-CARD event
+//      (read-only; entries stay behind ENTRY-DELAY/DRIFT — no late chasing).
+//   ③ RETRY WINDOW — MAX-CONCURRENT skips previously never re-entered the queue
+//      (a freed slot within 90s was wasted). Now a skipped card retries while it
+//      is still inside the ENTRY-DELAY window; beyond it RETRY-EXPIRED honestly.
+//   ④ PAPER bank visibility — EXEC-BANK-PAPER events now reach audit.jsonl
+//      (previously PAPER سیو سود was invisible there, only in state.json).
+// v1.3.0 trace-1a15f7d945d27ead: DOCTRINE SUPERVISOR — entry gates (drift/delay), expected-vs-actual notional, /doctrine audit endpoint; v1.2.0 per-card leverage & v1.1.0 fixed-$5 margin unchanged
 const ROOT = "/home/z/my-project";
 const DATA = `${ROOT}/.data/toobit-bridge`;
 const STATE = `${DATA}/state.json`;
@@ -105,6 +123,7 @@ interface DoctrineState {
   skipBy: Record<string, number>;     // skip counters by reason (incl. ENTRY-DRIFT / ENTRY-DELAY)
   violations: DoctrineViolation[];    // last 20 doctrine violations
   lastScanAt: number;
+  orphans: number;                    // v1.4.0 — ACTIVE cards seen without any execution intent
 }
 
 interface Latency { detectMs: number | null; execMs: number | null; totalMs: number | null; slipBps: number | null }
@@ -145,7 +164,7 @@ interface BridgeState {
   levMap: Record<string, number>; // v1.2.0 — last-set leverage per toobit symbol (re-set only on change)
   doctrine: DoctrineState;        // v1.3.0 — supervisor counters + violation journal
 }
-let S: BridgeState = { cfg: { ...DEFAULT_CFG }, lastCreatedAtMs: 0, intents: {}, metrics: [], levMap: {}, doctrine: { opens: 0, skipBy: {}, violations: [], lastScanAt: 0 } };
+let S: BridgeState = { cfg: { ...DEFAULT_CFG }, lastCreatedAtMs: 0, intents: {}, metrics: [], levMap: {}, doctrine: { opens: 0, skipBy: {}, violations: [], lastScanAt: 0, orphans: 0 } };
 
 const tehran = (d: number = Date.now()) =>
   new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Tehran", hour12: false, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(d);
@@ -186,7 +205,7 @@ function loadState(): void {
         intents: raw.intents ?? {},
         metrics: raw.metrics ?? [],
         levMap: raw.levMap ?? {},
-        doctrine: { opens: raw.doctrine?.opens ?? 0, skipBy: raw.doctrine?.skipBy ?? {}, violations: raw.doctrine?.violations ?? [], lastScanAt: raw.doctrine?.lastScanAt ?? 0 },
+        doctrine: { opens: raw.doctrine?.opens ?? 0, skipBy: raw.doctrine?.skipBy ?? {}, violations: raw.doctrine?.violations ?? [], lastScanAt: raw.doctrine?.lastScanAt ?? 0, orphans: raw.doctrine?.orphans ?? 0 },
       };
       // v1.2.0 hardening: pre-v1.2.0 persisted intents have no leverage field —
       // backfill so notional math (margin × leverage) can never see undefined.
@@ -332,6 +351,26 @@ async function tbTicker(tbSymbol: string): Promise<{ last: number; bid: number; 
 const EXEC_DISABLED_FILE = `${DATA}/DISABLED`;
 const killFile = (): boolean => existsSync(EXEC_DISABLED_FILE);
 
+// ── v1.4.0 SINGLETON LOCK (trace 1a1704d407f00dad) ───────────────────────────
+const PID_FILE = `${DATA}/bridge.pid`;
+function acquireSingletonLock(): boolean {
+  try {
+    if (!existsSync(DATA)) mkdirSync(DATA, { recursive: true });
+    if (existsSync(PID_FILE)) {
+      const old = Number(readFileSync(PID_FILE, "utf8").trim());
+      if (Number.isFinite(old) && old > 0 && old !== process.pid) {
+        try { process.kill(old, 0); log("crit", "another bridge instance is alive — refusing to boot", { pid: old }); return false; }
+        catch { /* pid gone — stale lock, take over */ }
+      }
+    }
+    writeFileSync(PID_FILE, String(process.pid));
+    return true;
+  } catch (e) { log("crit", "singleton lock failed", { err: String(e) }); return false; }
+}
+function releaseSingletonLock(): void {
+  try { if (existsSync(PID_FILE) && readFileSync(PID_FILE, "utf8").trim() === String(process.pid)) rmSync(PID_FILE); } catch { /* never */ }
+}
+
 // v1.2.0 (trace 1a15ddbdbabf84a9): the exchange leverage must MATCH the signal
 // card's leverage — set per symbol before entry, re-set only when the value
 // actually changes (previous per-symbol memo ignored card-level differences).
@@ -374,6 +413,11 @@ async function flashClose(tbSymbol: string, side: "LONG" | "SHORT"): Promise<{ o
 type Action = { kind: "open" | "bank" | "close"; cardId: string; frac?: number; reason: string };
 const actionQ: Action[] = [];
 let qBusy = false;
+// v1.4.0 RETRY WINDOW — cards skipped by MAX-CONCURRENT get a second chance
+// while still inside the ENTRY-DELAY window (a freed slot <90s after birth is
+// a real edge, not a stale chase). In-memory only: after a restart the window
+// has already passed, which the ENTRY-DELAY gate would refuse anyway.
+let retryList: Array<{ cardId: string; createdAt0: number }> = [];
 
 function pushAction(a: Action): void {
   actionQ.push(a);
@@ -520,6 +564,10 @@ async function doBank(it: Intent, fracOfOrig: number, reason: string): Promise<v
     const r = await placeOrder(it.tbSymbol, side, qty);
     audit("EXEC-BANK", { serial: it.serial, reason, qty, ok: r.ok, err: r.err });
     if (!r.ok) { it.events.push({ at: Date.now(), ev: "BANK_REJECTED", note: (r.err ?? "").slice(0, 160) }); return; }
+  } else {
+    // v1.4.0 — PAPER سیو سود was invisible in audit.jsonl (only in state.json);
+    // the paper fill rides the REAL toobit book so it deserves the same trail.
+    audit("EXEC-BANK-PAPER", { serial: it.serial, reason, qty, note: "paper fill on real book" });
   }
   it.qtyRemaining = Number((it.qtyRemaining - qty).toFixed(10));
   if (reason === "TP1") it.qtyBankedTp1 = qty;
@@ -561,6 +609,26 @@ async function pollCards(): Promise<void> {
     const newest = Math.max(...cards.map((c) => parseTs(c.createdAt)));
     if (newest > S.lastCreatedAtMs) S.lastCreatedAtMs = newest;
 
+    // ⓪ v1.4.0 RETRY WINDOW — a freed capacity slot inside the ENTRY-DELAY
+    // window re-opens a MAX-CONCURRENT-skipped card (was: skipped forever).
+    if (retryList.length > 0 && !killFile() && S.cfg.execEnabled) {
+      const openCount0 = Object.values(S.intents).filter((x) => x.status === "OPEN" || x.status === "OPENING").length;
+      if (openCount0 < S.cfg.maxConcurrent) {
+        const nowMs = Date.now();
+        retryList = retryList.filter((r) => {
+          const it = S.intents[r.cardId];
+          if (!it || it.status !== "SKIP") return false; // resolved otherwise
+          const age = nowMs - (it.createdAt0 ?? r.createdAt0);
+          if (age > S.cfg.maxEntryAgeMs) { audit("RETRY-EXPIRED", { serial: it.serial, ageSec: Math.round(age / 1000) }); return false; }
+          it.status = "OPENING";
+          it.events.push({ at: nowMs, ev: "RETRY", note: "capacity freed inside entry window" });
+          pushAction({ kind: "open", cardId: r.cardId, reason: "RETRY-MAX-CONCURRENT" });
+          audit("RETRY-OPEN", { serial: it.serial, symbol: it.symbol });
+          return false;
+        });
+      }
+    }
+
     // ① brand-new cards → intent
     for (const c of cards) {
       if (S.intents[c.id]) continue;
@@ -575,6 +643,7 @@ async function pollCards(): Promise<void> {
       else if (!known) skip = "SYMBOL-ABSENT-ON-TOOBIT";
       else if (!killFile() && S.cfg.execEnabled && openCount >= S.cfg.maxConcurrent) skip = "MAX-CONCURRENT";
       if (skip) countSkip(skip); // v1.3.0 doctrine funnel
+      if (skip === "MAX-CONCURRENT") retryList.push({ cardId: c.id, createdAt0: created }); // v1.4.0 — eligible for the retry window
       const dir = c.direction === "SHORT" ? "SHORT" : "LONG";
       const levOk = c.leverage >= 1 && c.leverage <= 50;
       const intent: Intent = {
@@ -644,6 +713,31 @@ async function pollCards(): Promise<void> {
 }
 
 // ── mode + account ───────────────────────────────────────────────────────────
+// ── v1.4.0 ORPHAN SWEEP — پیگیری کارت‌های بدون آینهٔ اجرا ────────────────────
+// Forensics (trace 1a1704d407f00dad): ~52 cards (3055-3107) born during the
+// ghost/downtime window never got an intent — silent holes in the execution
+// mirror. Read-only visibility: each unmirrored ACTIVE card becomes ONE
+// auditable ORPHAN-CARD event. No forced entries — late chasing stays behind
+// the ENTRY-DELAY/ENTRY-DRIFT doctrine (a card older than the window is not
+// the trade the card described).
+const orphanSeen = new Set<string>();
+let orphanSweepBusy = false;
+function orphanSweep(): void {
+  if (orphanSweepBusy || !sqldb) return;
+  orphanSweepBusy = true;
+  try {
+    const cards = fetchRecentCards(300); // ~last 300 cards ≈ 24-48h coverage
+    for (const c of cards) {
+      if (c.status !== "ACTIVE" || S.intents[c.id] || orphanSeen.has(c.id)) continue;
+      orphanSeen.add(c.id);
+      if (orphanSeen.size > 500) { const first = orphanSeen.values().next().value; if (first) orphanSeen.delete(first); }
+      const age = Date.now() - parseTs(c.createdAt);
+      S.doctrine.orphans = (S.doctrine.orphans ?? 0) + 1;
+      audit("ORPHAN-CARD", { serial: c.serial, symbol: c.symbol, direction: c.direction, ageMin: Math.round(age / 60_000), note: "ACTIVE card without execution intent — born during bridge downtime/ghost window (read-only visibility)" });
+    }
+  } finally { orphanSweepBusy = false; }
+}
+
 let balanceUsdt: number | null = null;
 let balanceAt = 0;
 async function refreshBalance(): Promise<void> {
@@ -774,7 +868,7 @@ async function doctrineScan(): Promise<void> {
     const snap = {
       at: now, ver: VER,
       gates: { marginUsdt: S.cfg.marginUsdt, maxEntryDriftBps: S.cfg.maxEntryDriftBps, maxEntryAgeMs: S.cfg.maxEntryAgeMs, maxConcurrent: S.cfg.maxConcurrent },
-      counters: { opens: S.doctrine.opens, skipBy: S.doctrine.skipBy },
+      counters: { opens: S.doctrine.opens, skipBy: S.doctrine.skipBy, orphans: S.doctrine.orphans ?? 0 },
       violations: S.doctrine.violations.slice(-10),
       openIntents: openIntents.map((i) => ({ serial: i.serial, symbol: i.symbol, direction: i.direction, lev: i.leverage, levSrc: i.levSrc ?? "card", expectedNotional: i.expectedNotional ?? null, actualNotional: i.actualNotional ?? null, entryAgeMs: i.entryAgeMs ?? null, entryDriftBps: i.entryDriftBps ?? null, cardStatus: i.cardStatus ?? i.lastStatusSeen, status: i.status, mode: i.mode, protected: i.protected ?? (i.mode !== "LIVE") })),
     };
@@ -786,6 +880,7 @@ function doctrineSummary() {
   return {
     opens: S.doctrine.opens,
     skipBy: S.doctrine.skipBy,
+    orphans: S.doctrine.orphans ?? 0, // v1.4.0
     violationsN: S.doctrine.violations.length,
     lastViolation: S.doctrine.violations.length > 0 ? S.doctrine.violations[S.doctrine.violations.length - 1]! : null,
     lastScanAt: S.doctrine.lastScanAt,
@@ -916,6 +1011,8 @@ Bun.serve({
 // ── main loops ───────────────────────────────────────────────────────────────
 log("info", `${VER} booting`, { port: PORT, hasKeys: API_KEY.length > 0, dbExists: existsSync(DB_PATH) });
 audit("BOOT", { ver: VER, hasKeys: API_KEY.length > 0 });
+if (!acquireSingletonLock()) process.exit(1); // v1.4.0 — one writer, ever
+for (const sig of ["SIGINT", "SIGTERM"] as const) process.on(sig, () => { flushState(); releaseSingletonLock(); process.exit(0); });
 loadState();
 if (openDb()) {
   await syncClock();
@@ -928,7 +1025,9 @@ if (openDb()) {
   setInterval(() => { void refreshBalance(); }, 60_000);
   setInterval(() => { void syncClock(); }, 10 * 60_000);
   setInterval(flushState, 1000);
+  setInterval(orphanSweep, 60_000); // v1.4.0 — unmirrored ACTIVE cards become auditable
   void pollCards();
+  orphanSweep();
 } else {
   log("crit", "DB unavailable — retrying in 10s");
   setInterval(() => { if (!sqldb && openDb()) { void syncClock(); void pollCards(); } }, 10_000);

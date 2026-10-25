@@ -126,7 +126,22 @@ async function bybitJfetch<T>(url: string): Promise<T | null> {
   }
 }
 
-// ── klines rungs ────────────────────────────────────────────────────────────
+// ── klines rungs ────────────────────────────────────────────────────────
+
+// ── v13.2 SPOT-HOST LADDER (operator mandate trace 1a1704d407f00dad —
+// «از data-api.binance.vision استفاده کن؛ جریان زندهٔ لحظه‌ای باید با بایننس
+// باشد»): measured live 2026-10-25 — data-api.binance.vision 32/32 HTTP 200
+// p50 57ms while api.binance.com rides 418 ban-storms from this shared egress.
+// The Binance public data mirror is the PRIMARY spot-plane host now;
+// api.binance.com stays as the secondary rung.
+const SPOT_HOSTS = ["https://data-api.binance.vision", "https://api.binance.com"];
+async function spotLadderFetch<T>(path: string): Promise<T | null> {
+  for (const host of SPOT_HOSTS) {
+    const j = await jfetch<T>(`${host}${path}`);
+    if (j) return j;
+  }
+  return null;
+}
 
 function binanceKlineRows(raw: (string | number)[][]): KlineRow[] {
   return raw.map((k) => ({
@@ -140,9 +155,9 @@ function binanceKlineRows(raw: (string | number)[][]): KlineRow[] {
   }));
 }
 
-/** SPOT-MIRROR rung — api.binance.com (separate rate/ban pool, same shape, field-9 intact). */
+/** SPOT-MIRROR rung — Binance public data mirror ladder (data-api.binance.vision → api.binance.com; same shape, field-9 intact). */
 export async function spotMirrorKlines(symbol: string, interval: string, limit: number): Promise<KlineRow[] | null> {
-  const spot = await jfetch<(string | number)[][]>(`https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`);
+  const spot = await spotLadderFetch<(string | number)[][]>(`/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`);
   if (!spot || spot.length === 0) return null;
   return binanceKlineRows(spot);
 }
@@ -209,9 +224,9 @@ export async function bybitTape(symbol: string): Promise<TapeTrade[] | null> {
   return tapeFromBybit(list);
 }
 
-/** SPOT-MIRROR rung — /api/v3/trades (LAST resort for tape: spot flow ≠ perp flow). */
+/** SPOT-MIRROR rung — /api/v3/trades via the vision-first ladder (LAST resort for tape: spot flow ≠ perp flow). */
 export async function spotMirrorTape(symbol: string): Promise<TapeTrade[] | null> {
-  const spot = await jfetch<Array<{ price: string; qty: string; quoteQty: string; isBuyerMaker: boolean; time: number }>>(`https://api.binance.com/api/v3/trades?symbol=${symbol}&limit=1000`);
+  const spot = await spotLadderFetch<Array<{ price: string; qty: string; quoteQty: string; isBuyerMaker: boolean; time: number }>>(`/api/v3/trades?symbol=${symbol}&limit=1000`);
   if (!spot || spot.length === 0) return null;
   return spot.map((t) => ({ price: Number(t.price), qty: Number(t.qty), quoteQty: Number(t.quoteQty) || Number(t.price) * Number(t.qty), isBuyerMaker: t.isBuyerMaker, time: t.time }));
 }
@@ -282,11 +297,11 @@ export async function bybitDepth(symbol: string, limit: number): Promise<DepthBo
   };
 }
 
-/** SPOT-MIRROR rung — /api/v3/depth (separate rate/ban pool, Binance book but SPOT liquidity). */
+/** SPOT-MIRROR rung — /api/v3/depth via the vision-first ladder (Binance book but SPOT liquidity). */
 export async function spotMirrorDepth(symbol: string, limit: number): Promise<DepthBook | null> {
   const steps = [5, 10, 20, 50, 100, 500];
   const lv = steps.find((s) => s >= limit) ?? 500;
-  const raw = await jfetch<{ bids: Array<[string, string]>; asks: Array<[string, string]> }>(`https://api.binance.com/api/v3/depth?symbol=${symbol}&limit=${lv}`);
+  const raw = await spotLadderFetch<{ bids: Array<[string, string]>; asks: Array<[string, string]> }>(`/api/v3/depth?symbol=${symbol}&limit=${lv}`);
   if (!raw || raw.bids.length === 0 || raw.asks.length === 0) return null;
   return {
     bids: raw.bids.map(([p, q]) => [Number(p), Number(q)] as [number, number]),
