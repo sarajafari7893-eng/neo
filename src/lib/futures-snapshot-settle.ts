@@ -95,12 +95,12 @@ export async function fetchRangedKlines(
   ).catch(() => null);
   if (fapi && fapi.length > 0) return { candles: mapBinanceRaw(fapi), source: "FAPI" };
   // rung 2 — SPOT-MIRROR (separate rate/ban pool from fapi)
-  for (const host of SPOT_HOSTS) {
-    const spot = await jget<(string | number)[][]>(
-      `${host}/api/v3/klines?symbol=${symbol}&interval=${interval}&startTime=${startMs}&endTime=${endMs}&limit=${PAGE_MAX}`,
-    );
-    if (spot && spot.length > 0) return { candles: mapBinanceRaw(spot), source: "SPOT-MIRROR" };
-  }
+  // v13.2.1 — per-host 418/429 backoff via the shared spot-host gate.
+  const spot = await spotLadderJson<(string | number)[][]>(
+    `/api/v3/klines?symbol=${symbol}&interval=${interval}&startTime=${startMs}&endTime=${endMs}&limit=${PAGE_MAX}`,
+    SPOT_HOSTS,
+  );
+  if (spot && spot.length > 0) return { candles: mapBinanceRaw(spot), source: "SPOT-MIRROR" };
   // rung 3 — BYBIT v5 linear perp (list is newest-first → reverse to ASC)
   const bi = bybitInterval(interval);
   if (bi) {

@@ -102,20 +102,14 @@ async function jsonUrl<T>(url: string, timeoutMs = 6500): Promise<T | null> {
 // measured 32/32 HTTP 200 p50 57ms on 2026-10-25 while api.binance.com rides
 // 418 ban-storms from this shared egress. api.binance.com stays as fallback.
 const SPOT_HOSTS = ["https://data-api.binance.vision", "https://api.binance.com"];
+// v13.2.1 — per-host 418/429 backoff via the shared spot-host gate.
 async function spotPrice(symbol: string): Promise<number | null> {
-  for (const h of SPOT_HOSTS) {
-    const j = await jsonUrl<{ price?: string }>(`${h}/api/v3/ticker/price?symbol=${symbol}`);
-    const p = j?.price ? Number(j.price) : NaN;
-    if (Number.isFinite(p) && p > 0) return p;
-  }
-  return null;
+  const j = await spotLadderJson<{ price?: string }>(`/api/v3/ticker/price?symbol=${symbol}`, SPOT_HOSTS);
+  const p = j?.price ? Number(j.price) : NaN;
+  return Number.isFinite(p) && p > 0 ? p : null;
 }
 async function spotKlines(symbol: string, interval: string, limit: number): Promise<Array<[number, string, string, string, string]> | null> {
-  for (const h of SPOT_HOSTS) {
-    const j = await jsonUrl<Array<[number, string, string, string, string]>>(`${h}/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`);
-    if (j) return j;
-  }
-  return null;
+  return spotLadderJson<Array<[number, string, string, string, string]>>(`/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`, SPOT_HOSTS);
 }
 
 interface PremIndex { markPrice: string; lastFundingRate: string; nextFundingTime: number }

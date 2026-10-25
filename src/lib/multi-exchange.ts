@@ -327,31 +327,29 @@ async function binanceFuturesBatch(symbols: string[]): Promise<Map<string, numbe
 
 // v12.8 — spot-pool mirror state (separate budget/pool from fapi, by design)
 let binanceSpotMirrorCache: { at: number; data: Map<string, number> } | null = null;
-let binanceSpotMirrorBannedUntil = 0;
 let lastSpotMirrorLogAt = 0;
 
 async function binanceSpotMirrorBatch(): Promise<Map<string, number>> {
-  if (binanceSpotMirrorCache && Date.now() - binanceSpotMirrorCache.at < 30_000) return binanceSpotMirrorCache.data;
-  if (Date.now() < binanceSpotMirrorBannedUntil) return binanceSpotMirrorCache?.data ?? new Map();
+  if (binanceSpotMirrorCache && Date.now() - binanceSpotMirrorCache.at < 60_000) return binanceSpotMirrorCache.data;
   const out = new Map<string, number>();
   // v13.2 SPOT-HOST LADDER (operator mandate trace 1a1704d407f00dad — «جریان زندهٔ لحظه‌ای باید با بایننس باشد»):
   // data-api.binance.vision is the PRIMARY spot host — measured 32/32 HTTP 200 p50 57ms on 2026-10-25
   // while api.binance.com rides 418 ban-storms from this shared egress; api stays as the fallback rung.
+  // v13.2.1 — per-host 418/429 backoff via the shared spot-host gate (the old
+  // last-rung-only 10min ban let the primary rung be re-poked during its own
+  // ban every sweep — live evidence: vision 418 @467wt/min, retry-after 889s).
   const HOSTS = ["https://data-api.binance.vision", "https://api.binance.com"];
-  for (const host of HOSTS) {
+  const ready = spotHostsReady(HOSTS);
+  if (ready.length === 0) return binanceSpotMirrorCache?.data ?? out;
+  for (const host of ready) {
     try {
       const ctrl = new AbortController();
       const t = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
       const res = await fetch(`${host}/api/v3/ticker/24hr`, { signal: ctrl.signal, cache: "no-store", headers: { Connection: "close" } });
       clearTimeout(t);
       if (res.status === 418 || res.status === 429) {
-        // own pool, own backoff — 10min soft ban armed only when the LAST rung also throttles
-        if (host === HOSTS[HOSTS.length - 1]) {
-          binanceSpotMirrorBannedUntil = Date.now() + 10 * 60_000;
-          console.warn("[multi-exchange] spot-pool mirror rate-limited — backoff 10min (separate pool from fapi)");
-          return out;
-        }
-        continue; // primary rung throttled — try the fallback host
+        noteSpotHostThrottle(host, res.status, res.headers);
+        continue; // gate armed — next rung serves until expiry
       }
       if (!res.ok) continue;
       const rows = (await res.json()) as Array<{ symbol: string; lastPrice: string }>;

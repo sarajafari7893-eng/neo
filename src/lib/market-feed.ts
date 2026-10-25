@@ -68,13 +68,19 @@ export function markFeedOk(host: string): void {
 
 async function fetchJson<T>(path: string, hosts: string[] = BINANCE_HOSTS): Promise<T> {
   let lastErr: unknown;
-  for (const host of hosts) {
+  const ready = spotHostsReady(hosts); // v13.2.1 — mid-ban hosts are skipped, traffic slides to the healthy rung
+  if (ready.length === 0) throw new Error(`spot-host-gate: all hosts mid-ban for ${path}`);
+  for (const host of ready) {
     const t0 = Date.now();
     try {
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
       const res = await fetch(`${host}${path}`, { signal: ctrl.signal, cache: "no-store" });
       clearTimeout(timer);
+      if (res.status === 418 || res.status === 429) {
+        noteSpotHostThrottle(host, res.status, res.headers);
+        throw new Error(`${host}${path} → ${res.status} (gate armed)`);
+      }
       if (!res.ok) throw new Error(`${host}${path} → ${res.status}`);
       const json = (await res.json()) as T;
       feedStatus.lastOkAt = Date.now();
