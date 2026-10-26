@@ -2,15 +2,15 @@
  "ver": "supervisor-cron 1.6.0",
  "pid": 1703,
  "startedAt": "2026-10-25T22:52:19.219Z",
- "updatedAt": "2026-10-26T01:22:49.267Z",
+ "updatedAt": "2026-10-26T01:32:49.846Z",
  "jobs": {
   "sweep": {
-   "lastRunAt": 1792977769219,
+   "lastRunAt": 1792978369219,
    "nextRunAt": 1792978369219,
    "lastStatus": "ok",
-   "lastDurationMs": 47,
+   "lastDurationMs": 627,
    "lastError": null,
-   "runs": 84,
+   "runs": 85,
    "failures": 0
   },
   "progress": {
@@ -59,29 +59,29 @@
    "failures": 0
   },
   "keepwarm": {
-   "lastRunAt": 1792977769220,
-   "nextRunAt": 1792977769219,
-   "lastStatus": "ok",
-   "lastDurationMs": 47,
-   "lastError": null,
-   "runs": 88,
-   "failures": 10
+   "lastRunAt": 1792978369220,
+   "nextRunAt": 1792978669219,
+   "lastStatus": "error",
+   "lastDurationMs": 2,
+   "lastError": "HEARTBEAT COLD app:3000 0ms streak=2",
+   "runs": 90,
+   "failures": 12
   }
  },
  "lastSweep": {
-  "at": "2026-10-26T01:22:49.266Z",
-  "verdict": "AMBER",
-  "reason": "sentinel :3030 verdict AMBER · toobit-bridge doctrine: 3 violation(s) — last=MIRROR-LAG: card=SL but intent still OPEN 3455s — pollCards transition should have fired",
+  "at": "2026-10-26T01:32:49.236Z",
+  "verdict": "RED",
+  "reason": "app :3000 down",
   "services": {
    "app": {
-    "up": true,
-    "status": 200,
-    "ms": 30
+    "up": false,
+    "status": null,
+    "ms": 0
    },
    "liq": {
     "up": true,
     "status": 200,
-    "ms": 1
+    "ms": 3
    },
    "trade": {
     "up": true,
@@ -111,7 +111,7 @@
    "bridge": {
     "up": true,
     "status": 200,
-    "ms": 0
+    "ms": 1
    },
    "tbt": {
     "up": true,
@@ -120,6 +120,11 @@
    }
   },
   "anomalies": [
+   {
+    "class": "app-down",
+    "sev": "crit",
+    "msg": "app :3000 DOWN (HTTP unreachable) · healthz=err → pulse fallback"
+   },
    {
     "class": "sentinel-amber",
     "sev": "warn",
@@ -154,43 +159,22 @@
   "newN": 3
  },
  "lastKeepwarm": {
-  "at": "2026-10-26T01:22:49.267Z",
-  "ok": true,
-  "ms": 47,
-  "bootAt": "2026-10-26T01:21:11.366Z",
-  "gitSha": "b0ca92f",
-  "coldStreak": 0
+  "at": "2026-10-26T01:32:49.220Z",
+  "ok": false,
+  "ms": 0,
+  "bootAt": null,
+  "gitSha": null,
+  "coldStreak": 2
  },
- "coldStreak": 0,
+ "coldStreak": 2,
  "alertLedger": {
   "sentinel-red": 1792969370868,
   "review-llm-unavailable": 1792968771282,
-  "app-down": 1792600451062
+  "app-down": 1792978369845
  },
  "wsDownStreak": 0,
  "staleStreak": 0,
  "history": [
-  {
-   "id": "review",
-   "at": 1792968769226,
-   "status": "ok",
-   "durationMs": 2300,
-   "detail": "llm=llm_unavailable"
-  },
-  {
-   "id": "progress",
-   "at": 1792968769223,
-   "status": "ok",
-   "durationMs": 2602,
-   "detail": "sent 17 lines"
-  },
-  {
-   "id": "backup",
-   "at": 1792968769301,
-   "status": "ok",
-   "durationMs": 26581,
-   "detail": "snapshot ok in 27s: SNAPSHOT OK — nexus-snapshot-20261025-225249.zip (47M) · 12 snapshots retained (max 12) · wal:VACUUM-COPY-CONSISTENT+CHECKPOINTED · cal:OK · enc:ENCRYPTED · off-site: DISABLED(oper"
-  },
   {
    "id": "digest",
    "at": 1792968871219,
@@ -519,6 +503,27 @@
    "status": "ok",
    "durationMs": 47,
    "detail": "HEARTBEAT OK 47ms boot=01:21:11Z sha=b0ca92f"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1792978069219,
+   "status": "error",
+   "durationMs": 2,
+   "detail": "HEARTBEAT COLD app:3000 1ms streak=1"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1792978369220,
+   "status": "error",
+   "durationMs": 2,
+   "detail": "HEARTBEAT COLD app:3000 0ms streak=2"
+  },
+  {
+   "id": "sweep",
+   "at": 1792978369219,
+   "status": "ok",
+   "durationMs": 627,
+   "detail": "RED: app :3000 down"
   }
  ],
  "watchRuns": [
