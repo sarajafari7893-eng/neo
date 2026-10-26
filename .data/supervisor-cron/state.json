@@ -2,15 +2,15 @@
  "ver": "supervisor-cron 1.6.0",
  "pid": 1703,
  "startedAt": "2026-10-25T22:52:19.219Z",
- "updatedAt": "2026-10-26T19:42:49.720Z",
+ "updatedAt": "2026-10-26T19:53:21.412Z",
  "jobs": {
   "sweep": {
-   "lastRunAt": 1793043769219,
-   "nextRunAt": 1793043769219,
+   "lastRunAt": 1793044369219,
+   "nextRunAt": 1793044969219,
    "lastStatus": "ok",
-   "lastDurationMs": 501,
+   "lastDurationMs": 447,
    "lastError": null,
-   "runs": 194,
+   "runs": 195,
    "failures": 0
   },
   "progress": {
@@ -41,12 +41,12 @@
    "failures": 0
   },
   "backup": {
-   "lastRunAt": 1793033569397,
+   "lastRunAt": 1793044369397,
    "nextRunAt": 1793044369397,
    "lastStatus": "ok",
-   "lastDurationMs": 34553,
+   "lastDurationMs": 32015,
    "lastError": null,
-   "runs": 10,
+   "runs": 11,
    "failures": 0
   },
   "digest": {
@@ -59,17 +59,17 @@
    "failures": 0
   },
   "keepwarm": {
-   "lastRunAt": 1793043769219,
-   "nextRunAt": 1793044069219,
+   "lastRunAt": 1793044369220,
+   "nextRunAt": 1793044669219,
    "lastStatus": "error",
    "lastDurationMs": 3,
-   "lastError": "HEARTBEAT COLD app:3000 1ms streak=4",
-   "runs": 308,
-   "failures": 67
+   "lastError": "HEARTBEAT COLD app:3000 0ms streak=1",
+   "runs": 310,
+   "failures": 68
   }
  },
  "lastSweep": {
-  "at": "2026-10-26T19:42:49.720Z",
+  "at": "2026-10-26T19:52:49.665Z",
   "verdict": "RED",
   "reason": "app :3000 down",
   "services": {
@@ -81,12 +81,12 @@
    "liq": {
     "up": true,
     "status": 200,
-    "ms": 3
+    "ms": 4
    },
    "trade": {
     "up": true,
     "status": 200,
-    "ms": 1
+    "ms": 0
    },
    "armor": {
     "up": true,
@@ -101,12 +101,12 @@
    "sentinel": {
     "up": true,
     "status": 200,
-    "ms": 0
+    "ms": 1
    },
    "ws": {
     "up": true,
     "status": 400,
-    "ms": 2
+    "ms": 1
    },
    "bridge": {
     "up": true,
@@ -137,7 +137,7 @@
    }
   ],
   "data": {
-   "lastEventAgeMin": 0
+   "lastEventAgeMin": 1
   },
   "streaks": {
    "wsDown": 0,
@@ -159,14 +159,14 @@
   "newN": 1
  },
  "lastKeepwarm": {
-  "at": "2026-10-26T19:42:49.220Z",
+  "at": "2026-10-26T19:52:49.220Z",
   "ok": false,
-  "ms": 1,
+  "ms": 0,
   "bootAt": null,
   "gitSha": null,
-  "coldStreak": 4
+  "coldStreak": 1
  },
- "coldStreak": 4,
+ "coldStreak": 1,
  "alertLedger": {
   "sentinel-red": 1793043170338,
   "review-llm-unavailable": 1792968771282,
@@ -175,34 +175,6 @@
  "wsDownStreak": 0,
  "staleStreak": 0,
  "history": [
-  {
-   "id": "sweep",
-   "at": 1793034169219,
-   "status": "ok",
-   "durationMs": 806,
-   "detail": "AMBER: sentinel :3030 verdict AMBER · toobit-bridge doctrine: 3 violation(s) — last=MIRROR-LAG: card=SL but intent still OPEN 3"
-  },
-  {
-   "id": "keepwarm",
-   "at": 1793034469219,
-   "status": "error",
-   "durationMs": 3,
-   "detail": "HEARTBEAT COLD app:3000 1ms streak=1"
-  },
-  {
-   "id": "keepwarm",
-   "at": 1793034769219,
-   "status": "error",
-   "durationMs": 4,
-   "detail": "HEARTBEAT COLD app:3000 1ms streak=2"
-  },
-  {
-   "id": "sweep",
-   "at": 1793034769219,
-   "status": "ok",
-   "durationMs": 618,
-   "detail": "RED: app :3000 down"
-  },
   {
    "id": "keepwarm",
    "at": 1793035069219,
@@ -524,6 +496,34 @@
    "status": "ok",
    "durationMs": 501,
    "detail": "RED: app :3000 down"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1793044069219,
+   "status": "ok",
+   "durationMs": 140,
+   "detail": "HEARTBEAT OK 133ms boot=19:47:39Z sha=6d6dd97"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1793044369220,
+   "status": "error",
+   "durationMs": 3,
+   "detail": "HEARTBEAT COLD app:3000 0ms streak=1"
+  },
+  {
+   "id": "sweep",
+   "at": 1793044369219,
+   "status": "ok",
+   "durationMs": 447,
+   "detail": "RED: app :3000 down"
+  },
+  {
+   "id": "backup",
+   "at": 1793044369397,
+   "status": "ok",
+   "durationMs": 32015,
+   "detail": "snapshot ok in 32s: SNAPSHOT OK — nexus-snapshot-20261026-195249.zip (50M) · 12 snapshots retained (max 12) · wal:VACUUM-COPY-CONSISTENT+CHECKPOINTED · cal:OK · enc:ENCRYPTED · off-site: DISABLED(oper"
   }
  ],
  "watchRuns": [
