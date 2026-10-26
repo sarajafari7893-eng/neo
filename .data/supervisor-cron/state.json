@@ -2,15 +2,15 @@
  "ver": "supervisor-cron 1.6.0",
  "pid": 1703,
  "startedAt": "2026-10-25T22:52:19.219Z",
- "updatedAt": "2026-10-26T10:12:49.240Z",
+ "updatedAt": "2026-10-26T10:22:49.384Z",
  "jobs": {
   "sweep": {
-   "lastRunAt": 1793009569220,
-   "nextRunAt": 1793009569219,
+   "lastRunAt": 1793010169219,
+   "nextRunAt": 1793010169219,
    "lastStatus": "ok",
-   "lastDurationMs": 20,
+   "lastDurationMs": 165,
    "lastError": null,
-   "runs": 137,
+   "runs": 138,
    "failures": 0
   },
   "progress": {
@@ -59,34 +59,34 @@
    "failures": 0
   },
   "keepwarm": {
-   "lastRunAt": 1793009569221,
-   "nextRunAt": 1793009869219,
-   "lastStatus": "error",
-   "lastDurationMs": 3,
-   "lastError": "HEARTBEAT COLD app:3000 0ms streak=2",
-   "runs": 194,
+   "lastRunAt": 1793010169219,
+   "nextRunAt": 1793010469219,
+   "lastStatus": "ok",
+   "lastDurationMs": 35,
+   "lastError": null,
+   "runs": 196,
    "failures": 26
   }
  },
  "lastSweep": {
-  "at": "2026-10-26T10:12:49.240Z",
-  "verdict": "RED",
-  "reason": "app :3000 down",
+  "at": "2026-10-26T10:22:49.384Z",
+  "verdict": "AMBER",
+  "reason": "sentinel :3030 verdict AMBER · toobit-bridge doctrine: 3 violation(s) — last=MIRROR-LAG: card=SL but intent still OPEN 3455s — pollCards transition should have fired",
   "services": {
    "app": {
-    "up": false,
-    "status": null,
-    "ms": 0
+    "up": true,
+    "status": 200,
+    "ms": 29
    },
    "liq": {
     "up": true,
     "status": 200,
-    "ms": 4
+    "ms": 0
    },
    "trade": {
     "up": true,
     "status": 200,
-    "ms": 0
+    "ms": 1
    },
    "armor": {
     "up": true,
@@ -101,12 +101,12 @@
    "sentinel": {
     "up": true,
     "status": 200,
-    "ms": 1
+    "ms": 0
    },
    "ws": {
     "up": true,
     "status": 400,
-    "ms": 1
+    "ms": 2
    },
    "bridge": {
     "up": true,
@@ -116,19 +116,14 @@
    "tbt": {
     "up": true,
     "status": 200,
-    "ms": 1
+    "ms": 4
    }
   },
   "anomalies": [
    {
-    "class": "app-down",
-    "sev": "crit",
-    "msg": "app :3000 DOWN (HTTP unreachable) · healthz=err → pulse fallback"
-   },
-   {
-    "class": "sentinel-red",
-    "sev": "crit",
-    "msg": "sentinel :3030 verdict RED"
+    "class": "sentinel-amber",
+    "sev": "warn",
+    "msg": "sentinel :3030 verdict AMBER"
    },
    {
     "class": "tbt-doctrine-violation",
@@ -159,14 +154,14 @@
   "newN": 2
  },
  "lastKeepwarm": {
-  "at": "2026-10-26T10:12:49.221Z",
-  "ok": false,
-  "ms": 0,
-  "bootAt": null,
-  "gitSha": null,
-  "coldStreak": 2
+  "at": "2026-10-26T10:22:49.254Z",
+  "ok": true,
+  "ms": 35,
+  "bootAt": "2026-10-26T10:20:05.445Z",
+  "gitSha": "8924281",
+  "coldStreak": 0
  },
- "coldStreak": 2,
+ "coldStreak": 0,
  "alertLedger": {
   "sentinel-red": 1793008369691,
   "review-llm-unavailable": 1792968771282,
@@ -175,27 +170,6 @@
  "wsDownStreak": 0,
  "staleStreak": 0,
  "history": [
-  {
-   "id": "keepwarm",
-   "at": 1793000269219,
-   "status": "ok",
-   "durationMs": 23,
-   "detail": "HEARTBEAT OK 23ms boot=07:36:05Z sha=1025ef5"
-  },
-  {
-   "id": "sweep",
-   "at": 1793000569219,
-   "status": "ok",
-   "durationMs": 48,
-   "detail": "AMBER: sentinel :3030 verdict AMBER · toobit-bridge doctrine: 3 violation(s) — last=MIRROR-LAG: card=SL but intent still OPEN 3"
-  },
-  {
-   "id": "keepwarm",
-   "at": 1793000569220,
-   "status": "ok",
-   "durationMs": 48,
-   "detail": "HEARTBEAT OK 48ms boot=07:40:00Z sha=1025ef5"
-  },
   {
    "id": "keepwarm",
    "at": 1793000869219,
@@ -524,6 +498,27 @@
    "status": "ok",
    "durationMs": 20,
    "detail": "RED: app :3000 down"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1793009869220,
+   "status": "ok",
+   "durationMs": 24,
+   "detail": "HEARTBEAT OK 24ms boot=10:16:15Z sha=8924281"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1793010169219,
+   "status": "ok",
+   "durationMs": 35,
+   "detail": "HEARTBEAT OK 35ms boot=10:20:05Z sha=8924281"
+  },
+  {
+   "id": "sweep",
+   "at": 1793010169219,
+   "status": "ok",
+   "durationMs": 165,
+   "detail": "AMBER: sentinel :3030 verdict AMBER · toobit-bridge doctrine: 3 violation(s) — last=MIRROR-LAG: card=SL but intent still OPEN 3"
   }
  ],
  "watchRuns": [
