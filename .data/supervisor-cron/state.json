@@ -2,15 +2,15 @@
  "ver": "supervisor-cron 1.6.0",
  "pid": 1703,
  "startedAt": "2026-10-25T22:52:19.219Z",
- "updatedAt": "2026-10-26T21:52:50.187Z",
+ "updatedAt": "2026-10-26T22:02:49.759Z",
  "jobs": {
   "sweep": {
-   "lastRunAt": 1793051569219,
-   "nextRunAt": 1793051569219,
+   "lastRunAt": 1793052169219,
+   "nextRunAt": 1793052169219,
    "lastStatus": "ok",
-   "lastDurationMs": 968,
+   "lastDurationMs": 540,
    "lastError": null,
-   "runs": 207,
+   "runs": 208,
    "failures": 0
   },
   "progress": {
@@ -59,29 +59,29 @@
    "failures": 0
   },
   "keepwarm": {
-   "lastRunAt": 1793051569220,
-   "nextRunAt": 1793051869219,
-   "lastStatus": "ok",
-   "lastDurationMs": 42,
-   "lastError": null,
-   "runs": 334,
-   "failures": 82
+   "lastRunAt": 1793052169219,
+   "nextRunAt": 1793052469219,
+   "lastStatus": "error",
+   "lastDurationMs": 3,
+   "lastError": "HEARTBEAT COLD app:3000 1ms streak=2",
+   "runs": 336,
+   "failures": 84
   }
  },
  "lastSweep": {
-  "at": "2026-10-26T21:52:50.187Z",
-  "verdict": "AMBER",
-  "reason": "sentinel :3030 verdict AMBER · toobit-bridge doctrine: 3 violation(s) — last=MIRROR-LAG: card=SL but intent still OPEN 3455s — pollCards transition should have fired",
+  "at": "2026-10-26T22:02:49.758Z",
+  "verdict": "RED",
+  "reason": "app :3000 down",
   "services": {
    "app": {
-    "up": true,
-    "status": 200,
-    "ms": 31
+    "up": false,
+    "status": null,
+    "ms": 1
    },
    "liq": {
     "up": true,
     "status": 200,
-    "ms": 1
+    "ms": 3
    },
    "trade": {
     "up": true,
@@ -91,12 +91,12 @@
    "armor": {
     "up": true,
     "status": 200,
-    "ms": 0
+    "ms": 1
    },
    "watchdog": {
     "up": true,
     "status": 200,
-    "ms": 1
+    "ms": 0
    },
    "sentinel": {
     "up": true,
@@ -121,9 +121,14 @@
   },
   "anomalies": [
    {
-    "class": "sentinel-amber",
-    "sev": "warn",
-    "msg": "sentinel :3030 verdict AMBER"
+    "class": "app-down",
+    "sev": "crit",
+    "msg": "app :3000 DOWN (HTTP unreachable) · healthz=err → pulse fallback"
+   },
+   {
+    "class": "sentinel-red",
+    "sev": "crit",
+    "msg": "sentinel :3030 verdict RED"
    },
    {
     "class": "tbt-doctrine-violation",
@@ -154,14 +159,14 @@
   "newN": 0
  },
  "lastKeepwarm": {
-  "at": "2026-10-26T21:52:49.262Z",
-  "ok": true,
-  "ms": 42,
-  "bootAt": "2026-10-26T21:52:20.412Z",
-  "gitSha": "7d73c8c",
-  "coldStreak": 0
+  "at": "2026-10-26T22:02:49.220Z",
+  "ok": false,
+  "ms": 1,
+  "bootAt": null,
+  "gitSha": null,
+  "coldStreak": 2
  },
- "coldStreak": 0,
+ "coldStreak": 2,
  "alertLedger": {
   "sentinel-red": 1793050970600,
   "review-llm-unavailable": 1792968771282,
@@ -170,27 +175,6 @@
  "wsDownStreak": 0,
  "staleStreak": 0,
  "history": [
-  {
-   "id": "keepwarm",
-   "at": 1793042269219,
-   "status": "error",
-   "durationMs": 5,
-   "detail": "HEARTBEAT COLD app:3000 1ms streak=2"
-  },
-  {
-   "id": "keepwarm",
-   "at": 1793042569220,
-   "status": "ok",
-   "durationMs": 37,
-   "detail": "HEARTBEAT OK 37ms boot=19:22:25Z sha=4da11f0"
-  },
-  {
-   "id": "sweep",
-   "at": 1793042569220,
-   "status": "ok",
-   "durationMs": 896,
-   "detail": "AMBER: sentinel :3030 verdict AMBER · toobit-bridge doctrine: 3 violation(s) — last=MIRROR-LAG: card=SL but intent still OPEN 3"
-  },
   {
    "id": "keepwarm",
    "at": 1793042869220,
@@ -519,6 +503,27 @@
    "status": "ok",
    "durationMs": 968,
    "detail": "AMBER: sentinel :3030 verdict AMBER · toobit-bridge doctrine: 3 violation(s) — last=MIRROR-LAG: card=SL but intent still OPEN 3"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1793051869219,
+   "status": "error",
+   "durationMs": 3,
+   "detail": "HEARTBEAT COLD app:3000 1ms streak=1"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1793052169219,
+   "status": "error",
+   "durationMs": 3,
+   "detail": "HEARTBEAT COLD app:3000 1ms streak=2"
+  },
+  {
+   "id": "sweep",
+   "at": 1793052169219,
+   "status": "ok",
+   "durationMs": 540,
+   "detail": "RED: app :3000 down"
   }
  ],
  "watchRuns": [
