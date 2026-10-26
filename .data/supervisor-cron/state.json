@@ -2,15 +2,15 @@
  "ver": "supervisor-cron 1.6.0",
  "pid": 1703,
  "startedAt": "2026-10-25T22:52:19.219Z",
- "updatedAt": "2026-10-26T12:42:49.300Z",
+ "updatedAt": "2026-10-26T12:54:31.497Z",
  "jobs": {
   "sweep": {
-   "lastRunAt": 1793018569219,
-   "nextRunAt": 1793018569219,
+   "lastRunAt": 1793019169219,
+   "nextRunAt": 1793019769219,
    "lastStatus": "ok",
-   "lastDurationMs": 81,
+   "lastDurationMs": 50,
    "lastError": null,
-   "runs": 152,
+   "runs": 153,
    "failures": 0
   },
   "progress": {
@@ -50,33 +50,33 @@
    "failures": 0
   },
   "digest": {
-   "lastRunAt": 1793012071220,
+   "lastRunAt": 1793019271220,
    "nextRunAt": 1793019271220,
    "lastStatus": "ok",
-   "lastDurationMs": 293,
+   "lastDurationMs": 277,
    "lastError": null,
-   "runs": 7,
+   "runs": 8,
    "failures": 0
   },
   "keepwarm": {
-   "lastRunAt": 1793018569220,
-   "nextRunAt": 1793018869219,
+   "lastRunAt": 1793019169219,
+   "nextRunAt": 1793019469219,
    "lastStatus": "ok",
-   "lastDurationMs": 67,
+   "lastDurationMs": 51,
    "lastError": null,
-   "runs": 224,
-   "failures": 28
+   "runs": 226,
+   "failures": 29
   }
  },
  "lastSweep": {
-  "at": "2026-10-26T12:42:49.300Z",
+  "at": "2026-10-26T12:52:49.269Z",
   "verdict": "AMBER",
   "reason": "sentinel :3030 verdict AMBER · toobit-bridge doctrine: 3 violation(s) — last=MIRROR-LAG: card=SL but intent still OPEN 3455s — pollCards transition should have fired",
   "services": {
    "app": {
     "up": true,
     "status": 200,
-    "ms": 58
+    "ms": 33
    },
    "liq": {
     "up": true,
@@ -91,7 +91,7 @@
    "armor": {
     "up": true,
     "status": 200,
-    "ms": 1
+    "ms": 0
    },
    "watchdog": {
     "up": true,
@@ -106,17 +106,17 @@
    "ws": {
     "up": true,
     "status": 400,
-    "ms": 2
+    "ms": 1
    },
    "bridge": {
     "up": true,
     "status": 200,
-    "ms": 0
+    "ms": 1
    },
    "tbt": {
     "up": true,
     "status": 200,
-    "ms": 1
+    "ms": 0
    }
   },
   "anomalies": [
@@ -149,16 +149,16 @@
   "ok": true
  },
  "lastDigest": {
-  "at": "2026-10-26T10:54:31.513Z",
+  "at": "2026-10-26T12:54:31.497Z",
   "ok": true,
-  "newN": 2
+  "newN": 1
  },
  "lastKeepwarm": {
-  "at": "2026-10-26T12:42:49.287Z",
+  "at": "2026-10-26T12:52:49.270Z",
   "ok": true,
-  "ms": 67,
-  "bootAt": "2026-10-26T12:40:25.801Z",
-  "gitSha": "00048d2",
+  "ms": 51,
+  "bootAt": "2026-10-26T12:50:46.173Z",
+  "gitSha": "96ff720",
   "coldStreak": 0
  },
  "coldStreak": 0,
@@ -170,34 +170,6 @@
  "wsDownStreak": 0,
  "staleStreak": 0,
  "history": [
-  {
-   "id": "sweep",
-   "at": 1793009569220,
-   "status": "ok",
-   "durationMs": 20,
-   "detail": "RED: app :3000 down"
-  },
-  {
-   "id": "keepwarm",
-   "at": 1793009869220,
-   "status": "ok",
-   "durationMs": 24,
-   "detail": "HEARTBEAT OK 24ms boot=10:16:15Z sha=8924281"
-  },
-  {
-   "id": "keepwarm",
-   "at": 1793010169219,
-   "status": "ok",
-   "durationMs": 35,
-   "detail": "HEARTBEAT OK 35ms boot=10:20:05Z sha=8924281"
-  },
-  {
-   "id": "sweep",
-   "at": 1793010169219,
-   "status": "ok",
-   "durationMs": 165,
-   "detail": "AMBER: sentinel :3030 verdict AMBER · toobit-bridge doctrine: 3 violation(s) — last=MIRROR-LAG: card=SL but intent still OPEN 3"
-  },
   {
    "id": "keepwarm",
    "at": 1793010469219,
@@ -519,6 +491,34 @@
    "status": "ok",
    "durationMs": 81,
    "detail": "AMBER: sentinel :3030 verdict AMBER · toobit-bridge doctrine: 3 violation(s) — last=MIRROR-LAG: card=SL but intent still OPEN 3"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1793018869220,
+   "status": "error",
+   "durationMs": 8,
+   "detail": "HEARTBEAT COLD app:3000 0ms streak=1"
+  },
+  {
+   "id": "sweep",
+   "at": 1793019169219,
+   "status": "ok",
+   "durationMs": 50,
+   "detail": "AMBER: sentinel :3030 verdict AMBER · toobit-bridge doctrine: 3 violation(s) — last=MIRROR-LAG: card=SL but intent still OPEN 3"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1793019169219,
+   "status": "ok",
+   "durationMs": 51,
+   "detail": "HEARTBEAT OK 51ms boot=12:50:46Z sha=96ff720"
+  },
+  {
+   "id": "digest",
+   "at": 1793019271220,
+   "status": "ok",
+   "durationMs": 277,
+   "detail": "digest new=1 settled=1 bridge=ok"
   }
  ],
  "watchRuns": [
