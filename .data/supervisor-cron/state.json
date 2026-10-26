@@ -2,15 +2,15 @@
  "ver": "supervisor-cron 1.6.0",
  "pid": 1703,
  "startedAt": "2026-10-25T22:52:19.219Z",
- "updatedAt": "2026-10-26T15:42:49.284Z",
+ "updatedAt": "2026-10-26T15:52:49.597Z",
  "jobs": {
   "sweep": {
-   "lastRunAt": 1793029369220,
+   "lastRunAt": 1793029969220,
    "nextRunAt": 1793029969219,
    "lastStatus": "ok",
-   "lastDurationMs": 63,
+   "lastDurationMs": 377,
    "lastError": null,
-   "runs": 170,
+   "runs": 171,
    "failures": 0
   },
   "progress": {
@@ -59,34 +59,34 @@
    "failures": 0
   },
   "keepwarm": {
-   "lastRunAt": 1793029369220,
-   "nextRunAt": 1793029369219,
-   "lastStatus": "ok",
-   "lastDurationMs": 64,
-   "lastError": null,
-   "runs": 260,
-   "failures": 36
+   "lastRunAt": 1793029969220,
+   "nextRunAt": 1793030269219,
+   "lastStatus": "error",
+   "lastDurationMs": 4,
+   "lastError": "HEARTBEAT COLD app:3000 0ms streak=2",
+   "runs": 262,
+   "failures": 38
   }
  },
  "lastSweep": {
-  "at": "2026-10-26T15:42:49.283Z",
-  "verdict": "AMBER",
-  "reason": "sentinel :3030 verdict AMBER · toobit-bridge doctrine: 3 violation(s) — last=MIRROR-LAG: card=SL but intent still OPEN 3455s — pollCards transition should have fired",
+  "at": "2026-10-26T15:52:49.351Z",
+  "verdict": "RED",
+  "reason": "app :3000 down",
   "services": {
    "app": {
-    "up": true,
-    "status": 200,
-    "ms": 34
+    "up": false,
+    "status": null,
+    "ms": 0
    },
    "liq": {
     "up": true,
     "status": 200,
-    "ms": 1
+    "ms": 5
    },
    "trade": {
     "up": true,
     "status": 200,
-    "ms": 0
+    "ms": 1
    },
    "armor": {
     "up": true,
@@ -96,30 +96,35 @@
    "watchdog": {
     "up": true,
     "status": 200,
-    "ms": 1
+    "ms": 2
    },
    "sentinel": {
     "up": true,
     "status": 200,
-    "ms": 4
+    "ms": 1
    },
    "ws": {
     "up": true,
     "status": 400,
-    "ms": 3
+    "ms": 0
    },
    "bridge": {
     "up": true,
     "status": 200,
-    "ms": 0
+    "ms": 3
    },
    "tbt": {
     "up": true,
     "status": 200,
-    "ms": 2
+    "ms": 1
    }
   },
   "anomalies": [
+   {
+    "class": "app-down",
+    "sev": "crit",
+    "msg": "app :3000 DOWN (HTTP unreachable) · healthz=err → pulse fallback"
+   },
    {
     "class": "sentinel-amber",
     "sev": "warn",
@@ -154,43 +159,22 @@
   "newN": 2
  },
  "lastKeepwarm": {
-  "at": "2026-10-26T15:42:49.284Z",
-  "ok": true,
-  "ms": 64,
-  "bootAt": "2026-10-26T15:42:04.727Z",
-  "gitSha": "a0b558d",
-  "coldStreak": 0
+  "at": "2026-10-26T15:52:49.220Z",
+  "ok": false,
+  "ms": 0,
+  "bootAt": null,
+  "gitSha": null,
+  "coldStreak": 2
  },
- "coldStreak": 0,
+ "coldStreak": 2,
  "alertLedger": {
   "sentinel-red": 1793027569511,
   "review-llm-unavailable": 1792968771282,
-  "app-down": 1793026969913
+  "app-down": 1793029969597
  },
  "wsDownStreak": 0,
  "staleStreak": 0,
  "history": [
-  {
-   "id": "keepwarm",
-   "at": 1793020069219,
-   "status": "ok",
-   "durationMs": 22,
-   "detail": "HEARTBEAT OK 22ms boot=13:06:05Z sha=d7bf3f0"
-  },
-  {
-   "id": "sweep",
-   "at": 1793020369219,
-   "status": "ok",
-   "durationMs": 56,
-   "detail": "AMBER: sentinel :3030 verdict AMBER · toobit-bridge doctrine: 3 violation(s) — last=MIRROR-LAG: card=SL but intent still OPEN 3"
-  },
-  {
-   "id": "keepwarm",
-   "at": 1793020369219,
-   "status": "ok",
-   "durationMs": 60,
-   "detail": "HEARTBEAT OK 60ms boot=13:10:40Z sha=430c0de"
-  },
   {
    "id": "keepwarm",
    "at": 1793020669219,
@@ -519,6 +503,27 @@
    "status": "ok",
    "durationMs": 64,
    "detail": "HEARTBEAT OK 64ms boot=15:42:04Z sha=a0b558d"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1793029669219,
+   "status": "error",
+   "durationMs": 4,
+   "detail": "HEARTBEAT COLD app:3000 1ms streak=1"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1793029969220,
+   "status": "error",
+   "durationMs": 4,
+   "detail": "HEARTBEAT COLD app:3000 0ms streak=2"
+  },
+  {
+   "id": "sweep",
+   "at": 1793029969220,
+   "status": "ok",
+   "durationMs": 377,
+   "detail": "RED: app :3000 down"
   }
  ],
  "watchRuns": [
