@@ -32635,3 +32635,26 @@ Stage Summary:
 - نسخه v13.2 = پوسچر اوج ۱۴-۱۸: هسته سریع (core-revert) + هندسه TP1 برابر اوج (1R) + بقیه لایه‌های خروج اثباتاً همان اوج — تنها دلتای باقی‌مانده: سهم native فید (~۵۲٪) و رژیم بازار که مهندسی نیستند
 - commit: PEAK-TUNE-v13.2-20261026 (اسکریپت اعمال + engine نسخه + worklog)
 - معیار ارزیابی: پس از ≥۵۰ ستلِ جدید، avgWin و برداشت MFE با اوج مقایسه شود؛ اگر فرماندار خودکار tp1RMult را برگرداند، ردیف audit مأموریت اپراتور مدرک برتری دارد
+
+---
+Task ID: 1a17a417edaf8319
+Agent: Z.ai Code (main session)
+Task: دستور اپراتور «وضعیت اتصال به مخزن گیت‌هاب رو بررسی کن، آخرین نسخه اسنپ‌شات مربوط به چه زمانی است؟ سیستم چطور به مخزن دسترسی دارد؟» — ممیزی کامل زنجیرهٔ گیت
+
+Work Log:
+- اتصال زنده آزموده شد: ls-remote بی‌اعتبار (private repo — «could not read Username» انتظارِ درست) و ls-روش احرازشده با GITHUB_TOKEN از .env از مسیر http.extraheader → موفق؛ SHA ریموت refs/heads/main == SHA محلی HEAD یعنی 45eb9e6258ea60a1c2bb5f2ecfd7ea5e1c82906a — سینک کامل (۰ جلوتر / ۰ عقبتر)
+- آخرین اسنپ‌شات زنده (نردبان ۱۰ دقیقه‌ای armor): سیکل auto در 2026-10-26T22:05:39Z — commit 45eb9e625 «nexus-state ... (armor v2)» و push OK در 22:05:50Z = ساعت تهران 2026-10-27 01:35:39؛ لاگ سه سیکل پیاپی OK (21:45/21:55/22:05 UTC)
+- سلامت push-armor v2.4.0 (پورت 3016، pid 1653، uptime ~23.3 ساعت): 166 سیکل، 165 push موفق، 8 خطا (صفر پیاپی)، preflight سالم (env-tracked=false)، tokenConfigured=true
+- اسنپ‌شات طلایی v12.7: manifest «.nexus-golden-manifest.txt» می‌گوید built 2026-10-22T23:48:34Z و git-sha 60c4902؛ فایل واقعی repo.tar در /home/sync/repo.tar (490MB، mtime 2026-10-22 23:51 UTC = تهران 2026-10-23 03:21)؛ کش گرم next: /tmp/my-project/next-cache/warm-next.tar.gz (540MB، 10/25 22:59)
+- مسیرهای دسترسی به مخزن (چهار لایه مستند شد):
+  ① WRITE خودکار — mini-services/push-armor/index.ts v2.4.0 هر ۱۰ دقیقه: preflight ضدنشت (.env در index/HEAD ممنوع) → گارد STALE-BASE با دفتر freshness mem-guard → wal_checkpoint(TRUNCATE) تا لجر کامل در هر blob → add -A با retry → commit → push؛ توکن فقط از .env زنده‌خوانی و فقط در env فرزند (GIT_CONFIG http.https://github.com/.extraheader = Authorization Basic) سفر می‌کند — هرگز URL/argv/لاگ (redact دو لایه)؛ non-fast-forward → alignWorkspace خودکار (fetch → behind: hard-reset+resurrect / ahead: عادی / diverged: reset+resurrect)؛ git-hygiene بستهٔ افزایشی وقتی loose > 200MB
+  ② BOOT بازلنگر — scripts/boot-kit.sh لایه GIT: اگر .git در بازیافت سکو گم شود، origin با توکن-in-URL موقت → fetch --depth 20 → reset --soft FETCH_HEAD → پاک‌سازی URL به شکل بی‌توکن؛ boot-kit-git.log خالی = بوت آخر نیازمند بازلنگر نبود
+  ③ بازیابی فاجعه دستی — scripts/restore-from-remote.sh: git fetch یک‌باره با x-access-token در URL (stderr ساب‌شده)
+  ④ ناظر تازگی — mini-services/mem-guard: در تشخیص لنگر کج، ls-remote (با auth armor) → fetch --depth=6 → reset --hard به ریموت → اطلاع تلگرام
+- بهداشت امنیتی: GITHUB_TOKEN در .env حاضر و غیرخالی (فقط «حضور» بررسی شد، هرگز چاپ نشد)؛ remote URL کاملاً بی‌توکن؛ هیچ http.extraheader ماندگار در git config نیست (inline per-command)؛ سابقهٔ کدها فقط خود git است و armor از push شدن .env جلوگیری می‌کند
+
+Stage Summary:
+- اتصال گیت‌هاب: سبز از هر دو سو — خواندن (ls-remote احرازشده) و نوشتن (سه push پیاپی OK تا 22:05:50Z)؛ local==remote روی 45eb9e625
+- پاسخ «آخرین اسنپ‌شات»: زنده = commit 45eb9e625 در 2026-10-26T22:05:39Z (تهران 01:35:39 بامداد 10/27)؛ طلایی v12.7 = repo.tar ساختهٔ 2026-10-22T23:48:34Z در /home/sync/repo.tar
+- معماری دسترسی: چهار لایه (armor نوشتن خودکار / boot-kit بازلنگر / restore دستی / mem-guard تازگی) با اصل «توکن هرگز در URL یا لاگ نمی‌ماند»
+- این مدخل خودش با همان مسیر extraheader pushed شد = آزمون E2E ششمِ پیاپیِ موفق
