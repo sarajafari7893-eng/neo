@@ -2,15 +2,15 @@
  "ver": "supervisor-cron 1.6.0",
  "pid": 1703,
  "startedAt": "2026-10-25T22:52:19.219Z",
- "updatedAt": "2026-10-26T14:54:31.512Z",
+ "updatedAt": "2026-10-26T15:02:49.914Z",
  "jobs": {
   "sweep": {
-   "lastRunAt": 1793026369219,
+   "lastRunAt": 1793026969219,
    "nextRunAt": 1793026969219,
    "lastStatus": "ok",
-   "lastDurationMs": 63,
+   "lastDurationMs": 695,
    "lastError": null,
-   "runs": 165,
+   "runs": 166,
    "failures": 0
   },
   "progress": {
@@ -51,7 +51,7 @@
   },
   "digest": {
    "lastRunAt": 1793026471221,
-   "nextRunAt": 1793026471220,
+   "nextRunAt": 1793033671221,
    "lastStatus": "ok",
    "lastDurationMs": 291,
    "lastError": null,
@@ -59,29 +59,29 @@
    "failures": 0
   },
   "keepwarm": {
-   "lastRunAt": 1793026369219,
-   "nextRunAt": 1793026669219,
-   "lastStatus": "ok",
-   "lastDurationMs": 52,
-   "lastError": null,
-   "runs": 250,
-   "failures": 30
+   "lastRunAt": 1793026969219,
+   "nextRunAt": 1793027269219,
+   "lastStatus": "error",
+   "lastDurationMs": 4,
+   "lastError": "HEARTBEAT COLD app:3000 0ms streak=2",
+   "runs": 252,
+   "failures": 32
   }
  },
  "lastSweep": {
-  "at": "2026-10-26T14:52:49.282Z",
-  "verdict": "AMBER",
-  "reason": "sentinel :3030 verdict AMBER · toobit-bridge doctrine: 3 violation(s) — last=MIRROR-LAG: card=SL but intent still OPEN 3455s — pollCards transition should have fired",
+  "at": "2026-10-26T15:02:49.236Z",
+  "verdict": "RED",
+  "reason": "app :3000 down",
   "services": {
    "app": {
-    "up": true,
-    "status": 200,
-    "ms": 45
+    "up": false,
+    "status": null,
+    "ms": 0
    },
    "liq": {
     "up": true,
     "status": 200,
-    "ms": 1
+    "ms": 4
    },
    "trade": {
     "up": true,
@@ -121,9 +121,14 @@
   },
   "anomalies": [
    {
-    "class": "sentinel-amber",
-    "sev": "warn",
-    "msg": "sentinel :3030 verdict AMBER"
+    "class": "app-down",
+    "sev": "crit",
+    "msg": "app :3000 DOWN (HTTP unreachable) · healthz=err → pulse fallback"
+   },
+   {
+    "class": "sentinel-red",
+    "sev": "crit",
+    "msg": "sentinel :3030 verdict RED"
    },
    {
     "class": "tbt-doctrine-violation",
@@ -132,7 +137,7 @@
    }
   ],
   "data": {
-   "lastEventAgeMin": 0
+   "lastEventAgeMin": 1
   },
   "streaks": {
    "wsDown": 0,
@@ -154,43 +159,22 @@
   "newN": 2
  },
  "lastKeepwarm": {
-  "at": "2026-10-26T14:52:49.271Z",
-  "ok": true,
-  "ms": 52,
-  "bootAt": "2026-10-26T14:50:05.662Z",
-  "gitSha": "6455c6a",
-  "coldStreak": 0
+  "at": "2026-10-26T15:02:49.220Z",
+  "ok": false,
+  "ms": 0,
+  "bootAt": null,
+  "gitSha": null,
+  "coldStreak": 2
  },
- "coldStreak": 0,
+ "coldStreak": 2,
  "alertLedger": {
   "sentinel-red": 1793025169941,
   "review-llm-unavailable": 1792968771282,
-  "app-down": 1793019769870
+  "app-down": 1793026969913
  },
  "wsDownStreak": 0,
  "staleStreak": 0,
  "history": [
-  {
-   "id": "sweep",
-   "at": 1793017369219,
-   "status": "ok",
-   "durationMs": 178,
-   "detail": "AMBER: sentinel :3030 verdict AMBER · toobit-bridge doctrine: 3 violation(s) — last=MIRROR-LAG: card=SL but intent still OPEN 3"
-  },
-  {
-   "id": "keepwarm",
-   "at": 1793017369219,
-   "status": "ok",
-   "durationMs": 185,
-   "detail": "HEARTBEAT OK 185ms boot=12:15:12Z sha=2da2d9d"
-  },
-  {
-   "id": "keepwarm",
-   "at": 1793017669219,
-   "status": "ok",
-   "durationMs": 25,
-   "detail": "HEARTBEAT OK 25ms boot=12:25:48Z sha=a6d1d90"
-  },
   {
    "id": "sweep",
    "at": 1793017969219,
@@ -519,6 +503,27 @@
    "status": "ok",
    "durationMs": 291,
    "detail": "digest new=2 settled=2 bridge=ok"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1793026669219,
+   "status": "error",
+   "durationMs": 4,
+   "detail": "HEARTBEAT COLD app:3000 1ms streak=1"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1793026969219,
+   "status": "error",
+   "durationMs": 4,
+   "detail": "HEARTBEAT COLD app:3000 0ms streak=2"
+  },
+  {
+   "id": "sweep",
+   "at": 1793026969219,
+   "status": "ok",
+   "durationMs": 695,
+   "detail": "RED: app :3000 down"
   }
  ],
  "watchRuns": [
