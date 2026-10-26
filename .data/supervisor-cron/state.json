@@ -2,15 +2,15 @@
  "ver": "supervisor-cron 1.6.0",
  "pid": 1703,
  "startedAt": "2026-10-25T22:52:19.219Z",
- "updatedAt": "2026-10-26T01:42:49.270Z",
+ "updatedAt": "2026-10-26T01:53:27.052Z",
  "jobs": {
   "sweep": {
-   "lastRunAt": 1792978969219,
-   "nextRunAt": 1792979569219,
+   "lastRunAt": 1792979569219,
+   "nextRunAt": 1792980169219,
    "lastStatus": "ok",
-   "lastDurationMs": 50,
+   "lastDurationMs": 57,
    "lastError": null,
-   "runs": 86,
+   "runs": 87,
    "failures": 0
   },
   "progress": {
@@ -41,12 +41,12 @@
    "failures": 0
   },
   "backup": {
-   "lastRunAt": 1792968769301,
+   "lastRunAt": 1792979569302,
    "nextRunAt": 1792979569301,
    "lastStatus": "ok",
-   "lastDurationMs": 26581,
+   "lastDurationMs": 37750,
    "lastError": null,
-   "runs": 4,
+   "runs": 5,
    "failures": 0
   },
   "digest": {
@@ -59,24 +59,24 @@
    "failures": 0
   },
   "keepwarm": {
-   "lastRunAt": 1792978969220,
-   "nextRunAt": 1792978969219,
+   "lastRunAt": 1792979569220,
+   "nextRunAt": 1792979869219,
    "lastStatus": "ok",
-   "lastDurationMs": 50,
+   "lastDurationMs": 57,
    "lastError": null,
-   "runs": 92,
+   "runs": 94,
    "failures": 12
   }
  },
  "lastSweep": {
-  "at": "2026-10-26T01:42:49.269Z",
+  "at": "2026-10-26T01:52:49.276Z",
   "verdict": "AMBER",
   "reason": "sentinel :3030 verdict AMBER · toobit-bridge doctrine: 3 violation(s) — last=MIRROR-LAG: card=SL but intent still OPEN 3455s — pollCards transition should have fired",
   "services": {
    "app": {
     "up": true,
     "status": 200,
-    "ms": 26
+    "ms": 41
    },
    "liq": {
     "up": true,
@@ -86,7 +86,7 @@
    "trade": {
     "up": true,
     "status": 200,
-    "ms": 0
+    "ms": 1
    },
    "armor": {
     "up": true,
@@ -101,22 +101,22 @@
    "sentinel": {
     "up": true,
     "status": 200,
-    "ms": 0
+    "ms": 1
    },
    "ws": {
     "up": true,
     "status": 400,
-    "ms": 2
+    "ms": 0
    },
    "bridge": {
     "up": true,
     "status": 200,
-    "ms": 2
+    "ms": 1
    },
    "tbt": {
     "up": true,
     "status": 200,
-    "ms": 2
+    "ms": 0
    }
   },
   "anomalies": [
@@ -154,11 +154,11 @@
   "newN": 3
  },
  "lastKeepwarm": {
-  "at": "2026-10-26T01:42:49.270Z",
+  "at": "2026-10-26T01:52:49.277Z",
   "ok": true,
-  "ms": 50,
-  "bootAt": "2026-10-26T01:41:39.952Z",
-  "gitSha": "8afd71a",
+  "ms": 57,
+  "bootAt": "2026-10-26T01:47:59.320Z",
+  "gitSha": "3cb7ff2",
   "coldStreak": 0
  },
  "coldStreak": 0,
@@ -170,34 +170,6 @@
  "wsDownStreak": 0,
  "staleStreak": 0,
  "history": [
-  {
-   "id": "sweep",
-   "at": 1792969369219,
-   "status": "ok",
-   "durationMs": 1649,
-   "detail": "RED: sentinel verdict RED"
-  },
-  {
-   "id": "keepwarm",
-   "at": 1792969669219,
-   "status": "ok",
-   "durationMs": 23,
-   "detail": "HEARTBEAT OK 22ms boot=23:05:40Z sha=3395295"
-  },
-  {
-   "id": "sweep",
-   "at": 1792969969219,
-   "status": "ok",
-   "durationMs": 45,
-   "detail": "AMBER: sentinel :3030 verdict AMBER · toobit-bridge doctrine: 3 violation(s) — last=MIRROR-LAG: card=SL but intent still OPEN 3"
-  },
-  {
-   "id": "keepwarm",
-   "at": 1792969969220,
-   "status": "error",
-   "durationMs": 188,
-   "detail": "HEARTBEAT COLD app:3000 183ms streak=1"
-  },
   {
    "id": "keepwarm",
    "at": 1792970269219,
@@ -519,6 +491,34 @@
    "status": "ok",
    "durationMs": 50,
    "detail": "HEARTBEAT OK 50ms boot=01:41:39Z sha=8afd71a"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1792979269219,
+   "status": "ok",
+   "durationMs": 22,
+   "detail": "HEARTBEAT OK 22ms boot=01:44:46Z sha=3cb7ff2"
+  },
+  {
+   "id": "sweep",
+   "at": 1792979569219,
+   "status": "ok",
+   "durationMs": 57,
+   "detail": "AMBER: sentinel :3030 verdict AMBER · toobit-bridge doctrine: 3 violation(s) — last=MIRROR-LAG: card=SL but intent still OPEN 3"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1792979569220,
+   "status": "ok",
+   "durationMs": 57,
+   "detail": "HEARTBEAT OK 57ms boot=01:47:59Z sha=3cb7ff2"
+  },
+  {
+   "id": "backup",
+   "at": 1792979569302,
+   "status": "ok",
+   "durationMs": 37750,
+   "detail": "snapshot ok in 38s: SNAPSHOT OK — nexus-snapshot-20261026-015249.zip (50M) · 12 snapshots retained (max 12) · wal:VACUUM-COPY-CONSISTENT+CHECKPOINTED · cal:OK · enc:ENCRYPTED · off-site: DISABLED(oper"
   }
  ],
  "watchRuns": [
