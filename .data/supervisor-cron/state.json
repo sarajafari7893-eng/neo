@@ -2,15 +2,15 @@
  "ver": "supervisor-cron 1.6.0",
  "pid": 1703,
  "startedAt": "2026-10-25T22:52:19.219Z",
- "updatedAt": "2026-10-26T17:12:49.837Z",
+ "updatedAt": "2026-10-26T17:22:50.621Z",
  "jobs": {
   "sweep": {
-   "lastRunAt": 1793034769219,
-   "nextRunAt": 1793034769219,
+   "lastRunAt": 1793035369219,
+   "nextRunAt": 1793035369219,
    "lastStatus": "ok",
-   "lastDurationMs": 618,
+   "lastDurationMs": 1402,
    "lastError": null,
-   "runs": 179,
+   "runs": 180,
    "failures": 0
   },
   "progress": {
@@ -59,29 +59,29 @@
    "failures": 0
   },
   "keepwarm": {
-   "lastRunAt": 1793034769219,
-   "nextRunAt": 1793035069219,
+   "lastRunAt": 1793035369219,
+   "nextRunAt": 1793035669219,
    "lastStatus": "error",
-   "lastDurationMs": 4,
-   "lastError": "HEARTBEAT COLD app:3000 1ms streak=2",
-   "runs": 278,
-   "failures": 47
+   "lastDurationMs": 3,
+   "lastError": "HEARTBEAT COLD app:3000 1ms streak=1",
+   "runs": 280,
+   "failures": 48
   }
  },
  "lastSweep": {
-  "at": "2026-10-26T17:12:49.836Z",
+  "at": "2026-10-26T17:22:49.747Z",
   "verdict": "RED",
   "reason": "app :3000 down",
   "services": {
    "app": {
     "up": false,
     "status": null,
-    "ms": 1
+    "ms": 0
    },
    "liq": {
     "up": true,
     "status": 200,
-    "ms": 4
+    "ms": 3
    },
    "trade": {
     "up": true,
@@ -159,43 +159,22 @@
   "newN": 1
  },
  "lastKeepwarm": {
-  "at": "2026-10-26T17:12:49.220Z",
+  "at": "2026-10-26T17:22:49.220Z",
   "ok": false,
   "ms": 1,
   "bootAt": null,
   "gitSha": null,
-  "coldStreak": 2
+  "coldStreak": 1
  },
- "coldStreak": 2,
+ "coldStreak": 1,
  "alertLedger": {
-  "sentinel-red": 1793032970318,
+  "sentinel-red": 1793035370621,
   "review-llm-unavailable": 1792968771282,
-  "app-down": 1793032970075
+  "app-down": 1793035370383
  },
  "wsDownStreak": 0,
  "staleStreak": 0,
  "history": [
-  {
-   "id": "keepwarm",
-   "at": 1793025769220,
-   "status": "ok",
-   "durationMs": 49,
-   "detail": "HEARTBEAT OK 49ms boot=14:42:33Z sha=508ef0d"
-  },
-  {
-   "id": "keepwarm",
-   "at": 1793026069219,
-   "status": "ok",
-   "durationMs": 39,
-   "detail": "HEARTBEAT OK 39ms boot=14:45:56Z sha=6455c6a"
-  },
-  {
-   "id": "keepwarm",
-   "at": 1793026369219,
-   "status": "ok",
-   "durationMs": 52,
-   "detail": "HEARTBEAT OK 52ms boot=14:50:05Z sha=6455c6a"
-  },
   {
    "id": "sweep",
    "at": 1793026369219,
@@ -523,6 +502,27 @@
    "at": 1793034769219,
    "status": "ok",
    "durationMs": 618,
+   "detail": "RED: app :3000 down"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1793035069219,
+   "status": "ok",
+   "durationMs": 89,
+   "detail": "HEARTBEAT OK 89ms boot=17:17:39Z sha=c9e4b8b"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1793035369219,
+   "status": "error",
+   "durationMs": 3,
+   "detail": "HEARTBEAT COLD app:3000 1ms streak=1"
+  },
+  {
+   "id": "sweep",
+   "at": 1793035369219,
+   "status": "ok",
+   "durationMs": 1402,
    "detail": "RED: app :3000 down"
   }
  ],
