@@ -32658,3 +32658,23 @@ Stage Summary:
 - پاسخ «آخرین اسنپ‌شات»: زنده = commit 45eb9e625 در 2026-10-26T22:05:39Z (تهران 01:35:39 بامداد 10/27)؛ طلایی v12.7 = repo.tar ساختهٔ 2026-10-22T23:48:34Z در /home/sync/repo.tar
 - معماری دسترسی: چهار لایه (armor نوشتن خودکار / boot-kit بازلنگر / restore دستی / mem-guard تازگی) با اصل «توکن هرگز در URL یا لاگ نمی‌ماند»
 - این مدخل خودش با همان مسیر extraheader pushed شد = آزمون E2E ششمِ پیاپیِ موفق
+
+---
+Trace: 1a1849f647778885
+تاریخ: 2026-10-29 02:45+03:30 (تهران)
+عنوان: «گیت‌هاب احیا شد + ممیزی دیتای زندهٔ بایننس + Event Stream Health ناپایدار + System Sentinel بی‌دیتا» — فاجعهٔ golden-restore و بازسازی کامل v13.3/v13.4
+
+Work Log:
+- 🔴 فاجعهٔ کشف‌شده: در 2026-10-28T22:54Z کانتینر ری‌استارت شد و /start.sh طبق طراحی، کل /home/z/my-project را (به‌جز upload/) پاک و از /home/sync/repo.tar بازسازی کرد — repo.tar کهنه بود (pre-stop آخرین بار موفق نوشته نشده) → کل درخت به دورهٔ v13.2.3 (صبح 10-28) برگشت: تاریخچهٔ git از بین رفت (boot-kit git init با «Initial commit» تازه)، worklog های امروز، reconnect تلگرام/گیت‌هاب، dq-oracles، نردبان v13.3، مسیرهای /api/dq و /api/internal/spotws-quotes — همه پاک شدند. ریموت گیت‌هاب هم 808ccccf7 (عقب‌تر) ماند → یعنی push قبلی هرگز نرسیده بود
+- شواهد: rg فایل‌های کلیدی صفر · git log فقط ۱ کامیت · .git تازه با timestamp 22:54 · spotws-quotes.json به‌مدت ۲۱ دقیقه کهنه ماند درحالی‌که price-ws زنده بود (push به :3000 می‌خفت چون اپ پایین بود)
+- درس ریشه‌ای: مکانیزم بقا روی ری‌استارت کانتینر = تازگی /home/sync/repo.tar است؛ اگر pre-stop ناموفق باشد، هر ری‌استارت = پاک‌سازی همه‌چیز تا آخرین tar موفق
+- بازسازی کامل از بافت زندهٔ نشست (همهٔ محتوا verbatim موجود بود): ① src/lib/spot-host-gate.ts (v13.2.1 کامل — وابستگی ۶ فایل دیگر) ② نردبان ۷ پله‌ای + api-gcp در market-feed/flow-bridge/flow-scanner/futures-taxonomy/multi-exchange ③ price-ws: نردبان WS سه‌آینه‌ای + چرخش failover + مالکیت مستقیم فایل spotws (writeFileSync+renameSync — اپ پایین هم فایل تازه می‌ماند؛ اثبات: age=8s با ۱۳۹ ردیف حین خواب اپ) ④ dq-oracles.ts کامل (v1.0+v1.1 مرجع نردبانی) + /api/dq + /api/internal/spotws-quotes ⑤ sentinel: SIGTERM attribution (killer لاگ می‌شود) ⑥ getFeedStatus v13.4: تشخیص لایو بودن از prints تازهٔ بایننس (≤90s) با لیبل صادقانهٔ spot-ws-ring — دیگر STALE/CACHED بعد از هر ری‌استارت اپ نشان نمی‌دهد چون ring مستقل از اپ جریان دارد
+- راستی‌آزمایی زنده: /api/pulse → feed.source=LIVE host=spot-ws-ring (price-ws :3003) · BINANCE ok=true · /api/dq → 200 با binance OK mid=81295.5 (نردبان) + OKX OK · sentinel :3030 → 200 با گزارش کامل · price-ws → v13.3 mirror=stream.binance.com:9443 rung=0
+- چرخهٔ OOM اپ همچنان شناخته‌شده و ساختاری است (توصیهٔ DASH-STABILIZE روی میز) — ولی با v13.4، ناپایداریِ نمایشیِ Event Stream Health مستقل از آن حل شد: حتی وقتی اپ می‌میرد/بوت می‌شود، prints زندهٔ بایننس جریان دارند و اولین pulse بوتِ بعدی LIVE می‌گیرد
+- lint=17 (baseline دقیق) · FLAT-10 دست‌نخورده · exec OFF
+- گیت‌هاب: push با توکن فعلی دوباره آزمایش می‌شود (روی repo تازه) — نتیجه در گزارش بعدی ثبت می‌شود
+
+Stage Summary:
+- System Sentinel: ریشه = مرگ خاموش :3030 در churn بوت + حذف کد در restore — با attribution و بازسازی، دیتا برگشت (reachable + verdict + ۶ سرویس)
+- Event Stream Health: ریشه = feedStatus درون-حافظه‌ای که با هر ری‌استارت اپ ریست می‌شد + وابستگی فایل spotws به حیات اپ — با لایوینس ring مستقل، اتصال بایننس حالا «پایدار» نمایش داده می‌شود چون واقعاً پایدار است (WS سه‌آینه‌ای + فایل مستقل از اپ)
+- repo.tar در پایان این trace تازه‌سازی می‌شود (سازوکار بقا در برابر ری‌استارت بعدی کانتینر)

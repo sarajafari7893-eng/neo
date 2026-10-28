@@ -18,12 +18,22 @@
 // Universe auto-syncs from the terminal pulse every 5min.
 
 import { Server } from "socket.io";
+import { renameSync, writeFileSync } from "node:fs"; // v13.4 direct spot-print file ownership
 
 const PORT = 3003;
 const WS_URL = "wss://fstream.binance.com/stream?streams=!miniTicker@arr";
 // v12.8 AUDIT-20261023 — SPOT-ARR ring: raw spot all-market miniTicker WS.
 // ALIVE from this egress while fstream is silent (measured + verified live).
-const SPOT_WS_URL = "wss://stream.binance.com:9443/ws/!miniTicker@arr";
+// v13.3 BINANCE-LADDER (trace 1a184429d4bd0d05, restored 1a1849f647778885) —
+// three-mirror ladder, each verified live from this box (first-frame measured):
+//   9443 = 375-515ms · data-stream.binance.vision = 1000-1998ms · :443 = 1001ms.
+// Rotation: every reconnect advances the index — a dead host self-heals.
+const SPOT_WS_MIRRORS = [
+  "wss://stream.binance.com:9443/ws/!miniTicker@arr",
+  "wss://data-stream.binance.vision/ws/!miniTicker@arr",
+  "wss://stream.binance.com:443/ws/!miniTicker@arr",
+];
+let spotWsMirrorIdx = 0;
 const REST_URL = "https://fapi.binance.com/fapi/v1/ticker/24hr";
 // v12.2 TASK-52 — SPOT-MIRROR rung: api.binance.com lives in a SEPARATE
 // rate-limit/ban pool from fapi.binance.com. While the fapi pool is banned
@@ -216,6 +226,7 @@ function observeTick(symbol: string, price: number, lane: string, change24h: num
 // absent from the store → honest nulls downstream (+12 surcharge intact).
 const spotPrints = new Map<string, { price: number; at: number }>();
 const SPOT_PRINT_FRESH_MS = 90_000;
+const SPOTWS_OUT_FILE = "/home/z/my-project/.data/spotws-quotes.json"; // v13.4 direct ownership
 let spotwsPushInFlight = false;
 let lastSpotwsPushLogAt = 0;
 
@@ -230,6 +241,13 @@ async function pushSpotPrints(): Promise<void> {
   if (rows.length === 0) return;
   spotwsPushInFlight = true;
   try {
+    // v13.4 (trace 1a1849f647778885) — DIRECT file ownership: the app being
+    // down must NOT blind the live-print plane (measured: 21min stale during
+    // an OOM window while price-ws held ~400 fresh prints). price-ws writes
+    // .data/spotws-quotes.json itself (atomic tmp+rename); the POST stays as
+    // the in-app door for the venue plane.
+    writeFileSync(`${SPOTWS_OUT_FILE}.tmp`, JSON.stringify({ at: now, rows }), "utf8");
+    renameSync(`${SPOTWS_OUT_FILE}.tmp`, SPOTWS_OUT_FILE);
     const res = await fetch("http://localhost:3000/api/internal/spotws-quotes", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -255,10 +273,12 @@ setInterval(() => void pushSpotPrints(), 3000);
 // futures-only tickers simply never arrive here and stay on BYBIT fuel.
 function connectSpotWs(): void {
   try {
-    const ws = new WebSocket(SPOT_WS_URL);
+    const url = SPOT_WS_MIRRORS[spotWsMirrorIdx % SPOT_WS_MIRRORS.length]!;
+    const mirror = new URL(url).host;
+    const ws = new WebSocket(url);
     ws.onopen = () => {
       spotWsLastFrame = Date.now();
-      console.log("[price-ws] spot !miniTicker@arr WS open (v12.8 ring-2)");
+      console.log(`[price-ws] spot !miniTicker@arr WS open (v13.3 mirror=${mirror} rung=${spotWsMirrorIdx % SPOT_WS_MIRRORS.length})`);
     };
     ws.onmessage = (ev) => {
       try {
@@ -294,7 +314,9 @@ function connectSpotWs(): void {
       }
     };
     ws.onclose = () => {
-      console.log("[price-ws] spot arr stream closed — reconnect 5s");
+      // v13.3 — advance to the NEXT mirror before reconnecting (failover ring)
+      spotWsMirrorIdx = (spotWsMirrorIdx + 1) % SPOT_WS_MIRRORS.length;
+      console.log(`[price-ws] spot arr stream closed (${mirror}) — reconnect 5s on mirror=${SPOT_WS_MIRRORS[spotWsMirrorIdx]!.split("/")[2]}`);
       setTimeout(connectSpotWs, 5000);
     };
     ws.onerror = () => {};

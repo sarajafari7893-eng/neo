@@ -12,7 +12,10 @@ import path from "path";
 // WHY push from price-ws: it already holds the ONE Binance plane that
 // sustains from this egress (spot !miniTicker@arr WS — hours-proven) while
 // the app must stay WS-free (compile-ramp OOM budget + instance churn).
+// v13.4 (trace 1a1849f647778885): price-ws ALSO writes this file directly —
+// this route stays as the in-app door + duplicate-writes are idempotent.
 // Loopback only — external gating by the proxy CONTROL_GATE (cascade doctrine).
+// RESTORED verbatim after the 2026-10-28T22:54Z golden-restore wipe.
 
 export const dynamic = "force-dynamic";
 

@@ -937,6 +937,8 @@ g.__sentinelTimers = [
 setTimeout(() => { void collect(true).catch((e) => logLine("warn", "collect-boot-failed", { err: String(e).slice(0, 160) })); lastDeepAt = nowMs(); }, 4_000);
 setTimeout(() => { const d = backupDue(); if (d.due) scheduleBackup(d.reason); }, 90_000); // first backup check after 90s
 
-process.on("SIGTERM", () => process.exit(0));
+// v1.3.3 signal attribution (trace 1a1849f647778885): log the signal before
+// exiting so «System Sentinel has no data» always has a named killer in the log.
+process.on("SIGTERM", () => { logLine("info", "sigterm", { pid: process.pid, why: "surge/heal kill" }); process.exit(0); });
 process.on("SIGINT", () => process.exit(0));
 process.on("uncaughtException", (e) => { logLine("crit", "uncaught", { err: String(e).slice(0, 200) }); });

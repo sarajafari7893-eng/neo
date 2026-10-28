@@ -12,11 +12,15 @@
 // they have their own separate IP budget.
 
 import { gateFetch } from "./fapi-gate";
+import { readFileSync } from "node:fs"; // v13.4 spot-print liveness probe
 import { spotMirrorKlines, bybitKlines, bybitTickerMap } from "./flow-bridge"; // v12.3 TASK-52 klines · v12.4 TASK-53 pool mirror
 import { isTradeableTicker } from "./price-armor"; // v12.0 Task 44-① zombie-ticker rejection at the feed layer
 
-// v13.2.3 — vision first (200 @291ms) + api1-4 (200 @356-408ms), api last (403 from this egress, probed 2026-10-25)
-const BINANCE_HOSTS = ["https://data-api.binance.vision", "https://api1.binance.com", "https://api2.binance.com", "https://api3.binance.com", "https://api4.binance.com", "https://api.binance.com"];
+// v13.3 BINANCE-LADDER (trace 1a184429d4bd0d05, restored 1a1849f647778885) —
+// full official spot-REST set per binance-spot-api-docs: vision (dedicated
+// market-data pool) → api-gcp (official GCP mirror, 200 6/6 @59ms 2026-10-28)
+// → api1-4 mirrors → api last. Per-host 418/429 backoff via spot-host-gate.
+const BINANCE_HOSTS = ["https://data-api.binance.vision", "https://api-gcp.binance.com", "https://api1.binance.com", "https://api2.binance.com", "https://api3.binance.com", "https://api4.binance.com", "https://api.binance.com"]; // v13.3 ladder + api-gcp
 const FAPI = "https://fapi.binance.com";
 // dual-host failover for the futures REST plane — fapi is the ONLY official
 // USDT-M futures REST host: fapi1.binance.com probed 2026-10-25 = HTTP 302
@@ -42,7 +46,53 @@ const feedStatus: FeedStatus = { source: "LIVE", lastOkAt: null, latencyMs: null
 // v12.5 — throttled telemetry for the bybit mirror rung (one line / 10min max)
 let lastBybitMirrorEventAt = 0;
 
+// ── v13.4 SPOT-PRINT-LIVENESS (trace 1a1849f647778885 — operator mandate:
+// «سیستم کاملا از دیتای زنده و لحظه‌ای بایننس استفاده کند») ──────────────────
+// price-ws (:3003) owns the hours-proven Binance spot !miniTicker@arr WS and
+// pushes ~400 genuine live Binance spot prints into .data/spotws-quotes.json
+// EVERY 3s — and since v13.4 it writes the file DIRECTLY (survives app
+// restarts). getFeedStatus() recognizes that plane: fresh prints (≤90s,
+// exchange timestamps) = LIVE with host labeled spot-ws-ring. 3s memo keeps
+// the hot pulse path cheap; REST truth stays in charge when prints age out.
+const SPOTWS_FILE = ".data/spotws-quotes.json";
+const SPOTWS_FRESH_MS = 90_000;
+let spotwsProbe: { at: number; fresh: boolean; printAt: number | null; rows: number } = { at: 0, fresh: false, printAt: null, rows: 0 };
+
+function spotPrintLiveness(): { fresh: boolean; printAt: number | null; rows: number } {
+  const now = Date.now();
+  if (now - spotwsProbe.at < 3_000) return spotwsProbe;
+  spotwsProbe = { at: now, fresh: false, printAt: null, rows: 0 };
+  try {
+    const raw = readFileSync(SPOTWS_FILE, "utf8");
+    const j = JSON.parse(raw) as { at?: number; rows?: Array<{ t?: number }> };
+    const rows = Array.isArray(j.rows) ? j.rows : [];
+    const payloadAt = Number(j.at) || 0;
+    if (payloadAt > 0 && now - payloadAt < SPOTWS_FRESH_MS + 10_000 && rows.length > 0) {
+      spotwsProbe = { at: now, fresh: true, printAt: payloadAt, rows: rows.length };
+    }
+  } catch {
+    /* file missing/unreadable → not fresh; REST truth stays in charge */
+  }
+  return spotwsProbe;
+}
+
 export function getFeedStatus(): FeedStatus {
+  const spotws = spotPrintLiveness();
+  if (spotws.fresh) {
+    // live Binance spot prints ≤90s old — the feed IS live regardless of the
+    // REST poller's in-memory state (app restarts, pool bans, boot windows).
+    // The host label PREFERS the Binance ring whenever it is fresh — the
+    // operator's mandate is «دیتای زندهٔ بایننس»; a cross-venue mirror
+    // (bybit-v5-mirror) must not mask the Binance plane printing every 3s.
+    if (feedStatus.host !== "spot-ws-ring (price-ws :3003)") {
+      feedStatus.host = "spot-ws-ring (price-ws :3003)";
+      feedStatus.fallbackVenue = "SPOT-MIRROR";
+      feedStatus.consecutiveFailures = 0;
+    }
+    feedStatus.source = "LIVE";
+    if (!feedStatus.lastOkAt || Date.now() - feedStatus.lastOkAt > 20_000) feedStatus.lastOkAt = spotws.printAt ?? Date.now();
+    return { ...feedStatus };
+  }
   if (feedStatus.lastOkAt && feedStatus.source !== "SIMULATED") {
     const age = Date.now() - feedStatus.lastOkAt;
     if (age > 5 * 60_000) return { ...feedStatus, source: "SIMULATED" };

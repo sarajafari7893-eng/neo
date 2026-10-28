@@ -137,7 +137,7 @@ async function bybitJfetch<T>(url: string): Promise<T | null> {
 // v13.2.3 (trace 1a170bba02dff781 — «آیا می‌توان از آدرس‌های جایگزین استفاده کرد؟»):
 // live probe 2026-10-25 01:5xZ — vision /api/v3/ping 200 @291ms, api1-4 200 @356-408ms,
 // api.binance.com + api-gcp 403 from this egress → api1-4 added as mid rungs, api last.
-const SPOT_HOSTS = ["https://data-api.binance.vision", "https://api1.binance.com", "https://api2.binance.com", "https://api3.binance.com", "https://api4.binance.com", "https://api.binance.com"];
+const SPOT_HOSTS = ["https://data-api.binance.vision", "https://api-gcp.binance.com", "https://api1.binance.com", "https://api2.binance.com", "https://api3.binance.com", "https://api4.binance.com", "https://api.binance.com"]; // v13.3 ladder + api-gcp (restored 1a1849f647778885)
 // v13.2.1 — per-host 418/429 backoff via the shared spot-host gate: a banned
 // rung is SKIPPED (not re-poked every tick) and traffic slides to the healthy
 // host until retry-after expires (live evidence: vision 418 @467wt/min while
