@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { tick, getTriggerBusSummary, getScanDomain, getEngineTickInfo } from "@/lib/engine";
 import { buildStats, toSignalDTO } from "@/lib/stats";
-import { getFeedStatus } from "@/lib/market-feed";
+import { getFeedStatus, getFutwsStatus } from "@/lib/market-feed"; // v13.5 futures-WS liveness
 import { getFlowStatus } from "@/lib/flow";
 import { getLiquidationStatus } from "@/lib/liquidations";
 import { getRegimeSummary } from "@/lib/regime";
@@ -117,6 +117,7 @@ export async function GET() {
         latencyMs: feedStatus.latencyMs,
         consecutiveFailures: feedStatus.consecutiveFailures,
         host: feedStatus.host,
+        futws: getFutwsStatus(), // v13.5 — live Binance futures bookTicker ring status
         exchanges,
         flow: flowStatus,
         liq: liqStatus

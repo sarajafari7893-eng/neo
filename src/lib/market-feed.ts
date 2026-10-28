@@ -58,6 +58,56 @@ const SPOTWS_FILE = ".data/spotws-quotes.json";
 const SPOTWS_FRESH_MS = 90_000;
 let spotwsProbe: { at: number; fresh: boolean; printAt: number | null; rows: number } = { at: 0, fresh: false, printAt: null, rows: 0 };
 
+// ── v13.5 FUTWS-LIVENESS (trace 1a184d8bbb826f0d) — .data/futws-quotes.json
+// is written DIRECTLY by price-ws :3003 every 3s from the futures bookTicker
+// ring (44 liquid perps, best bid/ask → mid). Fresh file (≤90s payload) = the
+// Binance FUTURES plane is exchange-pushed live: source stays LIVE through
+// app restarts, REST pool bans and boot windows, and fetchTickers overlays
+// those mids as perp-native quotes (see fetchTickers rung 2). 3s memo keeps
+// the hot pulse path cheap.
+const FUTWS_FILE = ".data/futws-quotes.json";
+const FUTWS_FRESH_MS = 90_000;
+interface FutwsRow { s: string; b: number; a: number; m: number; t: number }
+let futwsProbe: { at: number; fresh: boolean; printAt: number | null; rows: FutwsRow[] } = { at: 0, fresh: false, printAt: null, rows: [] };
+
+function futwsLiveness(): { fresh: boolean; printAt: number | null; rows: FutwsRow[] } {
+  const now = Date.now();
+  if (now - futwsProbe.at < 3_000) return futwsProbe;
+  futwsProbe = { at: now, fresh: false, printAt: null, rows: [] };
+  try {
+    const raw = readFileSync(FUTWS_FILE, "utf8");
+    const j = JSON.parse(raw) as { at?: number; rows?: FutwsRow[] };
+    const rows = Array.isArray(j.rows) ? j.rows : [];
+    const payloadAt = Number(j.at) || 0;
+    if (payloadAt > 0 && now - payloadAt < FUTWS_FRESH_MS + 10_000 && rows.length > 0) {
+      futwsProbe = { at: now, fresh: true, printAt: payloadAt, rows };
+    }
+  } catch {
+    /* file missing/unreadable → not fresh; REST truth stays in charge */
+  }
+  return futwsProbe;
+}
+
+/** v13.5 — honest futures-ring status for the dashboard Event Stream Health row. */
+export function getFutwsStatus(): { fresh: boolean; rows: number; ageMs: number | null } {
+  const p = futwsLiveness();
+  return { fresh: p.fresh, rows: p.rows.length, ageMs: p.printAt ? Date.now() - p.printAt : null };
+}
+
+/** v13.5 — fresh per-symbol futures quotes (per-row ≤30s guard like the ring). */
+export function futwsQuoteMap(): Map<string, { bid: number; ask: number; mid: number; t: number }> {
+  const out = new Map<string, { bid: number; ask: number; mid: number; t: number }>();
+  const p = futwsLiveness();
+  if (!p.fresh) return out;
+  const now = Date.now();
+  for (const r of p.rows) {
+    if (!r || !r.s || !(r.m > 0)) continue;
+    if (now - (r.t ?? 0) > 30_000) continue;
+    out.set(r.s, { bid: r.b, ask: r.a, mid: r.m, t: r.t });
+  }
+  return out;
+}
+
 function spotPrintLiveness(): { fresh: boolean; printAt: number | null; rows: number } {
   const now = Date.now();
   if (now - spotwsProbe.at < 3_000) return spotwsProbe;
@@ -77,6 +127,21 @@ function spotPrintLiveness(): { fresh: boolean; printAt: number | null; rows: nu
 }
 
 export function getFeedStatus(): FeedStatus {
+  // v13.5 — futures bookTicker ring FIRST: a live Binance FUTURES plane beats
+  // the spot mirror in the host label (operator mandate «دیتای زندهٔ بایننس
+  // فیوچرز»); both files come from the same price-ws :3003 process.
+  const futws = futwsLiveness();
+  if (futws.fresh) {
+    const FUT_HOST = "fut-ws-book + spot-ws-ring (price-ws :3003)";
+    if (feedStatus.host !== FUT_HOST) {
+      feedStatus.host = FUT_HOST;
+      feedStatus.fallbackVenue = null; // native Binance futures plane — no fallback
+      feedStatus.consecutiveFailures = 0;
+    }
+    feedStatus.source = "LIVE";
+    if (!feedStatus.lastOkAt || Date.now() - feedStatus.lastOkAt > 20_000) feedStatus.lastOkAt = futws.printAt ?? Date.now();
+    return { ...feedStatus };
+  }
   const spotws = spotPrintLiveness();
   if (spotws.fresh) {
     // live Binance spot prints ≤90s old — the feed IS live regardless of the
@@ -167,8 +232,10 @@ export interface Ticker24h {
    * applies ONLY to spot rows — fapi prints are the market.
    * v12.5 TASK-52-REVIVAL: "bybit" = the Bybit v5 linear mirror rung — a
    * perp-native real price from another venue, treated exactly like fapi
-   * (no cross-plane spot guard; it IS the perp market, not an overlay). */
-  plane?: "fapi" | "spot" | "bybit";
+   * (no cross-plane spot guard; it IS the perp market, not an overlay).
+   * v13.5: "futws" = the price-ws futures bookTicker ring — a LIVE Binance
+   * perp mid (best bid/ask) pushed over WS, treated like fapi (perp-native). */
+  plane?: "fapi" | "spot" | "bybit" | "futws";
 }
 
 // v10.16 P1 FUTURES PRICE UNIFICATION — PRIMARY = Binance USDT-M futures
@@ -190,7 +257,31 @@ export async function fetchTickers(symbols: string[]): Promise<Map<string, Ticke
     /* fall through to the spot overlay below */
   }
   const missing = symbols.filter((s) => !out.has(s));
+  // v13.5 FUTWS OVERLAY rung — the live Binance futures bookTicker mid from
+  // price-ws :3003. When the fapi board is throttled/banned but the WS ring
+  // is printing (it is REST-weight-free), missing symbols get a PERP-NATIVE
+  // live price instead of sliding to the spot overlay (basis) or bybit.
   if (missing.length > 0) {
+    const fut = futwsQuoteMap();
+    for (const s of missing) {
+      const q = fut.get(s);
+      if (!q) continue;
+      const t: Ticker24h = {
+        symbol: s,
+        lastPrice: String(q.mid),
+        priceChangePercent: "0", // bookTicker carries no 24h window — honest zero
+        highPrice: String(q.mid),
+        lowPrice: String(q.mid),
+        quoteVolume: "0", // no 24h volume on the book plane — consumers rank elsewhere
+        bidPrice: String(q.bid),
+        askPrice: String(q.ask),
+        plane: "futws",
+      };
+      if (!zombie(t)) out.set(s, t);
+    }
+  }
+  const stillMissingAfterFutws = symbols.filter((s) => !out.has(s));
+  if (stillMissingAfterFutws.length > 0) {
     try {
       const spot = await fetchJson<Ticker24h[]>("/api/v3/ticker/24hr");
       for (const t of spot) if (want.has(t.symbol) && !out.has(t.symbol) && !zombie(t)) out.set(t.symbol, { ...t, plane: "spot" });

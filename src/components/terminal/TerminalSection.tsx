@@ -617,6 +617,22 @@ export default function TerminalSection() {
                   {feed?.host ? `${feed.host.replace("https://", "")}` : "--"}
                 </span>
               </div>
+              {/* v13.5 — the LIVE Binance FUTURES plane: per-symbol bookTicker ring
+                  on price-ws :3003 (probe-verified: raw bookTicker is the only
+                  fstream lane that flows from this egress). Green = exchange-pushed
+                  perp best bid/ask arriving; amber = ring warming/reconnecting. */}
+              <div className="flex items-center justify-between">
+                <span className="label-tech">futures ws</span>
+                <span className={cn("flex items-center gap-1.5 font-bold uppercase tracking-[0.14em]", feed?.futws?.fresh ? "text-neon" : "text-amber-neon")}>
+                  {feed?.futws?.fresh ? (
+                    <>
+                      <LiveDot /> {feed.futws.rows} SYMBOLS
+                    </>
+                  ) : (
+                    "WARMING"
+                  )}
+                </span>
+              </div>
               <div className="flex items-center justify-between">
                 <span className="label-tech">4-ex consensus</span>
                 <span className="flex items-center gap-1 font-bold tabular-nums text-cyan-neon">

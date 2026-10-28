@@ -1,7 +1,10 @@
 // ── NEXUS price-ws (:3003, socket.io) — sub-second price push ──────────────
-// Fuel priority (honest labeling, Task 35):
+// Fuel priority (honest labeling, Task 35 + v13.5):
 //   1. WS PUSH     — Binance futures miniTicker combined stream
-//   2. WS·SPOT     — Binance SPOT !miniTicker@arr WS (v12.8 AUDIT-20261023:
+//   2. WS·FUT-BOOK — Binance futures per-symbol bookTicker ring (v13.5 — the
+//                    ONLY live Binance FUTURES lane from this egress; see the
+//                    probe matrix at the ring below)
+//   3. WS·SPOT     — Binance SPOT !miniTicker@arr WS (v12.8 AUDIT-20261023:
 //                    measured 10:30Z — fstream (futures) delivers ZERO frames
 //                    from this egress while stream.binance.com (spot) is
 //                    ALIVE (8 frames/8s direct test). Spot lives in a separate
@@ -10,11 +13,11 @@
 //                    instead of jumping straight to BYBIT and losing the
 //                    reference venue. Same row shape; spot symbols that have
 //                    no futures twin simply never arrive (BYBIT covers those).
-//   3. WS·BYBIT    — Bybit v5 public linear tickers WS (SECOND EXCHANGE —
+//   4. WS·BYBIT    — Bybit v5 public linear tickers WS (SECOND EXCHANGE —
 //                    independent IP/rate budget, keeps live data flowing while
 //                    Binance fstream/fapi are IP-suppressed or 418-banned)
-//   4. WS·REST 2.5S— Binance fapi /ticker/24hr poll (ban-aware, v10.7)
-//   5. WS OFFLINE  — everything down; badge never lies
+//   5. WS·REST 2.5S— Binance fapi /ticker/24hr poll (ban-aware, v10.7)
+//   6. WS OFFLINE  — everything down; badge never lies
 // Universe auto-syncs from the terminal pulse every 5min.
 
 import { Server } from "socket.io";
@@ -55,7 +58,7 @@ interface PriceRow {
 }
 
 const prices = new Map<string, PriceRow>();
-let source: "WS PUSH" | "WS·SPOT" | "WS·BYBIT" | "WS·REST 2.5S" | "WS·REST·SPOT" | "WS OFFLINE" = "WS PUSH";
+let source: "WS PUSH" | "WS·FUT-BOOK" | "WS·SPOT" | "WS·BYBIT" | "WS·REST 2.5S" | "WS·REST·SPOT" | "WS OFFLINE" = "WS PUSH";
 let lastWsFrame = 0;
 // v12.8 — spot-arr ring state
 let spotWsLastFrame = 0;
@@ -326,6 +329,111 @@ function connectSpotWs(): void {
   }
 }
 
+// ── v13.5 FUTURES-BOOKTICKER-RING (trace 1a184d8bbb826f0d — operator mandate:
+// «اتصال به صرافی بایننس فیوچرز پایدار نیست») ──────────────────────────────
+// fstream format matrix probed LIVE from this box 2026-10-29 ~03:05 Tehran
+// (three probe runs, /home/z/.audit/probe-fstream{,2,3}.ts):
+//   !miniTicker@arr / !ticker@arr / !markPrice@arr / !forceOrder@arr → ZERO frames
+//   combined /stream?streams=…  → ZERO frames
+//   <sym>@miniTicker / @aggTrade / @kline_1m → ZERO frames
+//   <sym>@bookTicker → ALIVE ×3 runs: btc 630-5400 fr, eth 1038 fr, first ~250ms
+// Engineering verdict: the egress suppresses ALL-MARKET + multiplexed + most
+// raw lanes but passes RAW bookTicker. So the futures plane gets a per-symbol
+// bookTicker ring over the liquid perp core — best bid/ask → mid = the LIVE
+// exchange-pushed perp price (zero REST weight, zero fapi 418 exposure).
+// Frames are parse-throttled per symbol (250ms — majors burst 100-300 fr/s on
+// a 2-vCPU box). Quotes land in .data/futws-quotes.json every 3s (atomic
+// tmp+rename, direct ownership v13.4-style) — the app reads that file for
+// futures liveness + ticker overlay; app restarts never blind it.
+const FUT_WS_BASE = "wss://fstream.binance.com/ws/";
+const FUT_CORE_SYMBOLS = [
+  "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT", "ADAUSDT", "AVAXUSDT",
+  "LINKUSDT", "TONUSDT", "SHIBUSDT", "SUIUSDT", "DOTUSDT", "NEARUSDT", "LTCUSDT", "APTUSDT",
+  "PEPEUSDT", "UNIUSDT", "ARBUSDT", "OPUSDT", "FILUSDT", "INJUSDT", "SEIUSDT", "TIAUSDT",
+  "ATOMUSDT", "ETCUSDT", "BCHUSDT", "XLMUSDT", "HBARUSDT", "TRXUSDT", "AAVEUSDT", "WIFUSDT",
+  "BONKUSDT", "FETUSDT", "ORDIUSDT", "RUNEUSDT", "WLDUSDT", "ONDOUSDT", "ENAUSDT", "JUPUSDT",
+  "PYTHUSDT", "FLOKIUSDT", "ALGOUSDT", "CRVUSDT",
+];
+const FUT_PARSE_THROTTLE_MS = 250;
+const FUT_BOOK_FRESH_MS = 30_000;
+interface FutQuote { bid: number; ask: number; mid: number; at: number }
+const futBook = new Map<string, FutQuote>();
+const futLastParse = new Map<string, number>();
+const futCloses = new Map<string, number>();
+let futBookLastFrame = 0;
+let futOpenLogged = 0;
+const FUTWS_OUT_FILE = "/home/z/my-project/.data/futws-quotes.json";
+
+function connectFutBook(sym: string): void {
+  try {
+    const ws = new WebSocket(`${FUT_WS_BASE}${sym.toLowerCase()}@bookTicker`);
+    ws.onopen = () => {
+      futBookLastFrame = Date.now();
+      futCloses.set(sym, 0);
+      futOpenLogged++;
+      if (futOpenLogged === 1 || futOpenLogged % 11 === 0) {
+        console.log(`[price-ws] futures bookTicker ring open #${futOpenLogged} (${sym}) — live Binance perp best bid/ask plane (v13.5)`);
+      }
+    };
+    ws.onmessage = (ev) => {
+      const now = Date.now();
+      futBookLastFrame = now;
+      // parse throttle — bookTicker on majors bursts 100-300 frames/s; 4/s per
+      // symbol is far beyond display/overlay needs and keeps the box cool.
+      if (now - (futLastParse.get(sym) ?? 0) < FUT_PARSE_THROTTLE_MS) return;
+      futLastParse.set(sym, now);
+      try {
+        const d = JSON.parse(String(ev.data)) as { s?: string; b?: string; a?: string };
+        const bid = Number(d.b);
+        const ask = Number(d.a);
+        if (!(bid > 0) || !(ask > 0) || ask < bid) return;
+        const mid = (bid + ask) / 2;
+        futBook.set(sym, { bid, ask, mid, at: now });
+        const prev = prices.get(sym);
+        prices.set(sym, {
+          symbol: sym,
+          price: mid,
+          change24h: prev?.change24h ?? 0,
+          high24h: prev?.high24h ?? mid,
+          low24h: prev?.low24h ?? mid,
+          volume24h: prev?.volume24h ?? 0,
+          at: now,
+        });
+      } catch {
+        /* skip */
+      }
+    };
+    ws.onclose = () => {
+      const n = (futCloses.get(sym) ?? 0) + 1;
+      futCloses.set(sym, n);
+      const delay = 5000 + Math.floor(Math.random() * 3000) + Math.min(n, 6) * 5000; // jitter + per-symbol backoff
+      setTimeout(() => connectFutBook(sym), delay);
+    };
+    ws.onerror = () => {};
+  } catch {
+    setTimeout(() => connectFutBook(sym), 8000);
+  }
+}
+
+// v13.5 — futures-quotes file writer: atomic direct ownership, mirrors the
+// spotws v13.4 contract (the app being down must never blind the live plane).
+setInterval(() => {
+  if (futBook.size === 0) return;
+  const now = Date.now();
+  const rows: Array<{ s: string; b: number; a: number; m: number; t: number }> = [];
+  for (const [sym, q] of futBook) {
+    if (now - q.at > FUT_BOOK_FRESH_MS) continue;
+    rows.push({ s: sym, b: q.bid, a: q.ask, m: q.mid, t: q.at });
+  }
+  if (rows.length === 0) return;
+  try {
+    writeFileSync(`${FUTWS_OUT_FILE}.tmp`, JSON.stringify({ at: now, rows }), "utf8");
+    renameSync(`${FUTWS_OUT_FILE}.tmp`, FUTWS_OUT_FILE);
+  } catch {
+    /* best-effort telemetry */
+  }
+}, 3000);
+
 // ── Bybit tier state (Task 35 — second reputable exchange) ─────────────────
 let bybLastFrame = 0;
 const bybSubscribed = new Set<string>();
@@ -578,15 +686,20 @@ setInterval(() => {
 connect();
 connectSpotWs(); // v12.8 — spot ring opens alongside the futures ring (whichever flows, fuels)
 connectBybit();
+// v13.5 — staggered futures bookTicker ring boot (44 liquid perps; staggered
+// to stay inside fstream's per-IP connection-attempt budget).
+FUT_CORE_SYMBOLS.forEach((sym, i) => setTimeout(() => connectFutBook(sym), 1500 + i * 250));
 
-// stall watchdog → fuel priority (binance futures WS > binance spot WS > bybit WS > REST > OFFLINE)
+// stall watchdog → fuel priority (binance futures WS > futures bookTicker ring > binance spot WS > bybit WS > REST > OFFLINE)
 setInterval(() => {
   const wsAlive = Date.now() - lastWsFrame <= STALL_MS;
+  const futBookAlive = Date.now() - futBookLastFrame <= STALL_MS;
   const spotWsAlive = Date.now() - spotWsLastFrame <= STALL_MS;
   const bybAlive = Date.now() - bybLastFrame <= STALL_MS;
   const banned = Date.now() < restBannedUntil;
   let next: typeof source;
   if (wsAlive) next = "WS PUSH";
+  else if (futBookAlive) next = "WS·FUT-BOOK";
   else if (spotWsAlive) next = "WS·SPOT";
   else if (bybAlive) next = "WS·BYBIT";
   else if (banned) next = Date.now() - spotLastOkAt <= 30_000 ? "WS·REST·SPOT" : "WS OFFLINE";

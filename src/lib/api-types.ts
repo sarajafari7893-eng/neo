@@ -430,6 +430,8 @@ export interface FeedStatusDTO {
   latencyMs: number | null;
   consecutiveFailures: number;
   host: string | null;
+  /** v13.5 — live Binance futures bookTicker ring (price-ws :3003 → .data/futws-quotes.json) */
+  futws?: { fresh: boolean; rows: number; ageMs: number | null } | null;
   exchanges: VenueHealthDTO[];
   flow: { covered: number; lastOkAt: number | null; lastError: string | null };
   liq: LiqStatusDTO | null;
