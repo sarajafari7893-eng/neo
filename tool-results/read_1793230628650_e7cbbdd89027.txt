@@ -1,0 +1,648 @@
+     1→// ── NEXUS price-ws (:3003, socket.io) — sub-second price push ──────────────
+     2→// Fuel priority (honest labeling, Task 35):
+     3→//   1. WS PUSH     — Binance futures miniTicker combined stream
+     4→//   2. WS·SPOT     — Binance SPOT !miniTicker@arr WS (v12.8 AUDIT-20261023:
+     5→//                    measured 10:30Z — fstream (futures) delivers ZERO frames
+     6→//                    from this egress while stream.binance.com (spot) is
+     7→//                    ALIVE (8 frames/8s direct test). Spot lives in a separate
+     8→//                    rate/ban pool — feeding it as rung-2 restores Binance
+     9→//                    price parity while the futures plane is IP-suppressed,
+    10→//                    instead of jumping straight to BYBIT and losing the
+    11→//                    reference venue. Same row shape; spot symbols that have
+    12→//                    no futures twin simply never arrive (BYBIT covers those).
+    13→//   3. WS·BYBIT    — Bybit v5 public linear tickers WS (SECOND EXCHANGE —
+    14→//                    independent IP/rate budget, keeps live data flowing while
+    15→//                    Binance fstream/fapi are IP-suppressed or 418-banned)
+    16→//   4. WS·REST 2.5S— Binance fapi /ticker/24hr poll (ban-aware, v10.7)
+    17→//   5. WS OFFLINE  — everything down; badge never lies
+    18→// Universe auto-syncs from the terminal pulse every 5min.
+    19→
+    20→import { Server } from "socket.io";
+    21→import { renameSync, writeFileSync } from "node:fs"; // v13.4 direct spot-print file ownership
+    22→
+    23→const PORT = 3003;
+    24→const WS_URL = "wss://fstream.binance.com/stream?streams=!miniTicker@arr";
+    25→// v12.8 AUDIT-20261023 — SPOT-ARR ring: raw spot all-market miniTicker WS.
+    26→// ALIVE from this egress while fstream is silent (measured + verified live).
+    27→// v13.3 BINANCE-LADDER (trace 1a184429d4bd0d05, restored 1a1849f647778885) —
+    28→// three-mirror ladder, each verified live from this box (first-frame measured):
+    29→//   9443 = 375-515ms · data-stream.binance.vision = 1000-1998ms · :443 = 1001ms.
+    30→// Rotation: every reconnect advances the index — a dead host self-heals.
+    31→const SPOT_WS_MIRRORS = [
+    32→  "wss://stream.binance.com:9443/ws/!miniTicker@arr",
+    33→  "wss://data-stream.binance.vision/ws/!miniTicker@arr",
+    34→  "wss://stream.binance.com:443/ws/!miniTicker@arr",
+    35→];
+    36→let spotWsMirrorIdx = 0;
+    37→const REST_URL = "https://fapi.binance.com/fapi/v1/ticker/24hr";
+    38→// v12.2 TASK-52 — SPOT-MIRROR rung: api.binance.com lives in a SEPARATE
+    39→// rate-limit/ban pool from fapi.binance.com. While the fapi pool is banned
+    40→// and both WS lanes are dead, the fuel ladder burns SPOT (same exchange,
+    41→// same row shape, weight 80 on a fresh pool) instead of going dark or poking
+    42→// the banned fapi pool (Task-50 law: every contact during a ban escalates).
+    43→const SPOT_URL = "https://api.binance.com/api/v3/ticker/24hr";
+    44→const BYBIT_WS = "wss://stream.bybit.com/v5/public/linear";
+    45→const STALL_MS = 60_000;
+    46→
+    47→interface PriceRow {
+    48→  symbol: string;
+    49→  price: number;
+    50→  change24h: number;
+    51→  high24h: number;
+    52→  low24h: number;
+    53→  volume24h: number;
+    54→  at: number;
+    55→}
+    56→
+    57→const prices = new Map<string, PriceRow>();
+    58→let source: "WS PUSH" | "WS·SPOT" | "WS·BYBIT" | "WS·REST 2.5S" | "WS·REST·SPOT" | "WS OFFLINE" = "WS PUSH";
+    59→let lastWsFrame = 0;
+    60→// v12.8 — spot-arr ring state
+    61→let spotWsLastFrame = 0;
+    62→let lastEventAt: number | null = null;
+    63→// v10.7 ban-awareness (2026-09-17 dashboard audit): Binance 418/429 IP bans
+    64→// auto-extend when the REST fallback keeps hammering. Respect retry-after,
+    65→// stop polling while banned, and label the source honestly (WS OFFLINE)
+    66→// instead of a live-looking "WS·REST 2.5S" badge over frozen rows.
+    67→let restBannedUntil = 0;
+    68→let spotBannedUntil = 0; // separate pool — NEVER shares the fapi ledger
+    69→let spotLastOkAt = 0;
+    70→// v10.8 TASK-49 — shared-ledger discipline: parse the REAL "banned until"
+    71→// body (retry-after is often absent → the old 60s default re-poked every
+    72→// minute all ban long), write named-IP discoveries to the shared ledger, and
+    73→// defer resume while ANY pool IP is still banned (NAT lottery — one banned
+    74→// IP means any request may land on it and re-escalate the expiry).
+    75→import { ledgerUnknownScopeBanUntil, writeLedgerBan } from "../_shared/ban-ledger";
+    76→
+    77→// ── v12.10 CASCADE-ALERT — tick-velocity freeze (AUDIT-20261023 follow-up) ──
+    78→// Root cause measured: the app's L3_LIQ_CASCADE layer is LIQUIDATION-STREAM
+    79→// based — structurally silent for microcaps that emit zero forceOrder events
+    80→// (JCT/IRYS forensics), so a −40%/8.5min flush stayed invisible until the
+    81→// deploy was already 359s late. This detector watches the TICK plane itself:
+    82→// a ≥±5% move measured inside a 60s sliding window (≥15s span, ≥3 ticks,
+    83→// price-change deduped) is a live cascade either way (flush OR squeeze) —
+    84→// the engine freezes BOTH-direction deploys for 10min via the ingest route.
+    85→// Detection latency: the window of the tape itself (15-60s), not the 6min
+    86→// rotation lag. Re-fires extend the freeze; 8min per-symbol alert cooldown.
+    87→const CASCADE_WINDOW_MS = 60_000;
+    88→const CASCADE_MOVE_PCT = 5;
+    89→const CASCADE_MIN_SPAN_MS = 15_000;
+    90→const CASCADE_MIN_TICKS = 3;
+    91→const CASCADE_ALERT_COOLDOWN_MS = 8 * 60_000;
+    92→const cascadeRing = new Map<string, Array<{ at: number; price: number }>>();
+    93→const cascadeLastAlert = new Map<string, number>();
+    94→const cascadeLastPrice = new Map<string, number>();
+    95→
+    96→// ── v12.11 TICK-ONSET — leading VolCause event plane (trace 1a16ac1614…) ────
+    97→// Root cause (IRYS forensics): the slow capture plane (|Δ24h| board, 6h
+    98→// per-symbol dedupe) recorded ONE event 16h into the +565% pump (at the
+    99→// tick-top) and ZERO for the following −77.4%/40min collapse — events were
+   100→// LAGGING, never LEADING. This detector watches the same tick plane as
+   101→// CASCADE with calibrated pump/flush-onset thresholds and posts IMMEDIATELY
+   102→// to /api/internal/onset-event → a VolCauseEvent row (rank 0 = tick-plane
+   103→// origin) that volCauseBoost / the board / the daily report read in seconds.
+   104→// Calibration (from the measured microcap forensics):
+   105→//   FAST tier (90s window): ±3/6/12/25% — burst onsets (MAGMA-style waves,
+   106→//     JCT −40%/8.5min flash legs trip within seconds-to-a-minute)
+   107→//   SLOW tier (300s window): ±5/10/20/35% — sustained regimes; IRYS
+   108→//     −1.94%/min average trips the 5% level ~155s into a 40min flush
+   109→// Each (symbol, side, level) fires once per 6h → a big regime produces a
+   110→// STAGED ladder (3→6→12→25), not one late event. CASCADE alerts also emit
+   111→// an onset event tagged CASCADE-FREEZE so the vol-cause book never misses a
+   112→// freeze. DB-side 90s dedupe on the route guards reload re-fires.
+   113→const ONSET_RING_MS = 300_000;
+   114→const ONSET_RING_MAX = 240;
+   115→const ONSET_FAST_MS = 90_000;
+   116→const ONSET_FAST_MIN_SPAN_MS = 2_000;
+   117→const ONSET_SLOW_MIN_SPAN_MS = 30_000;
+   118→const ONSET_LEVELS_FAST = [3, 6, 12, 25];
+   119→const ONSET_LEVELS_SLOW = [5, 10, 20, 35];
+   120→const ONSET_LEVEL_DEDUPE_MS = 6 * 3600_000;
+   121→const onsetRing = new Map<string, Array<{ at: number; price: number }>>();
+   122→const onsetFired = new Map<string, number>(); // `sym|side|tier+lvl` → fired at
+   123→const onsetPostAt = new Map<string, number>(); // `sym|side` → last post (60s pacing)
+   124→
+   125→function postOnset(symbol: string, side: "UP" | "DOWN", movePct: number, windowMs: number, lane: string, tier: "FAST" | "SLOW" | "CASCADE", level: number | null, price: number, change24h: number | null): void {
+   126→  const now = Date.now();
+   127→  if (tier !== "CASCADE") {
+   128→    const paceKey = `${symbol}|${side}`;
+   129→    if (now - (onsetPostAt.get(paceKey) ?? 0) < 60_000) return;
+   130→    onsetPostAt.set(paceKey, now);
+   131→  }
+   132→  console.log(`[price-ws] TICK-ONSET ${symbol} ${side} ${tier}${level ? `-lvl${level}` : ""} ${movePct.toFixed(2)}% in ${Math.round(windowMs / 1000)}s (${lane}) — onset event posted`);
+   133→  void fetch("http://localhost:3000/api/internal/onset-event", {
+   134→    method: "POST",
+   135→    headers: { "content-type": "application/json" },
+   136→    cache: "no-store",
+   137→    body: JSON.stringify({ symbol, side, movePct: Number(movePct.toFixed(2)), windowMs, lane, tier, level, price, change24h, at: now }),
+   138→  }).catch(() => {});
+   139→}
+   140→
+   141→function highestUnfiredLevel(symbol: string, side: string, tier: string, levels: number[], moveAbs: number, now: number): number | null {
+   142→  let best: number | null = null;
+   143→  for (const lvl of levels) {
+   144→    if (moveAbs < lvl) break;
+   145→    if (now - (onsetFired.get(`${symbol}|${side}|${tier}${lvl}`) ?? 0) >= ONSET_LEVEL_DEDUPE_MS) best = lvl;
+   146→  }
+   147→  return best;
+   148→}
+   149→function markLevelsFired(symbol: string, side: string, tier: "FAST" | "SLOW", top: number, now: number): void {
+   150→  for (const lvl of tier === "FAST" ? ONSET_LEVELS_FAST : ONSET_LEVELS_SLOW) {
+   151→    if (lvl > top) break;
+   152→    onsetFired.set(`${symbol}|${side}|${tier}${lvl}`, now);
+   153→  }
+   154→}
+   155→
+   156→function observeOnset(symbol: string, price: number, lane: string, change24h: number | null): void {
+   157→  const now = Date.now();
+   158→  const ring = onsetRing.get(symbol) ?? [];
+   159→  ring.push({ at: now, price });
+   160→  while (ring.length > ONSET_RING_MAX || (ring.length > 1 && now - ring[0]!.at > ONSET_RING_MS)) ring.shift();
+   161→  onsetRing.set(symbol, ring);
+   162→  if (ring.length < 2) return;
+   163→  // FAST ref = oldest tick still inside the 90s window; SLOW ref = oldest ≤300s
+   164→  let fi = 0;
+   165→  while (fi < ring.length - 1 && now - ring[fi]!.at > ONSET_FAST_MS) fi++;
+   166→  const fastRef = ring[fi]!;
+   167→  const slowRef = ring[0]!;
+   168→  const fastMove = fastRef.price > 0 ? ((price - fastRef.price) / fastRef.price) * 100 : 0;
+   169→  const slowMove = slowRef.price > 0 ? ((price - slowRef.price) / slowRef.price) * 100 : 0;
+   170→  let fired: { tier: "FAST" | "SLOW"; level: number; move: number; span: number } | null = null;
+   171→  const fastSpan = now - fastRef.at;
+   172→  const slowSpan = now - slowRef.at;
+   173→  if (fastSpan >= ONSET_FAST_MIN_SPAN_MS && Math.abs(fastMove) >= ONSET_LEVELS_FAST[0]!) {
+   174→    const side = fastMove < 0 ? "DOWN" : "UP";
+   175→    const lvl = highestUnfiredLevel(symbol, side, "FAST", ONSET_LEVELS_FAST, Math.abs(fastMove), now);
+   176→    if (lvl !== null) fired = { tier: "FAST", level: lvl, move: fastMove, span: fastSpan };
+   177→  }
+   178→  if (!fired && slowSpan >= ONSET_SLOW_MIN_SPAN_MS && Math.abs(slowMove) >= ONSET_LEVELS_SLOW[0]!) {
+   179→    const side = slowMove < 0 ? "DOWN" : "UP";
+   180→    const lvl = highestUnfiredLevel(symbol, side, "SLOW", ONSET_LEVELS_SLOW, Math.abs(slowMove), now);
+   181→    if (lvl !== null) fired = { tier: "SLOW", level: lvl, move: slowMove, span: slowSpan };
+   182→  }
+   183→  if (!fired) return;
+   184→  const side = fired.move < 0 ? "DOWN" : "UP";
+   185→  markLevelsFired(symbol, side, fired.tier, fired.level, now);
+   186→  postOnset(symbol, side, fired.move, fired.span, lane, fired.tier, fired.level, price, change24h);
+   187→}
+   188→
+   189→function observeTick(symbol: string, price: number, lane: string, change24h: number | null = null): void {
+   190→  if (!(price > 0)) return;
+   191→  if (cascadeLastPrice.get(symbol) === price) return; // unchanged-tick dedupe (bybit heartbeats)
+   192→  cascadeLastPrice.set(symbol, price);
+   193→  observeOnset(symbol, price, lane, change24h); // v12.11 leading onset plane
+   194→  const now = Date.now();
+   195→  const ring = cascadeRing.get(symbol) ?? [];
+   196→  ring.push({ at: now, price });
+   197→  while (ring.length > CASCADE_MIN_TICKS && now - ring[0]!.at > CASCADE_WINDOW_MS) ring.shift();
+   198→  cascadeRing.set(symbol, ring);
+   199→  const first = ring[0]!;
+   200→  if (ring.length < CASCADE_MIN_TICKS || now - first.at < CASCADE_MIN_SPAN_MS) return;
+   201→  const movePct = ((price - first.price) / first.price) * 100;
+   202→  if (Math.abs(movePct) < CASCADE_MOVE_PCT) return;
+   203→  if (now - (cascadeLastAlert.get(symbol) ?? 0) < CASCADE_ALERT_COOLDOWN_MS) return;
+   204→  cascadeLastAlert.set(symbol, now);
+   205→  const side = movePct < 0 ? "DOWN" : "UP";
+   206→  console.log(`[price-ws] CASCADE-ALERT ${symbol} ${side} ${movePct.toFixed(2)}% in ${(now - first.at) / 1000}s (${lane}) — freeze posted to engine (both-direction deploys 10min)`);
+   207→  postOnset(symbol, side, movePct, now - first.at, lane, "CASCADE", null, price, change24h); // v12.11 — the vol-cause book records every freeze (leading LIQ-CASCADE evidence)
+   208→  void fetch("http://localhost:3000/api/internal/cascade-alert", {
+   209→    method: "POST",
+   210→    headers: { "content-type": "application/json" },
+   211→    cache: "no-store",
+   212→    body: JSON.stringify({ symbol, side, movePct: Number(movePct.toFixed(2)), windowMs: now - first.at, lane, at: now }),
+   213→  }).catch(() => {});
+   214→}
+   215→
+   216→// ── v12.11 SPOT-PRINT STORE — Binance spot venue plane for the app ──────────
+   217→// The app must NOT hold WS clients (dev-mode per-bundle module instances churn
+   218→// connections + teardown, and the compile-ramp OOM budget is precious). The
+   219→// ONE sustained Binance plane from this egress is the spot !miniTicker@arr WS
+   220→// ALREADY running here (v12.8 ring-2, hours-proven). This store keeps the
+   221→// last genuine SPOT print per symbol (lane-isolated — bybit/futures lanes can
+   222→// never contaminate it) and pushes a compact snapshot to the app every 3s
+   223→// (POST /api/internal/spotws-quotes → .data/spotws-quotes.json). The app's
+   224→// venue consensus reads that file as rung 0 — real Binance prices, zero REST
+   225→// weight, zero WS in the Next process. Futures-only microcaps are simply
+   226→// absent from the store → honest nulls downstream (+12 surcharge intact).
+   227→const spotPrints = new Map<string, { price: number; at: number }>();
+   228→const SPOT_PRINT_FRESH_MS = 90_000;
+   229→const SPOTWS_OUT_FILE = "/home/z/my-project/.data/spotws-quotes.json"; // v13.4 direct ownership
+   230→let spotwsPushInFlight = false;
+   231→let lastSpotwsPushLogAt = 0;
+   232→
+   233→async function pushSpotPrints(): Promise<void> {
+   234→  if (spotwsPushInFlight) return;
+   235→  const now = Date.now();
+   236→  const rows: Array<{ s: string; p: number; t: number }> = [];
+   237→  for (const [sym, q] of spotPrints) {
+   238→    if (now - q.at > SPOT_PRINT_FRESH_MS) continue;
+   239→    rows.push({ s: sym, p: q.price, t: q.at });
+   240→  }
+   241→  if (rows.length === 0) return;
+   242→  spotwsPushInFlight = true;
+   243→  try {
+   244→    // v13.4 (trace 1a1849f647778885) — DIRECT file ownership: the app being
+   245→    // down must NOT blind the live-print plane (measured: 21min stale during
+   246→    // an OOM window while price-ws held ~400 fresh prints). price-ws writes
+   247→    // .data/spotws-quotes.json itself (atomic tmp+rename); the POST stays as
+   248→    // the in-app door for the venue plane.
+   249→    writeFileSync(`${SPOTWS_OUT_FILE}.tmp`, JSON.stringify({ at: now, rows }), "utf8");
+   250→    renameSync(`${SPOTWS_OUT_FILE}.tmp`, SPOTWS_OUT_FILE);
+   251→    const res = await fetch("http://localhost:3000/api/internal/spotws-quotes", {
+   252→      method: "POST",
+   253→      headers: { "content-type": "application/json" },
+   254→      cache: "no-store",
+   255→      body: JSON.stringify({ at: now, rows }),
+   256→    });
+   257→    if (res.ok && Date.now() - lastSpotwsPushLogAt > 600_000) {
+   258→      lastSpotwsPushLogAt = Date.now();
+   259→      console.log(`[price-ws] spot-prints push active — ${rows.length} fresh Binance spot quotes → app venue plane (v12.11)`);
+   260→    }
+   261→  } catch {
+   262→    /* app restarting — file ages out honestly, venue rung 0 skips */
+   263→  } finally {
+   264→    spotwsPushInFlight = false;
+   265→  }
+   266→}
+   267→setInterval(() => void pushSpotPrints(), 3000);
+   268→
+   269→// ── v12.8 SPOT-ARR ring — Binance spot WS (rung 2) ──────────────────────────
+   270→// Raw stream frames arrive as the event object itself (no combined-wrapper):
+   271→// { e:"24hrMiniTicker", E, s, c, o, h, l, v, q }. Symbol parity with futures
+   272→// tickers is 1:1 for USDT pairs that exist on both planes (BTCUSDT…);
+   273→// futures-only tickers simply never arrive here and stay on BYBIT fuel.
+   274→function connectSpotWs(): void {
+   275→  try {
+   276→    const url = SPOT_WS_MIRRORS[spotWsMirrorIdx % SPOT_WS_MIRRORS.length]!;
+   277→    const mirror = new URL(url).host;
+   278→    const ws = new WebSocket(url);
+   279→    ws.onopen = () => {
+   280→      spotWsLastFrame = Date.now();
+   281→      console.log(`[price-ws] spot !miniTicker@arr WS open (v13.3 mirror=${mirror} rung=${spotWsMirrorIdx % SPOT_WS_MIRRORS.length})`);
+   282→    };
+   283→    ws.onmessage = (ev) => {
+   284→      try {
+   285→        // v12.8.1 — !miniTicker@arr payloads arrive as an ARRAY of miniTicker
+   286→        // objects (measured live: frames with e=undefined when parsed as a
+   287→        // single object). Accept array / combined-wrapper / single-object.
+   288→        const raw = JSON.parse(String(ev.data)) as unknown;
+   289→        const items: Array<{ e?: string; s?: string; c?: string; o?: string; h?: string; l?: string; q?: string; E?: number }> = Array.isArray(raw)
+   290→          ? (raw as Array<{ e?: string; s?: string; c?: string; o?: string; h?: string; l?: string; q?: string; E?: number }>)
+   291→          : raw && typeof raw === "object" && Array.isArray((raw as { data?: unknown }).data)
+   292→            ? ((raw as { data: Array<{ e?: string; s?: string; c?: string; o?: string; h?: string; l?: string; q?: string; E?: number }> }).data)
+   293→            : [raw as { e?: string; s?: string; c?: string; o?: string; h?: string; l?: string; q?: string; E?: number }];
+   294→        for (const d of items) {
+   295→          if (!d || !d.s || !d.s.endsWith("USDT")) continue;
+   296→          spotWsLastFrame = Date.now();
+   297→          const price = Number(d.c);
+   298→          if (!(price > 0)) continue;
+   299→          prices.set(d.s, {
+   300→            symbol: d.s,
+   301→            price,
+   302→            change24h: d.o ? ((price - Number(d.o)) / Number(d.o)) * 100 : 0,
+   303→            high24h: Number(d.h) || price,
+   304→            low24h: Number(d.l) || price,
+   305→            volume24h: Number(d.q) || 0,
+   306→            at: d.E || Date.now(),
+   307→          });
+   308→          spotPrints.set(d.s, { price, at: d.E || Date.now() }); // v12.11 lane-isolated venue plane
+   309→          observeTick(d.s, price, "WS·SPOT", d.o ? ((price - Number(d.o)) / Number(d.o)) * 100 : null); // v12.10 tick-velocity cascade detector
+   310→          lastEventAt = Date.now();
+   311→        }
+   312→      } catch {
+   313→        /* skip */
+   314→      }
+   315→    };
+   316→    ws.onclose = () => {
+   317→      // v13.3 — advance to the NEXT mirror before reconnecting (failover ring)
+   318→      spotWsMirrorIdx = (spotWsMirrorIdx + 1) % SPOT_WS_MIRRORS.length;
+   319→      console.log(`[price-ws] spot arr stream closed (${mirror}) — reconnect 5s on mirror=${SPOT_WS_MIRRORS[spotWsMirrorIdx]!.split("/")[2]}`);
+   320→      setTimeout(connectSpotWs, 5000);
+   321→    };
+   322→    ws.onerror = () => {};
+   323→  } catch (err) {
+   324→    console.error("[price-ws] spot connect error", err);
+   325→    setTimeout(connectSpotWs, 5000);
+   326→  }
+   327→}
+   328→
+   329→// ── Bybit tier state (Task 35 — second reputable exchange) ─────────────────
+   330→let bybLastFrame = 0;
+   331→const bybSubscribed = new Set<string>();
+   332→// Bybit tickers topic sends a full snapshot then field-level deltas — keep the
+   333→// last partial per symbol so deltas can be merged into a complete row.
+   334→type BybPartial = { symbol: string; price?: number; change24h?: number; high24h?: number; low24h?: number; volume24h?: number };
+   335→const bybPartial = new Map<string, BybPartial>();
+   336→let bybWs: WebSocket | null = null;
+   337→
+   338→async function restPoll() {
+   339→  if (restBannedUntil > 0 && Date.now() >= restBannedUntil) {
+   340→    // v10.8 TASK-49 — ledger-gated resume: our window elapsed but the shared
+   341→    // ledger may still carry a live pool ban another process discovered.
+   342→    // v1.1 scope split: resume defers ONLY while an UNKNOWN-SCOPE ("_pool")
+   343→    // ban is live — a single named pool member's ban no longer silences this
+   344→    // lane (majority-clean pool measured 2026-10-20; our own 418 discoveries
+   345→    // still pause THIS lane via restBannedUntil as before).
+   346→    const poolBan = ledgerUnknownScopeBanUntil();
+   347→    if (poolBan > Date.now()) {
+   348→      if (poolBan > restBannedUntil) {
+   349→        restBannedUntil = poolBan;
+   350→        console.log(`[price-ws] shared ledger still bans fapi pool (unknown scope) until ${new Date(poolBan).toISOString()} — resume deferred`);
+   351→      }
+   352→      return;
+   353→    }
+   354→    restBannedUntil = 0;
+   355→    console.log("[price-ws] REST ban window elapsed — probe resume");
+   356→  }
+   357→  if (Date.now() < restBannedUntil) return;
+   358→  try {
+   359→    const ctrl = new AbortController();
+   360→    const timer = setTimeout(() => ctrl.abort(), 6000);
+   361→    // v12.6.1 connection-recycle: fresh egress draw per poll (see fapi-gate)
+   362→    const res = await fetch(REST_URL, { signal: ctrl.signal, cache: "no-store", headers: { Connection: "close" } });
+   363→    clearTimeout(timer);
+   364→    if (res.status === 418 || res.status === 429) {
+   365→      // v10.8: honor the REAL body end first (Binance names IP + epoch),
+   366→      // fall back to retry-after, then the 60s soft default.
+   367→      let until = 0;
+   368→      let namedIp: string | null = null;
+   369→      try {
+   370→        const body = await res.text();
+   371→        const m = /IP\(([\d.]+)\)\s*banned until (\d+)/i.exec(body);
+   372→        if (m) {
+   373→          namedIp = m[1]!;
+   374→          const real = Number(m[2]);
+   375→          if (Number.isFinite(real) && real > Date.now()) until = real;
+   376→        } else {
+   377→          const u = /banned until (\d{10,16})/i.exec(body);
+   378→          if (u) {
+   379→            let ts = Number(u[1]);
+   380→            if (ts < 10_000_000_000) ts *= 1000;
+   381→            if (ts > Date.now()) until = ts;
+   382→          }
+   383→        }
+   384→      } catch {
+   385→        /* body unreadable */
+   386→      }
+   387→      if (!until) {
+   388→        const ra = Number(res.headers.get("retry-after") ?? 0);
+   389→        until = Date.now() + Math.min(Math.max(ra, 60), 4 * 3600) * 1000;
+   390→      }
+   391→      writeLedgerBan(namedIp, until); // shared truth — other processes stay silent too
+   392→      if (until > restBannedUntil) {
+   393→        console.log(`[price-ws] REST ${res.status} IP-ban/ratelimit — backing off until ${new Date(until).toISOString()}${namedIp ? ` (IP ${namedIp})` : ""}`);
+   394→        restBannedUntil = until;
+   395→      }
+   396→      return;
+   397→    }
+   398→    if (!res.ok) return;
+   399→    const rows = (await res.json()) as Array<{ symbol: string; lastPrice: string; priceChangePercent: string; highPrice: string; lowPrice: string; quoteVolume: string }>;
+   400→    for (const r of rows) {
+   401→      if (!r.symbol.endsWith("USDT")) continue;
+   402→      const prev = prices.get(r.symbol);
+   403→      prices.set(r.symbol, {
+   404→        symbol: r.symbol,
+   405→        price: Number(r.lastPrice),
+   406→        change24h: Number(r.priceChangePercent),
+   407→        high24h: Number(r.highPrice),
+   408→        low24h: Number(r.lowPrice),
+   409→        volume24h: Number(r.quoteVolume),
+   410→        at: Date.now(),
+   411→      });
+   412→      void prev;
+   413→    }
+   414→    lastEventAt = Date.now();
+   415→  } catch {
+   416→    /* keep last known prices */
+   417→  }
+   418→}
+   419→
+   420→// v12.2 TASK-52 — SPOT-MIRROR fuel poll: active while BOTH WS lanes are dead
+   421→// AND the fapi pool is banned (source WS OFFLINE / WS·REST·SPOT). 10s cadence
+   422→// (last-resort freshness, ~480 weight/min on the spot pool — trivial).
+   423→async function spotPoll() {
+   424→  if (Date.now() < spotBannedUntil) return;
+   425→  try {
+   426→    const ctrl = new AbortController();
+   427→    const timer = setTimeout(() => ctrl.abort(), 8000);
+   428→    const res = await fetch(SPOT_URL, { signal: ctrl.signal, cache: "no-store" });
+   429→    clearTimeout(timer);
+   430→    if (res.status === 418 || res.status === 429) {
+   431→      spotBannedUntil = Date.now() + 60_000; // own pool, own soft backoff — no ledger write
+   432→      spotLastOkAt = 0;
+   433→      console.log("[price-ws] SPOT-MIRROR rung rate-limited — spot backoff 60s (separate pool, no fapi poke)");
+   434→      return;
+   435→    }
+   436→    if (!res.ok) return;
+   437→    const rows = (await res.json()) as Array<{ symbol: string; lastPrice: string; priceChangePercent: string; highPrice: string; lowPrice: string; quoteVolume: string }>;
+   438→    for (const r of rows) {
+   439→      if (!r.symbol.endsWith("USDT")) continue;
+   440→      prices.set(r.symbol, {
+   441→        symbol: r.symbol,
+   442→        price: Number(r.lastPrice),
+   443→        change24h: Number(r.priceChangePercent),
+   444→        high24h: Number(r.highPrice),
+   445→        low24h: Number(r.lowPrice),
+   446→        volume24h: Number(r.quoteVolume),
+   447→        at: Date.now(),
+   448→      });
+   449→      const sp = Number(r.lastPrice); // v12.11 — spot REST prints are genuine Binance spot too
+   450→      if (sp > 0) spotPrints.set(r.symbol, { price: sp, at: Date.now() });
+   451→    }
+   452→    lastEventAt = Date.now();
+   453→    if (spotLastOkAt === 0) console.log("[price-ws] SPOT-MIRROR fuel active — spot ticker/24hr feeding prices (fapi banned, WS lanes dead)");
+   454→    spotLastOkAt = Date.now();
+   455→  } catch {
+   456→    /* keep last known prices */
+   457→  }
+   458→}
+   459→
+   460→function connect() {
+   461→  try {
+   462→    const ws = new WebSocket(WS_URL);
+   463→    ws.onopen = () => {
+   464→      lastWsFrame = Date.now();
+   465→      source = "WS PUSH";
+   466→      console.log("[price-ws] miniTicker stream open");
+   467→    };
+   468→    ws.onmessage = (ev) => {
+   469→      try {
+   470→        const msg = JSON.parse(String(ev.data)) as { data?: { s: string; c: string; o: string; h: string; l: string; q: string; E: number } };
+   471→        const d = msg.data;
+   472→        if (!d || !d.s.endsWith("USDT")) return;
+   473→        lastWsFrame = Date.now();
+   474→        prices.set(d.s, {
+   475→          symbol: d.s,
+   476→          price: Number(d.c),
+   477→          change24h: ((Number(d.c) - Number(d.o)) / Number(d.o)) * 100,
+   478→          high24h: Number(d.h),
+   479→          low24h: Number(d.l),
+   480→          volume24h: Number(d.q),
+   481→          at: d.E || Date.now(),
+   482→        });
+   483→        observeTick(d.s, Number(d.c), "WS PUSH", d.o ? ((Number(d.c) - Number(d.o)) / Number(d.o)) * 100 : null); // v12.10 tick-velocity cascade detector
+   484→        lastEventAt = Date.now();
+   485→      } catch {
+   486→        /* skip */
+   487→      }
+   488→    };
+   489→    ws.onclose = () => {
+   490→      console.log("[price-ws] stream closed — reconnect 5s");
+   491→      setTimeout(connect, 5000);
+   492→    };
+   493→    ws.onerror = () => {};
+   494→  } catch (err) {
+   495→    console.error("[price-ws] connect error", err);
+   496→    setTimeout(connect, 5000);
+   497→  }
+   498→}
+   499→
+   500→// ── Bybit v5 public linear tickers WS (Task 35) ────────────────────────────
+   501→function bybitSubscribe(symbols: string[]) {
+   502→  if (!bybWs || bybWs.readyState !== WebSocket.OPEN) return;
+   503→  const toSub = symbols.filter((s) => s.endsWith("USDT") && !bybSubscribed.has(s));
+   504→  // Bybit v5: max 10 args per request — chunk politely.
+   505→  for (let i = 0; i < toSub.length; i += 10) {
+   506→    const args = toSub.slice(i, i + 10).map((s) => `tickers.${s}`);
+   507→    bybWs.send(JSON.stringify({ op: "subscribe", args }));
+   508→    for (const a of args) bybSubscribed.add(a.slice("tickers.".length));
+   509→  }
+   510→  if (toSub.length) console.log(`[price-ws] bybit subscribed +${toSub.length} (total ${bybSubscribed.size})`);
+   511→}
+   512→function connectBybit() {
+   513→  try {
+   514→    const ws = new WebSocket(BYBIT_WS);
+   515→    bybWs = ws;
+   516→    ws.onopen = () => {
+   517→      console.log("[price-ws] bybit linear tickers WS open");
+   518→      bybLastFrame = Date.now();
+   519→      bybSubscribed.clear();
+   520→      bybitSubscribe([...prices.keys()]);
+   521→    };
+   522→    ws.onmessage = (ev) => {
+   523→      try {
+   524→        const msg = JSON.parse(String(ev.data)) as {
+   525→          topic?: string; type?: string;
+   526→          data?: { symbol?: string; lastPrice?: string; price24hPcnt?: string; highPrice24h?: string; lowPrice24h?: string; turnover24h?: string };
+   527→        };
+   528→        if (msg.topic?.startsWith("tickers.") && msg.data?.symbol) {
+   529→          const sym = msg.data.symbol;
+   530→          if (!sym.endsWith("USDT")) return;
+   531→          bybLastFrame = Date.now();
+   532→          const base = bybPartial.get(sym) ?? { symbol: sym };
+   533→          const p: BybPartial = {
+   534→            ...base,
+   535→            symbol: sym,
+   536→            price: msg.data.lastPrice !== undefined ? Number(msg.data.lastPrice) : base.price,
+   537→            change24h: msg.data.price24hPcnt !== undefined ? Number(msg.data.price24hPcnt) * 100 : base.change24h,
+   538→            high24h: msg.data.highPrice24h !== undefined ? Number(msg.data.highPrice24h) : base.high24h,
+   539→            low24h: msg.data.lowPrice24h !== undefined ? Number(msg.data.lowPrice24h) : base.low24h,
+   540→            volume24h: msg.data.turnover24h !== undefined ? Number(msg.data.turnover24h) : base.volume24h,
+   541→          };
+   542→          bybPartial.set(sym, p);
+   543→          if (p.price && p.price > 0) {
+   544→            prices.set(sym, {
+   545→              symbol: sym,
+   546→              price: p.price,
+   547→              change24h: p.change24h ?? 0,
+   548→              high24h: p.high24h ?? p.price,
+   549→              low24h: p.low24h ?? p.price,
+   550→              volume24h: p.volume24h ?? 0,
+   551→              at: Date.now(),
+   552→            });
+   553→            observeTick(sym, p.price, "WS·BYBIT", p.change24h ?? null); // v12.10 tick-velocity cascade detector
+   554→            lastEventAt = Date.now();
+   555→          }
+   556→        }
+   557→      } catch {
+   558→        /* skip */
+   559→      }
+   560→    };
+   561→    ws.onclose = () => {
+   562→      console.log("[price-ws] bybit stream closed — reconnect 5s");
+   563→      bybWs = null;
+   564→      setTimeout(connectBybit, 5000);
+   565→    };
+   566→    ws.onerror = () => {};
+   567→  } catch (err) {
+   568→    console.error("[price-ws] bybit connect error", err);
+   569→    setTimeout(connectBybit, 5000);
+   570→  }
+   571→}
+   572→
+   573→// Bybit requires an app-level ping every ~20s to keep the session alive.
+   574→setInterval(() => {
+   575→  if (bybWs && bybWs.readyState === WebSocket.OPEN) bybWs.send(JSON.stringify({ op: "ping" }));
+   576→}, 20_000);
+   577→
+   578→connect();
+   579→connectSpotWs(); // v12.8 — spot ring opens alongside the futures ring (whichever flows, fuels)
+   580→connectBybit();
+   581→
+   582→// stall watchdog → fuel priority (binance futures WS > binance spot WS > bybit WS > REST > OFFLINE)
+   583→setInterval(() => {
+   584→  const wsAlive = Date.now() - lastWsFrame <= STALL_MS;
+   585→  const spotWsAlive = Date.now() - spotWsLastFrame <= STALL_MS;
+   586→  const bybAlive = Date.now() - bybLastFrame <= STALL_MS;
+   587→  const banned = Date.now() < restBannedUntil;
+   588→  let next: typeof source;
+   589→  if (wsAlive) next = "WS PUSH";
+   590→  else if (spotWsAlive) next = "WS·SPOT";
+   591→  else if (bybAlive) next = "WS·BYBIT";
+   592→  else if (banned) next = Date.now() - spotLastOkAt <= 30_000 ? "WS·REST·SPOT" : "WS OFFLINE";
+   593→  else next = "WS·REST 2.5S";
+   594→  if (source !== next) {
+   595→    console.log(`[price-ws] source → ${next}${!wsAlive && spotWsAlive ? " (futures fstream silent — spot-arr ring fuel, v12.8)" : ""}${!wsAlive && !spotWsAlive && bybAlive ? " (binance silent — bybit fuel)" : ""}${banned && !wsAlive && !spotWsAlive && !bybAlive && next === "WS OFFLINE" ? ` (REST ban until ${new Date(restBannedUntil).toISOString()})` : ""}${next === "WS·REST·SPOT" ? " (SPOT-MIRROR fuel rung, Task-52)" : ""}`);
+   596→    source = next;
+   597→  }
+   598→}, 5000);
+   599→
+   600→setInterval(() => {
+   601→  if (source === "WS·REST 2.5S") void restPoll();
+   602→}, 2500);
+   603→setInterval(() => {
+   604→  // v12.2 TASK-52 — spot rung: while the fapi pool is banned and both WS
+   605→  // lanes are dead, feed prices from the spot pool every 10s instead of
+   606→  // sitting dark; the stall watchdog promotes the source label once fresh
+   607→  // spot rows land. Own pool, own backoff — the fapi ledger stays untouched.
+   608→  if (source === "WS OFFLINE" || source === "WS·REST·SPOT") void spotPoll();
+   609→}, 10_000);
+   610→
+   611→// universe sync from terminal pulse
+   612→async function syncUniverse() {
+   613→  try {
+   614→    const res = await fetch("http://localhost:3000/api/pulse", { cache: "no-store" });
+   615→    if (!res.ok) return;
+   616→    const snap = (await res.json()) as { market?: Array<{ symbol: string }> };
+   617→    for (const m of snap.market ?? []) {
+   618→      if (!prices.has(m.symbol)) prices.set(m.symbol, { symbol: m.symbol, price: 0, change24h: 0, high24h: 0, low24h: 0, volume24h: 0, at: 0 });
+   619→    }
+   620→    bybitSubscribe([...prices.keys()]);
+   621→  } catch {
+   622→    /* terminal may be restarting */
+   623→  }
+   624→}
+   625→void syncUniverse();
+   626→setInterval(syncUniverse, 5 * 60_000);
+   627→
+   628→const io = new Server(PORT, { cors: { origin: "*" }, path: "/" });
+   629→
+   630→io.on("connection", (socket) => {
+   631→  socket.emit("prices:snapshot", {
+   632→    source,
+   633→    rows: [...prices.values()].filter((r) => r.price > 0),
+   634→  });
+   635→  socket.emit("price:source", { source, at: Date.now() });
+   636→});
+   637→
+   638→setInterval(() => {
+   639→  const rows = [...prices.values()].filter((r) => r.price > 0);
+   640→  if (rows.length > 0) io.emit("prices", { source, rows, at: Date.now() });
+   641→}, 1000);
+   642→
+   643→setInterval(() => {
+   644→  io.emit("price:source", { source, at: Date.now() });
+   645→}, 10_000);
+   646→
+   647→console.log(`[price-ws] socket.io listening on :${PORT} — path /`);
+   648→
