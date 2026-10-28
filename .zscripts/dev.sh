@@ -183,7 +183,27 @@ log_step_end "bun run db:push"
 
 log_step_start "Starting Next.js dev server (dev-up.sh: cap 1400 + self-warm + watchdog arms)"
 echo "[BUN] Starting development server via scripts/dev-up.sh (heap-capped)..."
-bash scripts/dev-up.sh >> dev.log 2>&1 || true
+# ── v2.1 STAB-20261029 (trace 1a184d8bbb826f0d — operator mandate «نمایش
+# داشبورد پایدار نیست») — APP SUPERVISOR LOOP: dev-up.sh is a one-shot spawner
+# (background mode spawns next-server via setsid and exits). When the app's
+# ram-shed governor self-recycles next-server (controlled process.exit(0) by
+# design, RAM-SHED-20261024), NOTHING in this platform chain re-entered it —
+# the dashboard stayed dark until layer-1 watchdog healed (≥180s pause-file
+# window, longer whenever the watchdog itself was paused during a mem-crunch).
+# This loop is the missing link: hold for the app lifetime, and ~8s after
+# every app exit re-enter dev-up.sh (idempotent, single-spawner gate,
+# pause-protected). p0-watchdog remains the second line of defense.
+(
+  down() { [ "$(curl -s -m 5 -o /dev/null -w '%{http_code}' http://localhost:3000/api/pulse 2>/dev/null || true)" != "200" ]; }
+  while true; do
+    if down; then
+      echo "[dev.sh] app down $(date -u '+%H:%M:%SZ') — re-entering dev-up (STAB-20261029)" >> dev.log
+      bash scripts/dev-up.sh >> dev.log 2>&1 || true
+    fi
+    sleep 8
+  done
+) >> dev.log 2>&1 &
+disown 2>/dev/null || true
 log_step_end "Starting Next.js dev server"
 
 log_step_start "Waiting for Next.js dev server"
