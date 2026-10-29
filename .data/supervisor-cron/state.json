@@ -2,15 +2,15 @@
  "ver": "supervisor-cron 1.6.0",
  "pid": 1869,
  "startedAt": "2026-10-28T22:55:30.935Z",
- "updatedAt": "2026-10-29T01:46:01.263Z",
+ "updatedAt": "2026-10-29T01:56:24.782Z",
  "jobs": {
   "sweep": {
-   "lastRunAt": 1793238360936,
-   "nextRunAt": 1793238960935,
+   "lastRunAt": 1793238960937,
+   "nextRunAt": 1793239560935,
    "lastStatus": "ok",
-   "lastDurationMs": 325,
+   "lastDurationMs": 697,
    "lastError": null,
-   "runs": 86,
+   "runs": 87,
    "failures": 0
   },
   "progress": {
@@ -41,12 +41,12 @@
    "failures": 0
   },
   "backup": {
-   "lastRunAt": 1793228160948,
+   "lastRunAt": 1793238960948,
    "nextRunAt": 1793238960948,
    "lastStatus": "ok",
-   "lastDurationMs": 53831,
+   "lastDurationMs": 23834,
    "lastError": null,
-   "runs": 4,
+   "runs": 5,
    "failures": 0
   },
   "digest": {
@@ -59,34 +59,34 @@
    "failures": 0
   },
   "keepwarm": {
-   "lastRunAt": 1793238360936,
-   "nextRunAt": 1793238360935,
-   "lastStatus": "ok",
-   "lastDurationMs": 327,
-   "lastError": null,
-   "runs": 92,
-   "failures": 17
+   "lastRunAt": 1793238960937,
+   "nextRunAt": 1793239260935,
+   "lastStatus": "error",
+   "lastDurationMs": 301,
+   "lastError": "HEARTBEAT COLD app:3000 296ms streak=1",
+   "runs": 94,
+   "failures": 18
   }
  },
  "lastSweep": {
-  "at": "2026-10-29T01:46:01.260Z",
-  "verdict": "AMBER",
-  "reason": "sentinel :3030 verdict AMBER · toobit-bridge doctrine: 3 violation(s) — last=MIRROR-LAG: card=SL but intent still OPEN 3455s — pollCards transition should have fired",
+  "at": "2026-10-29T01:56:00.997Z",
+  "verdict": "RED",
+  "reason": "sentinel verdict RED",
   "services": {
    "app": {
     "up": true,
     "status": 200,
-    "ms": 267
+    "ms": 43
    },
    "liq": {
     "up": true,
     "status": 200,
-    "ms": 30
+    "ms": 1
    },
    "trade": {
     "up": true,
     "status": 200,
-    "ms": 1
+    "ms": 0
    },
    "armor": {
     "up": true,
@@ -121,9 +121,9 @@
   },
   "anomalies": [
    {
-    "class": "sentinel-amber",
-    "sev": "warn",
-    "msg": "sentinel :3030 verdict AMBER"
+    "class": "sentinel-red",
+    "sev": "crit",
+    "msg": "sentinel :3030 verdict RED"
    },
    {
     "class": "tbt-doctrine-violation",
@@ -154,50 +154,22 @@
   "newN": 1
  },
  "lastKeepwarm": {
-  "at": "2026-10-29T01:46:01.263Z",
-  "ok": true,
-  "ms": 327,
-  "bootAt": "2026-10-29T01:45:14.638Z",
-  "gitSha": "713d3ec",
-  "coldStreak": 0
+  "at": "2026-10-29T01:56:01.237Z",
+  "ok": false,
+  "ms": 296,
+  "bootAt": null,
+  "gitSha": null,
+  "coldStreak": 1
  },
- "coldStreak": 0,
+ "coldStreak": 1,
  "alertLedger": {
-  "sentinel-red": 1793234161865,
+  "sentinel-red": 1793238961633,
   "review-llm-unavailable": 1793228161135,
   "app-down": 1793234161634
  },
  "wsDownStreak": 0,
  "staleStreak": 0,
  "history": [
-  {
-   "id": "sweep",
-   "at": 1793228760935,
-   "status": "ok",
-   "durationMs": 17,
-   "detail": "RED: app :3000 down"
-  },
-  {
-   "id": "keepwarm",
-   "at": 1793229060936,
-   "status": "ok",
-   "durationMs": 3809,
-   "detail": "HEARTBEAT OK 3805ms boot=23:10:43Z sha=3e0d723"
-  },
-  {
-   "id": "sweep",
-   "at": 1793229360939,
-   "status": "ok",
-   "durationMs": 752,
-   "detail": "AMBER: sentinel :3030 DOWN (HTTP unreachable) · toobit-bridge doctrine: 3 violation(s) — last=MIRROR-LAG: card=SL but intent st"
-  },
-  {
-   "id": "keepwarm",
-   "at": 1793229360940,
-   "status": "ok",
-   "durationMs": 753,
-   "detail": "HEARTBEAT OK 753ms boot=23:14:17Z sha=3e0d723"
-  },
   {
    "id": "keepwarm",
    "at": 1793229660936,
@@ -519,6 +491,34 @@
    "status": "ok",
    "durationMs": 327,
    "detail": "HEARTBEAT OK 327ms boot=01:45:14Z sha=713d3ec"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1793238660936,
+   "status": "ok",
+   "durationMs": 52,
+   "detail": "HEARTBEAT OK 52ms boot=01:45:14Z sha=e4d12a7"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1793238960937,
+   "status": "error",
+   "durationMs": 301,
+   "detail": "HEARTBEAT COLD app:3000 296ms streak=1"
+  },
+  {
+   "id": "sweep",
+   "at": 1793238960937,
+   "status": "ok",
+   "durationMs": 697,
+   "detail": "RED: sentinel verdict RED"
+  },
+  {
+   "id": "backup",
+   "at": 1793238960948,
+   "status": "ok",
+   "durationMs": 23834,
+   "detail": "snapshot ok in 24s: SNAPSHOT OK — nexus-snapshot-20261029-015600.zip (43M) · 12 snapshots retained (max 12) · wal:VACUUM-COPY-CONSISTENT+CHECKPOINTED · cal:OK · enc:ENCRYPTED · off-site: DISABLED(oper"
   }
  ],
  "watchRuns": [
