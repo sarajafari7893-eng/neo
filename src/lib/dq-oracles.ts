@@ -147,7 +147,7 @@ type Parsed = { px: number | null; funding: number | null; oiUsd: number | null;
 // price-ws :3003 holds the SUSTAINED per-symbol fstream bookTicker ring and
 // pushes .data/futws-quotes.json — REAL futures mids with zero REST weight.
 // Independent of the REST reference by transport AND by process.
-const FUTWS_FILE = "data/futws-quotes.json";
+const FUTWS_FILE = ".data/futws-quotes.json"; // v14.0.1 — path fix (was missing the .data prefix)
 const FUTWS_FILE_MAX_AGE_MS = 15_000;
 const FUTWS_QUOTE_FRESH_MS = 90_000;
 let futwsCache: { at: number; map: Map<string, { m: number; t: number }> } | null = null;
