@@ -1,17 +1,18 @@
 {
-  "at": 1793310572589,
-  "ver": "toobit-bridge 1.3.0",
+  "at": 1793311022932,
+  "ver": "toobit-bridge 1.5.0",
   "gates": {
-    "marginUsdt": 5,
+    "marginUsdt": 3,
     "maxEntryDriftBps": 80,
     "maxEntryAgeMs": 90000,
-    "maxConcurrent": 3
+    "maxConcurrent": 0
   },
   "counters": {
-    "opens": 2,
+    "opens": 4,
     "skipBy": {
-      "STALE-CARD": 1
-    }
+      "STALE-CARD": 5
+    },
+    "orphans": 0
   },
   "violations": [
     {
@@ -21,5 +22,21 @@
       "detail": "exp=25.00 act=8.20 (6719bps)"
     }
   ],
-  "openIntents": []
+  "openIntents": [
+    {
+      "serial": 3199,
+      "symbol": "NEARUSDT",
+      "direction": "SHORT",
+      "lev": 14,
+      "levSrc": "card",
+      "expectedNotional": 42,
+      "actualNotional": 41.7,
+      "entryAgeMs": 10018,
+      "entryDriftBps": 4.08,
+      "cardStatus": "ACTIVE",
+      "status": "OPEN",
+      "mode": "PAPER",
+      "protected": true
+    }
+  ]
 }

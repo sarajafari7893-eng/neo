@@ -2,15 +2,15 @@
  "ver": "supervisor-cron 1.6.0",
  "pid": 1869,
  "startedAt": "2026-10-28T22:55:30.935Z",
- "updatedAt": "2026-10-29T21:46:01.596Z",
+ "updatedAt": "2026-10-29T21:56:01.180Z",
  "jobs": {
   "sweep": {
-   "lastRunAt": 1793310360935,
-   "nextRunAt": 1793310360935,
+   "lastRunAt": 1793310960936,
+   "nextRunAt": 1793311560935,
    "lastStatus": "ok",
-   "lastDurationMs": 661,
+   "lastDurationMs": 233,
    "lastError": null,
-   "runs": 206,
+   "runs": 207,
    "failures": 0
   },
   "progress": {
@@ -59,34 +59,34 @@
    "failures": 0
   },
   "keepwarm": {
-   "lastRunAt": 1793310360935,
-   "nextRunAt": 1793310660935,
-   "lastStatus": "error",
-   "lastDurationMs": 3,
-   "lastError": "HEARTBEAT COLD app:3000 0ms streak=2",
-   "runs": 332,
+   "lastRunAt": 1793310960936,
+   "nextRunAt": 1793310960935,
+   "lastStatus": "ok",
+   "lastDurationMs": 244,
+   "lastError": null,
+   "runs": 334,
    "failures": 93
   }
  },
  "lastSweep": {
-  "at": "2026-10-29T21:46:00.951Z",
-  "verdict": "RED",
-  "reason": "app :3000 down",
+  "at": "2026-10-29T21:56:01.169Z",
+  "verdict": "AMBER",
+  "reason": "sentinel :3030 verdict AMBER · toobit-bridge doctrine: 1 violation(s) — last=NOTIONAL-DELTA: exp=25.00 act=8.20 (6719bps)",
   "services": {
    "app": {
-    "up": false,
-    "status": null,
-    "ms": 1
+    "up": true,
+    "status": 200,
+    "ms": 214
    },
    "liq": {
     "up": true,
     "status": 200,
-    "ms": 3
+    "ms": 0
    },
    "trade": {
     "up": true,
     "status": 200,
-    "ms": 0
+    "ms": 1
    },
    "armor": {
     "up": true,
@@ -116,24 +116,19 @@
    "tbt": {
     "up": true,
     "status": 200,
-    "ms": 1
+    "ms": 0
    }
   },
   "anomalies": [
    {
-    "class": "app-down",
-    "sev": "crit",
-    "msg": "app :3000 DOWN (HTTP unreachable) · healthz=err → pulse fallback"
-   },
-   {
-    "class": "sentinel-red",
-    "sev": "crit",
-    "msg": "sentinel :3030 verdict RED"
+    "class": "sentinel-amber",
+    "sev": "warn",
+    "msg": "sentinel :3030 verdict AMBER"
    },
    {
     "class": "tbt-doctrine-violation",
     "sev": "warn",
-    "msg": "toobit-bridge doctrine: 3 violation(s) — last=MIRROR-LAG: card=SL but intent still OPEN 3455s — pollCards transition should have fired"
+    "msg": "toobit-bridge doctrine: 1 violation(s) — last=NOTIONAL-DELTA: exp=25.00 act=8.20 (6719bps)"
    }
   ],
   "data": {
@@ -159,14 +154,14 @@
   "newN": 2
  },
  "lastKeepwarm": {
-  "at": "2026-10-29T21:46:00.936Z",
-  "ok": false,
-  "ms": 0,
-  "bootAt": null,
-  "gitSha": null,
-  "coldStreak": 2
+  "at": "2026-10-29T21:56:01.180Z",
+  "ok": true,
+  "ms": 244,
+  "bootAt": "2026-10-29T21:53:08.653Z",
+  "gitSha": "ecef86f",
+  "coldStreak": 0
  },
- "coldStreak": 2,
+ "coldStreak": 0,
  "alertLedger": {
   "sentinel-red": 1793310361595,
   "review-llm-unavailable": 1793271451151,
@@ -175,27 +170,6 @@
  "wsDownStreak": 0,
  "staleStreak": 0,
  "history": [
-  {
-   "id": "keepwarm",
-   "at": 1793301060935,
-   "status": "error",
-   "durationMs": 2,
-   "detail": "HEARTBEAT COLD app:3000 0ms streak=1"
-  },
-  {
-   "id": "keepwarm",
-   "at": 1793301360935,
-   "status": "error",
-   "durationMs": 2,
-   "detail": "HEARTBEAT COLD app:3000 0ms streak=2"
-  },
-  {
-   "id": "sweep",
-   "at": 1793301360935,
-   "status": "ok",
-   "durationMs": 915,
-   "detail": "RED: app :3000 down"
-  },
   {
    "id": "keepwarm",
    "at": 1793301660936,
@@ -524,6 +498,27 @@
    "status": "ok",
    "durationMs": 661,
    "detail": "RED: app :3000 down"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1793310660937,
+   "status": "ok",
+   "durationMs": 144,
+   "detail": "HEARTBEAT OK 144ms boot=21:50:40Z sha=ecef86f"
+  },
+  {
+   "id": "sweep",
+   "at": 1793310960936,
+   "status": "ok",
+   "durationMs": 233,
+   "detail": "AMBER: sentinel :3030 verdict AMBER · toobit-bridge doctrine: 1 violation(s) — last=NOTIONAL-DELTA: exp=25.00 act=8.20 (6719bps"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1793310960936,
+   "status": "ok",
+   "durationMs": 244,
+   "detail": "HEARTBEAT OK 244ms boot=21:53:08Z sha=ecef86f"
   }
  ],
  "watchRuns": [

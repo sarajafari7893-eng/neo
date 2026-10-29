@@ -1,7 +1,8 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { Activity, BadgeDollarSign, CircleStop, Gauge, Radio, ShieldAlert, Timer } from "lucide-react";
+import { Activity, BadgeDollarSign, CircleStop, Gauge, LineChart, Radio, ShieldAlert, Timer } from "lucide-react";
+import { Area, AreaChart, ResponsiveContainer, Tooltip, YAxis } from "recharts";
 import { BentoCard, LiveDot, NeonBadge } from "@/components/shared/primitives";
 import { cn } from "@/lib/utils";
 
@@ -16,7 +17,11 @@ import { cn } from "@/lib/utils";
  * v1.4.3 (trace 1a172ca1af260c0d): LIVE money-truth badge — exchange-verified
  * realized PnL of closed intents + open mark PnL (/status.livePnl) — and the
  * sizing note now names the exchange contractMultiplier (the $0.5-margin bug).
- * Feed: /api/toobit-bridge (5s poll).
+ * v1.5.0 (trace 1a1899d2237473d9): ACTIVATED with the FIXED $3 balance —
+ * margin $3 (paperBalanceUsdt anchor $3, equity = 3$ + Σ realized), paper
+ * fills book REAL book PnL, and the card renders the full-event journal:
+ * equity curve (recharts), since-boot event counters, and the raw trail.
+ * Feed: /api/toobit-bridge (5s) + /api/toobit-bridge/journal (8s).
  */
 
 interface IntentDTO {
@@ -46,14 +51,26 @@ interface BridgeStatus {
   mode?: "LIVE" | "PAPER";
   liveApproved?: boolean;
   balanceUsdt?: number | null;
-  cfg?: { marginUsdt: number; maxConcurrent: number; tp1Frac: number; tp2Frac: number; leverage: number; execEnabled: boolean };
+  cfg?: { marginUsdt: number; maxConcurrent: number; tp1Frac: number; tp2Frac: number; leverage: number; execEnabled: boolean; paperBalanceUsdt?: number };
   openIntents?: IntentDTO[];
   recent?: IntentDTO[];
   activeCount?: number | null; // v13.2.2 — DB ACTIVE signals, to mirror-check openIntents against
   metrics?: { n: number; totalMsP50: number | null; totalMsP95: number | null; detectMsP50: number | null; slipBpsP50: number | null; slipBpsWorst: number | null };
   livePnl?: { realizedClosedUsdt: number; openUnrealizedUsdt: number; closedN: number; openN: number }; // v1.4.3 — exchange-verified money truth
+  paper?: { anchorUsdt: number; realizedUsdt: number; equityUsdt: number; closedN: number; wins: number; losses: number; winRate: number | null; curveN: number; openN: number }; // v1.5.0 — fixed-$3 account
   doctrine?: DoctrineSummary;
   instruments?: number;
+}
+
+// v1.5.0 — full-event journal (report + chart contract)
+interface JournalEvent { at: number; ev: string; note?: string; serial?: number }
+interface JournalData {
+  ok: boolean; bridge?: string; mode?: string;
+  account?: { anchorUsdt: number; realizedUsdt: number; equityUsdt: number; closedN: number; wins: number; losses: number; winRate: number | null; curveN: number };
+  equityCurve?: Array<{ at: number; eq: number; pnl: number }>;
+  counters?: { totalSinceBoot: number; byKind: Record<string, number>; opens: number; orphans: number };
+  closed?: Array<{ serial: number; symbol: string; mode: string; closeReason: string | null; realizedPnlUsdt: number | null; closedAt: number | null }>;
+  recent?: JournalEvent[];
 }
 
 const STATUS_CLS: Record<string, string> = {
@@ -77,6 +94,16 @@ export default function ToobitBridgeCard() {
     refetchInterval: 5000,
     retry: 1,
   });
+  // v1.5.0 — full-event journal feed (equity curve + counters + raw trail)
+  const { data: jn } = useQuery<JournalData>({
+    queryKey: ["toobit-bridge-journal"],
+    queryFn: async () => {
+      const res = await fetch("/api/toobit-bridge/journal", { cache: "no-store" });
+      return (await res.json()) as JournalData;
+    },
+    refetchInterval: 8000,
+    retry: 1,
+  });
 
   const mode = data?.mode ?? "PAPER";
   const live = mode === "LIVE";
@@ -92,6 +119,12 @@ export default function ToobitBridgeCard() {
   const driftSkips = (d?.skipBy?.["ENTRY-DRIFT"] ?? 0) + (d?.skipBy?.["ENTRY-DELAY"] ?? 0);
   const lp = data?.livePnl;
   const netUsdt = lp ? lp.realizedClosedUsdt + lp.openUnrealizedUsdt : null;
+  // v1.5.0 — fixed-$3 paper account (بالانس ثابت) + journal
+  const pa = data?.paper ?? jn?.account ?? null;
+  const curve = (jn?.equityCurve ?? []).slice(-120);
+  const evTotal = jn?.counters?.totalSinceBoot ?? 0;
+  const topKinds = Object.entries(jn?.counters?.byKind ?? {}).slice(0, 5);
+  const jEvents = (jn?.recent ?? []).slice(0, 10);
 
   return (
     <BentoCard className="p-4" tone={live ? "magenta" : "neon"} ariaLabel="Toobit execution bridge">
@@ -172,6 +205,68 @@ export default function ToobitBridgeCard() {
             PnL {netUsdt !== null && netUsdt >= 0 ? "+" : ""}{netUsdt?.toFixed(2)}$
           </span>
         )}
+      </div>
+
+      {/* v1.5.0 — fixed-$3 account strip + equity curve (ژورنال مالی و نمودار) */}
+      {pa && (
+        <div className="mt-2 rounded-md border border-border/60 bg-background/40 px-2 py-1.5">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
+            <span className="flex items-center gap-1 font-mono" title="بالانس ثابت حساب (لنگر $3) — موجودی واقعی صرافی جداگانه نمایش داده می‌شود">
+              <BadgeDollarSign className="h-3.5 w-3.5 text-muted-foreground" aria-hidden />
+              BALANCE {pa.anchorUsdt.toFixed(0)}$
+            </span>
+            <span className="font-mono text-muted-foreground" title="ابره = لنگر + Σ سود/زیان محقق‌شدهٔ paper (قیمت‌گذاری روی کتاب واقعی)">equity <span className="text-neon">{pa.equityUsdt.toFixed(4)}$</span></span>
+            <span className={cn("font-mono", pa.realizedUsdt >= 0 ? "text-neon" : "text-danger-neon")} title="PnL محقق‌شدهٔ paper">PnL {pa.realizedUsdt >= 0 ? "+" : ""}{pa.realizedUsdt.toFixed(4)}$</span>
+            <span className="font-mono text-muted-foreground" title="برد/باخت intents بسته‌شده">{pa.wins}W/{pa.losses}L{pa.winRate !== null ? ` · ${pa.winRate}%` : ""}</span>
+            <span className="ml-auto font-mono text-muted-foreground">{evTotal} رویداد ژورنال</span>
+          </div>
+          {curve.length >= 2 && (
+            <div className="mt-1 h-16" aria-hidden>
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={curve} margin={{ top: 2, right: 0, bottom: 0, left: 0 }}>
+                  <defs>
+                    <linearGradient id="eqFill" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="rgb(0 255 170)" stopOpacity={0.35} />
+                      <stop offset="100%" stopColor="rgb(0 255 170)" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <YAxis domain={["dataMin - 0.001", "dataMax + 0.001"]} hide />
+                  <Tooltip
+                    contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", fontSize: 10, borderRadius: 6 }}
+                    labelFormatter={() => ""}
+                    formatter={(v: number | string, n: string) => [typeof v === "number" ? v.toFixed(4) : v, n === "eq" ? "equity $" : n]}
+                  />
+                  <Area type="monotone" dataKey="eq" stroke="rgb(0 255 170)" strokeWidth={1.5} fill="url(#eqFill)" isAnimationActive={false} />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* v1.5.0 — journal feed: آخرین رویدادها + شمارندهٔ انواع */}
+      <div className="mt-2">
+        <div className="flex items-center justify-between text-[10px] uppercase tracking-wider text-muted-foreground">
+          <span className="flex items-center gap-1.5"><LineChart className="h-3 w-3" aria-hidden /> Event journal</span>
+          <span className="flex gap-1.5 font-mono normal-case">
+            {topKinds.map(([k, v]) => (
+              <span key={k} className="rounded border border-border/60 bg-background/40 px-1 py-px" title={`${k}: ${v}`}>{k.toLowerCase().replace("exec-", "")} {v}</span>
+            ))}
+          </span>
+        </div>
+        <div className="mt-1 max-h-24 overflow-y-auto space-y-0.5 pr-1">
+          {jEvents.length === 0 ? (
+            <div className="text-[11px] text-muted-foreground py-1">journal empty — waiting for events</div>
+          ) : (
+            jEvents.map((e, i) => (
+              <div key={`${e.at}-${i}`} className="flex items-center gap-2 text-[10px] rounded border border-border/30 bg-background/20 px-1.5 py-0.5">
+                <span className="font-mono text-muted-foreground shrink-0">{ago(e.at)}</span>
+                <span className="font-mono truncate max-w-36 text-neon">{e.ev}</span>
+                <span className="truncate text-muted-foreground" title={e.note}>{e.note ?? ""}</span>
+              </div>
+            ))
+          )}
+        </div>
       </div>
 
       {/* open positions — v13.2.2: ACTIVE-DB mirror invariant inline (operator Q trace 1a170800e221df4d) */}
