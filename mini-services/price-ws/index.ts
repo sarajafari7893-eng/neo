@@ -10,14 +10,12 @@
 //                    ALIVE (8 frames/8s direct test). Spot lives in a separate
 //                    rate/ban pool — feeding it as rung-2 restores Binance
 //                    price parity while the futures plane is IP-suppressed,
-//                    instead of jumping straight to BYBIT and losing the
-//                    reference venue. Same row shape; spot symbols that have
-//                    no futures twin simply never arrive (BYBIT covers those).
-//   4. WS·BYBIT    — Bybit v5 public linear tickers WS (SECOND EXCHANGE —
-//                    independent IP/rate budget, keeps live data flowing while
-//                    Binance fstream/fapi are IP-suppressed or 418-banned)
-//   5. WS·REST 2.5S— Binance fapi /ticker/24hr poll (ban-aware, v10.7)
-//   6. WS OFFLINE  — everything down; badge never lies
+//                    instead of jumping straight to the REST rungs and losing
+//                    the reference venue. Same row shape; spot symbols that
+//                    have no futures twin simply never arrive (v14.0: the
+//                    fuel ladder is Binance-only — cross-venue rungs retired).
+//   4. WS·REST 2.5S— Binance fapi /ticker/24hr poll (ban-aware, v10.7)
+//   5. WS OFFLINE  — everything down; badge never lies
 // Universe auto-syncs from the terminal pulse every 5min.
 
 import { Server } from "socket.io";
@@ -44,7 +42,6 @@ const REST_URL = "https://fapi.binance.com/fapi/v1/ticker/24hr";
 // same row shape, weight 80 on a fresh pool) instead of going dark or poking
 // the banned fapi pool (Task-50 law: every contact during a ban escalates).
 const SPOT_URL = "https://api.binance.com/api/v3/ticker/24hr";
-const BYBIT_WS = "wss://stream.bybit.com/v5/public/linear";
 const STALL_MS = 60_000;
 
 interface PriceRow {
@@ -58,7 +55,7 @@ interface PriceRow {
 }
 
 const prices = new Map<string, PriceRow>();
-let source: "WS PUSH" | "WS·FUT-BOOK" | "WS·SPOT" | "WS·BYBIT" | "WS·REST 2.5S" | "WS·REST·SPOT" | "WS OFFLINE" = "WS PUSH";
+let source: "WS PUSH" | "WS·FUT-BOOK" | "WS·SPOT" | "WS·REST 2.5S" | "WS·REST·SPOT" | "WS OFFLINE" = "WS PUSH";
 let lastWsFrame = 0;
 // v12.8 — spot-arr ring state
 let spotWsLastFrame = 0;
@@ -191,7 +188,7 @@ function observeOnset(symbol: string, price: number, lane: string, change24h: nu
 
 function observeTick(symbol: string, price: number, lane: string, change24h: number | null = null): void {
   if (!(price > 0)) return;
-  if (cascadeLastPrice.get(symbol) === price) return; // unchanged-tick dedupe (bybit heartbeats)
+  if (cascadeLastPrice.get(symbol) === price) return; // unchanged-tick dedupe (WS heartbeat reprints)
   cascadeLastPrice.set(symbol, price);
   observeOnset(symbol, price, lane, change24h); // v12.11 leading onset plane
   const now = Date.now();
@@ -221,7 +218,7 @@ function observeTick(symbol: string, price: number, lane: string, change24h: num
 // connections + teardown, and the compile-ramp OOM budget is precious). The
 // ONE sustained Binance plane from this egress is the spot !miniTicker@arr WS
 // ALREADY running here (v12.8 ring-2, hours-proven). This store keeps the
-// last genuine SPOT print per symbol (lane-isolated — bybit/futures lanes can
+// last genuine SPOT print per symbol (lane-isolated — futures/REST lanes can
 // never contaminate it) and pushes a compact snapshot to the app every 3s
 // (POST /api/internal/spotws-quotes → .data/spotws-quotes.json). The app's
 // venue consensus reads that file as rung 0 — real Binance prices, zero REST
@@ -273,7 +270,7 @@ setInterval(() => void pushSpotPrints(), 3000);
 // Raw stream frames arrive as the event object itself (no combined-wrapper):
 // { e:"24hrMiniTicker", E, s, c, o, h, l, v, q }. Symbol parity with futures
 // tickers is 1:1 for USDT pairs that exist on both planes (BTCUSDT…);
-// futures-only tickers simply never arrive here and stay on BYBIT fuel.
+// futures-only tickers simply never arrive here and stay on REST fuel (honest).
 function connectSpotWs(): void {
   try {
     const url = SPOT_WS_MIRRORS[spotWsMirrorIdx % SPOT_WS_MIRRORS.length]!;
@@ -433,15 +430,6 @@ setInterval(() => {
     /* best-effort telemetry */
   }
 }, 3000);
-
-// ── Bybit tier state (Task 35 — second reputable exchange) ─────────────────
-let bybLastFrame = 0;
-const bybSubscribed = new Set<string>();
-// Bybit tickers topic sends a full snapshot then field-level deltas — keep the
-// last partial per symbol so deltas can be merged into a complete row.
-type BybPartial = { symbol: string; price?: number; change24h?: number; high24h?: number; low24h?: number; volume24h?: number };
-const bybPartial = new Map<string, BybPartial>();
-let bybWs: WebSocket | null = null;
 
 async function restPoll() {
   if (restBannedUntil > 0 && Date.now() >= restBannedUntil) {
@@ -605,107 +593,24 @@ function connect() {
   }
 }
 
-// ── Bybit v5 public linear tickers WS (Task 35) ────────────────────────────
-function bybitSubscribe(symbols: string[]) {
-  if (!bybWs || bybWs.readyState !== WebSocket.OPEN) return;
-  const toSub = symbols.filter((s) => s.endsWith("USDT") && !bybSubscribed.has(s));
-  // Bybit v5: max 10 args per request — chunk politely.
-  for (let i = 0; i < toSub.length; i += 10) {
-    const args = toSub.slice(i, i + 10).map((s) => `tickers.${s}`);
-    bybWs.send(JSON.stringify({ op: "subscribe", args }));
-    for (const a of args) bybSubscribed.add(a.slice("tickers.".length));
-  }
-  if (toSub.length) console.log(`[price-ws] bybit subscribed +${toSub.length} (total ${bybSubscribed.size})`);
-}
-function connectBybit() {
-  try {
-    const ws = new WebSocket(BYBIT_WS);
-    bybWs = ws;
-    ws.onopen = () => {
-      console.log("[price-ws] bybit linear tickers WS open");
-      bybLastFrame = Date.now();
-      bybSubscribed.clear();
-      bybitSubscribe([...prices.keys()]);
-    };
-    ws.onmessage = (ev) => {
-      try {
-        const msg = JSON.parse(String(ev.data)) as {
-          topic?: string; type?: string;
-          data?: { symbol?: string; lastPrice?: string; price24hPcnt?: string; highPrice24h?: string; lowPrice24h?: string; turnover24h?: string };
-        };
-        if (msg.topic?.startsWith("tickers.") && msg.data?.symbol) {
-          const sym = msg.data.symbol;
-          if (!sym.endsWith("USDT")) return;
-          bybLastFrame = Date.now();
-          const base = bybPartial.get(sym) ?? { symbol: sym };
-          const p: BybPartial = {
-            ...base,
-            symbol: sym,
-            price: msg.data.lastPrice !== undefined ? Number(msg.data.lastPrice) : base.price,
-            change24h: msg.data.price24hPcnt !== undefined ? Number(msg.data.price24hPcnt) * 100 : base.change24h,
-            high24h: msg.data.highPrice24h !== undefined ? Number(msg.data.highPrice24h) : base.high24h,
-            low24h: msg.data.lowPrice24h !== undefined ? Number(msg.data.lowPrice24h) : base.low24h,
-            volume24h: msg.data.turnover24h !== undefined ? Number(msg.data.turnover24h) : base.volume24h,
-          };
-          bybPartial.set(sym, p);
-          if (p.price && p.price > 0) {
-            prices.set(sym, {
-              symbol: sym,
-              price: p.price,
-              change24h: p.change24h ?? 0,
-              high24h: p.high24h ?? p.price,
-              low24h: p.low24h ?? p.price,
-              volume24h: p.volume24h ?? 0,
-              at: Date.now(),
-            });
-            observeTick(sym, p.price, "WS·BYBIT", p.change24h ?? null); // v12.10 tick-velocity cascade detector
-            lastEventAt = Date.now();
-          }
-        }
-      } catch {
-        /* skip */
-      }
-    };
-    ws.onclose = () => {
-      console.log("[price-ws] bybit stream closed — reconnect 5s");
-      bybWs = null;
-      setTimeout(connectBybit, 5000);
-    };
-    ws.onerror = () => {};
-  } catch (err) {
-    console.error("[price-ws] bybit connect error", err);
-    setTimeout(connectBybit, 5000);
-  }
-}
-
-// Bybit requires an app-level ping every ~20s to keep the session alive.
-setInterval(() => {
-  if (bybWs && bybWs.readyState === WebSocket.OPEN) bybWs.send(JSON.stringify({ op: "ping" }));
-}, 20_000);
-
-connect();
-connectSpotWs(); // v12.8 — spot ring opens alongside the futures ring (whichever flows, fuels)
-connectBybit();
 // v13.5 — staggered futures bookTicker ring boot (44 liquid perps; staggered
 // to stay inside fstream's per-IP connection-attempt budget).
 FUT_CORE_SYMBOLS.forEach((sym, i) => setTimeout(() => connectFutBook(sym), 1500 + i * 250));
 
-// stall watchdog → fuel priority (binance futures WS > futures bookTicker ring > binance spot WS > bybit WS > REST > OFFLINE)
+// v14.0 stall watchdog → fuel priority (binance futures WS > futures bookTicker ring > binance spot WS > REST > OFFLINE)
 setInterval(() => {
   const wsAlive = Date.now() - lastWsFrame <= STALL_MS;
   const futBookAlive = Date.now() - futBookLastFrame <= STALL_MS;
   const spotWsAlive = Date.now() - spotWsLastFrame <= STALL_MS;
-  const bybAlive = Date.now() - bybLastFrame <= STALL_MS;
   const banned = Date.now() < restBannedUntil;
   let next: typeof source;
   if (wsAlive) next = "WS PUSH";
   else if (futBookAlive) next = "WS·FUT-BOOK";
   else if (spotWsAlive) next = "WS·SPOT";
-  else if (bybAlive) next = "WS·BYBIT";
   else if (banned) next = Date.now() - spotLastOkAt <= 30_000 ? "WS·REST·SPOT" : "WS OFFLINE";
   else next = "WS·REST 2.5S";
   if (source !== next) {
-    console.log(`[price-ws] source → ${next}${!wsAlive && spotWsAlive ? " (futures fstream silent — spot-arr ring fuel, v12.8)" : ""}${!wsAlive && !spotWsAlive && bybAlive ? " (binance silent — bybit fuel)" : ""}${banned && !wsAlive && !spotWsAlive && !bybAlive && next === "WS OFFLINE" ? ` (REST ban until ${new Date(restBannedUntil).toISOString()})` : ""}${next === "WS·REST·SPOT" ? " (SPOT-MIRROR fuel rung, Task-52)" : ""}`);
+    console.log(`[price-ws] source → ${next}${!wsAlive && spotWsAlive ? " (futures fstream silent — spot-arr ring fuel, v12.8)" : ""}${banned && !wsAlive && !spotWsAlive && next === "WS OFFLINE" ? ` (REST ban until ${new Date(restBannedUntil).toISOString()})` : ""}${next === "WS·REST·SPOT" ? " (SPOT-MIRROR fuel rung, Task-52)" : ""}`);
     source = next;
   }
 }, 5000);
@@ -730,7 +635,6 @@ async function syncUniverse() {
     for (const m of snap.market ?? []) {
       if (!prices.has(m.symbol)) prices.set(m.symbol, { symbol: m.symbol, price: 0, change24h: 0, high24h: 0, low24h: 0, volume24h: 0, at: 0 });
     }
-    bybitSubscribe([...prices.keys()]);
   } catch {
     /* terminal may be restarting */
   }

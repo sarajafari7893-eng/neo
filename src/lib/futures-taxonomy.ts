@@ -8,7 +8,7 @@
 //   B  Aggressor flow   real-tape CVD (trade-service :3011)
 //   C  Forced flow      liquidations (liq-service :3010)
 //   D  Structure        OI × Price four-quadrant (the operator's framework)
-//   E  Cross-exchange   funding/OI divergence Binance vs Bybit vs OKX
+//   E  Cross-plane     funding/OI divergence across Binance planes (v14.0)
 //
 // Design doctrine:
 //  · Boards get overwritten — learning needs HISTORY, so every sample is a
@@ -117,45 +117,23 @@ interface PremIndex { markPrice: string; lastFundingRate: string; nextFundingTim
 interface OiHistRow { sumOpenInterest: string; sumOpenInterestValue: string; timestamp: number }
 interface LsRow { longShortRatio: string; timestamp: number }
 
-interface BybitTicker { retCode: number; result?: { list?: Array<{ fundingRate: string; openInterest: string; lastPrice: string }> } }
-interface OkxEnvelope { code: string; data?: Array<{ fundingRate?: string; oiCcy?: string }> }
-
-const OKX_INST = (symbol: string): string => `${symbol.replace(/USDT$/, "")}-USDT-SWAP`;
-
-async function crossExchange(symbol: string): Promise<{ fundingByb: number | null; oiByb: number | null; fundingOkx: number | null; oiOkx: number | null; lastPriceByb: number | null }> {
-  const [byb, okxF, okxOi] = await Promise.all([
-    jsonUrl<BybitTicker>(`https://api.bybit.com/v5/market/tickers?category=linear&symbol=${symbol}`),
-    jsonUrl<OkxEnvelope>(`https://www.okx.com/api/v5/public/funding-rate?instId=${OKX_INST(symbol)}`),
-    jsonUrl<OkxEnvelope>(`https://www.okx.com/api/v5/public/open-interest?instType=SWAP&instId=${OKX_INST(symbol)}`),
+// v14.0 BINANCE-ONLY CROSS-CHECK (replaces the retired cross-exchange leg) —
+// settled funding (history endpoint) and the CURRENT OI (per-symbol endpoint)
+// are measured against the primary premiumIndex / openInterestHist lanes:
+// real Binance cross-plane divergence, zero foreign venues.
+async function crossCheck(symbol: string): Promise<{ fundingSettled: number | null; oiChk: number | null }> {
+  const [settledRows, oiCur] = await Promise.all([
+    fapi<Array<{ fundingRate: string }>>(`/fapi/v1/fundingRate?symbol=${symbol}&limit=1`),
+    fapi<{ openInterest: string }>(`/fapi/v1/openInterest?symbol=${symbol}`),
   ]);
-  const b = byb?.retCode === 0 ? byb.result?.list?.[0] : undefined;
-  const f = okxF?.code === "0" ? okxF.data?.[0] : undefined;
-  const o = okxOi?.code === "0" ? okxOi.data?.[0] : undefined;
-  const pByb = b?.lastPrice ? Number(b.lastPrice) : NaN;
+  const s = Number(settledRows?.[0]?.fundingRate);
+  const o = Number(oiCur?.openInterest);
   return {
-    fundingByb: b ? Number(b.fundingRate) * 100 : null,
-    oiByb: b ? Number(b.openInterest) || null : null,
-    fundingOkx: f?.fundingRate ? Number(f.fundingRate) * 100 : null,
-    oiOkx: o?.oiCcy ? Number(o.oiCcy) || null : null,
-    // Task 35 — Bybit linear lastPrice rides the SAME tickers call (zero extra
-    // requests): tier-2 futures-true price when fapi markPrice is banned.
-    lastPriceByb: Number.isFinite(pByb) && pByb > 0 ? pByb : null,
+    fundingSettled: Number.isFinite(s) && settledRows ? s * 100 : null,
+    oiChk: Number.isFinite(o) && o > 0 ? o : null,
   };
 }
 
-// Task 35 — Bybit v5 linear klines: futures-true candle closes from the second
-// exchange. Response list is NEWEST-first → reversed to the fapi/spot shape.
-async function bybitKlines(symbol: string, interval: string, limit: number): Promise<Array<[number, string, string, string, string]> | null> {
-  const j = await jsonUrl<{ retCode: number; result?: { list?: string[][] } }>(
-    `https://api.bybit.com/v5/market/kline?category=linear&symbol=${symbol}&interval=${interval}&limit=${limit}`,
-  );
-  const rows = j?.retCode === 0 ? j.result?.list : undefined;
-  if (!rows || rows.length === 0) return null;
-  return rows
-    .slice()
-    .reverse()
-    .map((r) => [Number(r[0]), r[1] ?? "", r[2] ?? "", r[3] ?? "", r[4] ?? ""] as [number, string, string, string, string]);
-}
 
 // ── sampler ────────────────────────────────────────────────────────────────
 
@@ -196,16 +174,14 @@ export async function maybeFuturesSample(force = false): Promise<FuturesSampleOu
           }),
           getTape(symbol),
           getLiquidationSnapshot(),
-          crossExchange(symbol),
+          crossCheck(symbol),
         ]);
 
-        // Task 34-4/35 — price fallback tiers: fapi markPrice → Bybit linear
-        // lastPrice (second exchange, already in-hand from crossExchange —
-        // zero extra requests) → binance spot mirror. A fapi ban window no
-        // longer zeroes the whole sample; the row keeps flowing with
-        // futures-only families honestly null.
+        // Task 34-4/35 — price fallback tiers (v14.0 Binance-only): fapi
+        // markPrice → binance spot mirror. A fapi ban window no longer zeroes
+        // the whole sample; the row keeps flowing with futures-only families
+        // honestly null.
         let price = prem ? Number(prem.markPrice) || null : null;
-        if (price === null) price = cross.lastPriceByb;
         if (price === null) price = await spotPrice(symbol);
         if (price === null) continue; // honest — no price from ANY host, no row
 
@@ -218,7 +194,6 @@ export async function maybeFuturesSample(force = false): Promise<FuturesSampleOu
         // price deltas: 15m from the 5m kline mini-series, 1h from our OWN row
         // (self-consistent with the stored series) — klines fallback below.
         let closes = k5 ? k5.map((k) => Number(k[4])) : [];
-        if (closes.length < 4) closes = (await bybitKlines(symbol, "5", 4))?.map((k) => Number(k[4])) ?? [];
         if (closes.length < 4) {
           const k5s = await spotKlines(symbol, "5m", 4);
           closes = k5s ? k5s.map((k) => Number(k[4])) : [];
@@ -227,7 +202,6 @@ export async function maybeFuturesSample(force = false): Promise<FuturesSampleOu
         let priceDelta1h: number | null = prevRow ? pct(price, prevRow.price) : null;
         if (priceDelta1h === null) {
           let k1 = await fapi<Array<[number, string, string, string, string]>>(`/fapi/v1/klines?symbol=${symbol}&interval=1h&limit=3`);
-          if (!k1) k1 = await bybitKlines(symbol, "60", 3);
           if (!k1) k1 = await spotKlines(symbol, "1h", 3);
           const c1 = k1 ? k1.map((k) => Number(k[4])) : [];
           if (c1.length >= 3) priceDelta1h = pct(c1[c1.length - 1]!, c1[0]!);
@@ -258,10 +232,8 @@ export async function maybeFuturesSample(force = false): Promise<FuturesSampleOu
           liqLong10mUsd: liqRow ? Math.round(liqRow.longsUsd10m) : null,
           liqShort10mUsd: liqRow ? Math.round(liqRow.shortsUsd10m) : null,
           liqUsd1h: liqRow ? Math.round(liqRow.usd1h) : null,
-          fundingByb: cross.fundingByb,
-          oiByb: cross.oiByb,
-          fundingOkx: cross.fundingOkx,
-          oiOkx: cross.oiOkx,
+          fundingSettled: cross.fundingSettled,
+          oiChk: cross.oiChk,
         };
 
         await db.futuresSnapshot.upsert({
@@ -414,10 +386,8 @@ async function backfillSymbol(symbol: string): Promise<number> {
       liqLong10mUsd: null,
       liqShort10mUsd: null,
       liqUsd1h: null,
-      fundingByb: null,
-      oiByb: null,
-      fundingOkx: null,
-      oiOkx: null,
+      fundingSettled: null,
+      oiChk: null,
       fwd15mPct: null,
       // inline settlement from the series itself
       fwd1hPct: (() => {
@@ -521,11 +491,9 @@ interface StudyRow {
   cvd15mPct: number | null;
   liqLong10mUsd: number | null;
   liqShort10mUsd: number | null;
-  fundingByb: number | null;
-  fundingOkx: number | null;
+  fundingSettled: number | null;
   oiBase: number | null;
-  oiByb: number | null;
-  oiOkx: number | null;
+  oiChk: number | null;
 }
 
 export interface EdgeCandidate {
@@ -599,7 +567,7 @@ export async function buildFuturesEdge(force = false): Promise<FuturesEdge> {
       ts: true, price: true, quadrant1h: true, fwd1hPct: true, fwd4hPct: true,
       funding8h: true, crowdLS: true, topLS: true, cvd15mPct: true,
       liqLong10mUsd: true, liqShort10mUsd: true,
-      fundingByb: true, fundingOkx: true, oiBase: true, oiByb: true, oiOkx: true,
+      fundingSettled: true, oiBase: true, oiChk: true,
     },
     orderBy: { ts: "asc" },
     take: 40_000,
@@ -684,9 +652,11 @@ export async function buildFuturesEdge(force = false): Promise<FuturesEdge> {
     }
   }
 
-  const crossSpread = rows.map((r) => (r.fundingByb !== null && r.funding8h !== null ? Math.abs(r.funding8h - r.fundingByb) : null)).filter((v): v is number => v !== null);
+  // v14.0 — predicted (premiumIndex) vs SETTLED (fundingRate history) funding
+  // divergence: the Binance cross-plane successor of the old cross-venue rule.
+  const crossSpread = rows.map((r) => (r.fundingSettled !== null && r.funding8h !== null ? Math.abs(r.funding8h - r.fundingSettled) : null)).filter((v): v is number => v !== null);
   const xsHi = pctl(crossSpread, 0.9);
-  if (xsHi !== null) push("CROSS_FUNDING_WIDE", "E", `|funding BIN−BYB| ≥ ${xsHi.toFixed(4)}%`, settled.filter((r) => r.fundingByb !== null && r.funding8h !== null && Math.abs(r.funding8h - r.fundingByb) >= xsHi), `p90 of ${crossSpread.length} live rows`);
+  if (xsHi !== null) push("CROSS_FUNDING_WIDE", "E", `|funding pred−settled| ≥ ${xsHi.toFixed(4)}%`, settled.filter((r) => r.fundingSettled !== null && r.funding8h !== null && Math.abs(r.funding8h - r.fundingSettled) >= xsHi), `p90 of ${crossSpread.length} live rows`);
 
   fam.sort((a, b) => Math.abs(b.edge) - Math.abs(a.edge));
 
@@ -814,10 +784,8 @@ export interface FuturesLive {
     liqLong10mUsd: number | null;
     liqShort10mUsd: number | null;
     liqUsd1h: number | null;
-    fundingByb: number | null;
-    oiByb: number | null;
-    fundingOkx: number | null;
-    oiOkx: number | null;
+    fundingSettled: number | null;
+    oiChk: number | null;
     crossSpreadBps8h: number | null;
   }>;
   series: Array<{ symbol: string; points: Array<{ ts: number; price: number; oiBase: number | null; quadrant1h: string | null }> }>;
@@ -861,7 +829,7 @@ export async function getFuturesLive(force = false): Promise<FuturesLive> {
         symbol: FUTURES_ANCHORS[i]!, ts: "", price: 0, oiBase: null, oiUsdM: null, priceDelta15m: null, priceDelta1h: null,
         oiDelta15m: null, oiDelta1h: null, quadrant15m: null, quadrant1h: null, funding8h: null, crowdLS: null, topLS: null,
         cvd15mPct: null, cvd1hPct: null, liqLong10mUsd: null, liqShort10mUsd: null, liqUsd1h: null,
-        fundingByb: null, oiByb: null, fundingOkx: null, oiOkx: null, crossSpreadBps8h: null,
+        fundingSettled: null, oiChk: null, crossSpreadBps8h: null,
       };
     }
     return {
@@ -884,13 +852,11 @@ export async function getFuturesLive(force = false): Promise<FuturesLive> {
       liqLong10mUsd: row.liqLong10mUsd,
       liqShort10mUsd: row.liqShort10mUsd,
       liqUsd1h: row.liqUsd1h,
-      fundingByb: row.fundingByb,
-      oiByb: row.oiByb,
-      fundingOkx: row.fundingOkx,
-      oiOkx: row.oiOkx,
+      fundingSettled: row.fundingSettled,
+      oiChk: row.oiChk,
       crossSpreadBps8h:
-        row.fundingByb !== null && row.funding8h !== null
-          ? Number(((row.funding8h - row.fundingByb) * 10_000).toFixed(1)) // bps per 8h
+        row.fundingSettled !== null && row.funding8h !== null
+          ? Number(((row.funding8h - row.fundingSettled) * 10_000).toFixed(1)) // bps per 8h (predicted − settled)
           : null,
     };
   });

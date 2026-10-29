@@ -501,7 +501,7 @@ function buildReview(): string {
   L.push(`- REST فیوچرز (fapi.binance.com): ${b.fapiRest === "OK" ? "🟢 OK" : b.fapiRest === "BANNED" ? `🟠 بن 418 تا ساعت ${hhmmTehran(b.fapiBannedUntil)} (بازیابی خودکار)` : b.fapiRest === "DOWN" ? "🔴 DOWN" : "⚪ UNKNOWN"}`);
   L.push(`- WS فیوچرز (fstream): ${b.perpWs === "CONNECTED" ? "🟢 متصل" : b.perpWs === "DEAD" ? "🟠 متصل‌بدون‌فریم/قطع (محدودیت egress سندباکس)" : "⚪ UNKNOWN"}`);
   L.push(`- WS اسپات — مسیر جایگزین (stream.binance.com): ${b.spotWs === "OK" ? "🟢 فریم می‌گیرد" : b.spotWs === "DEAD" ? "🔴 بدون فریم" : "⚪ UNKNOWN"}`);
-  L.push(`- WS لیکوییدیشن بایننس (از liq-service): ${b.liqBinanceWs === "CONNECTED" ? "🟢 متصل" : "🟠 بدون فریم (جبران با bybit/okx/bitget)"}`);
+  L.push(`- WS لیکوییدیشن بایننس (از liq-service): ${b.liqBinanceWs === "CONNECTED" ? "🟢 متصل" : "🟠 بدون فریم (جبران با نردبان SPOT-MIRROR بایننس (v14.0))"}`);
   if (b.banCount > 0 || b.recoveryCount > 0) {
     L.push(`- پیگیری: ${b.banCount} بن ثبت‌شده، ${b.recoveryCount} بازیابی تأییدشده. آخرین بن: ${b.lastBanAt ? hhmmTehran(b.lastBanAt) : "—"} · آخرین بازیابی: ${b.lastRecoveryAt ? hhmmTehran(b.lastRecoveryAt) : "—"}`);
   }

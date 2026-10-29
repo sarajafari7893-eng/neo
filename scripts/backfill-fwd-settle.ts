@@ -7,7 +7,7 @@
 //     (fwd15m/fwd1h/fwd4h).
 // Price resolution uses the shared kit in src/lib/futures-snapshot-settle.ts:
 //   sibling snapshot (egress-free) → PricePoint (the app's own WS archive)
-//   → ranged kline ladder fapi(weight-gated) → SPOT-MIRROR → BYBIT.
+//   → ranged kline ladder fapi(weight-gated) → SPOT-MIRROR (v14.0 Binance-only).
 // Honest-failure doctrine: Binance fapi has been egress-banned on this box in
 // recent weeks — every rung failure is counted (failure-reason histogram at
 // the end), a row that resolves on NO rung stays pending, and the batch

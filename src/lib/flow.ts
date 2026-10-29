@@ -239,7 +239,7 @@ export async function fetchFlowMetrics(symbol: string): Promise<FlowMetrics | nu
 
       // v6.7: real USD taker flow + whale prints from the same aggTrades pull
       // (trades ≤1000 ≈ last minutes on liquid symbols; windows clipped by T).
-      // v12.2 TASK-52: tape ladder — fapi aggTrades → BYBIT recent-trade →
+      // v12.2 TASK-52 (v14.0): tape ladder — fapi aggTrades → SPOT-MIRROR trades →
       // SPOT-MIRROR trades (spot = last resort: spot flow ≠ perp flow).
       let agg = aggTrades.status === "fulfilled" ? aggTrades.value : [];
       if (agg.length === 0) {
@@ -578,7 +578,7 @@ export async function scoreFlow(symbol: string, direction: "LONG" | "SHORT", pri
   // ── v12.8 SURROGATE-FLOW CAP (AUDIT-20261023, operator mandate «اصلاح
   // پیشنهادی را کامل و مهندسی اجرا کن») ──
   // Forensics NX-3014 (BTWUSDT 03:13Z): the flow bundle read "CONFIRMS +10"
-  // while its source was the BYBIT bridge (fapi banned) on a symbol whose
+  // while its source was the SPOT-MIRROR bridge (fapi banned) on a symbol whose
   // BINANCE quote was null and whose cross-venue dislocation ran 90-105bps —
   // the price collapsed −4.5% within 48s of deploy (SL −61.2% in 103s). A
   // surrogate venue's tape is REAL tape, but it is the WRONG venue's tape for

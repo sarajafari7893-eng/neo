@@ -60,7 +60,7 @@ export function Footer() {
               DOMAIN <span className="text-ink-2">{data?.feed?.universe ? `${data.feed.universe.tracked}/${data.feed.universe.poolTotal || "~"} PERPS` : "--"}</span>
             </span>
             <span className="hidden sm:inline">
-              SOURCE <span className="text-ink-2">BINANCE · OKX · BYBIT · HYPERLIQUID</span>
+              SOURCE <span className="text-ink-2">BINANCE MULTI-PLANE</span>
             </span>
             <span className="hidden sm:inline">
               ENGINE <span className="text-violet-neon">{APP_ENGINE_LINE}</span>
@@ -79,7 +79,7 @@ export function Footer() {
 
           {/* disclaimer */}
           <p className="max-w-xs text-center font-terminal text-[9px] leading-relaxed text-ink-3 md:text-right">
-            NOT FINANCIAL ADVICE. MARKET DATA VIA BINANCE/OKX/BYBIT/HYPERLIQUID PUBLIC APIs · PAPER TRADING ONLY.
+            NOT FINANCIAL ADVICE. MARKET DATA VIA BINANCE PUBLIC APIS (MULTI-PLANE LADDERS) · PAPER TRADING ONLY.
           </p>
         </div>
       </div>

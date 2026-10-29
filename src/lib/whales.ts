@@ -35,7 +35,7 @@
 
 import { db } from "@/lib/db";
 import { gateFetch } from "./fapi-gate";
-import { bridgeTape, bybitTickerRow, bridgeDepth, type TapeTrade } from "./flow-bridge";
+import { bridgeTape, futTickerRow, bridgeDepth, type TapeTrade } from "./flow-bridge";
 
 const WHALE_MIN_USD = 150_000;
 const WHALE_WINDOW_MS = 15 * 60_000;
@@ -141,7 +141,7 @@ function aggregateWhales(trades: TapeTrade[]): WhaleSymbolRead["whales"] {
 }
 
 /** Cheap discovery probe — v12.2 TASK-52: tape LADDER (fapi aggTrades →
- * BYBIT linear recent-trade → SPOT-MIRROR trades) instead of a raw weight-20
+ * Binance SPOT-MIRROR trades → then dies honestly) instead of a raw weight-20
  * fapi hit per symbol; during ban windows the sweep keeps flowing on the
  * bridge instead of starving the discovery ring. */
 async function probeTape(symbol: string): Promise<WhaleSymbolRead["whales"]> {
@@ -283,11 +283,11 @@ export function whaleVote(
 }
 
 async function readSymbol(symbol: string): Promise<WhaleSymbolRead> {
-  // v12.2 TASK-52 — the heavy tape leg rides the bridge ladder (fapi → BYBIT
-  // → SPOT-MIRROR); the ratio/book/OI legs are Binance-only lanes that
-  // degrade honestly (stale flags) — no equivalents exist elsewhere.
-  // v12.3 TASK-52 — the book leg now rides the depth ladder too (fapi → BYBIT
-  // linear book → SPOT-MIRROR) instead of dying silently during fapi bans.
+  // v12.2 TASK-52 — the heavy tape leg rides the bridge ladder (fapi →
+  // SPOT-MIRROR, v14.0 Binance-only); the ratio/book/OI legs are fapi-only
+  // lanes that degrade honestly (stale flags) — no spot equivalents exist.
+  // v12.3 TASK-52 — the book leg now rides the depth ladder too (fapi →
+  // SPOT-MIRROR) instead of dying silently during fapi bans.
   const [tape, smart, depth, oiHist] = await Promise.allSettled([
     bridgeTape(symbol),
     fapi<Array<{ longShortRatio: string; longAccount: string; shortAccount: string; timestamp: number }>>(`/futures/data/topLongShortPositionRatio?symbol=${symbol}&period=5m&limit=2`),
@@ -318,9 +318,10 @@ async function readSymbol(symbol: string): Promise<WhaleSymbolRead> {
   let oiUsd: number | null = null;
   if (oiHist.status === "fulfilled" && oiHist.value.length) oiUsd = Number(oiHist.value[oiHist.value.length - 1]!.sumOpenInterestValue);
   else {
-    // v12.2 TASK-52: bybit tickers carry openInterestValue — the absolute OI
-    // context survives fapi starvation instead of going stale.
-    const t = await bybitTickerRow(symbol).catch(() => null);
+    // v14.0: the Binance composite ticker leg (fapi openInterest × markPrice)
+    // carries the absolute OI context through fapi starvation instead of
+    // going stale; null honestly when both planes miss it.
+    const t = await futTickerRow(symbol).catch(() => null);
     if (t?.openInterestValue) oiUsd = t.openInterestValue;
     else stale = true;
   }

@@ -5,7 +5,7 @@
 // BTWUSDT SHORT −61.21%, NX-3013 IRYSUSDT LONG −61.22%, NX-3045 IRYSUSDT
 // LONG whipsaw) through the EXACT v12.9 gate formulas from engine.ts
 // (FLUSH-EXHAUSTION ①/KNIFE-CATCH ②/EVENT-VOL STOP-FLOOR ③/SINGLE-VENUE ④/
-// NO-BINANCE-CONFIRM ⑤), using the real 15m candle series (Bybit public
+// NO-BINANCE-CONFIRM ⑤), using the real 15m candle series (Binance vision mirror,
 // kline) that the engine would have seen at each entry moment.
 //
 // READ-ONLY: db/custom.db readonly + public kline GET. Zero app writes.
@@ -47,11 +47,11 @@ for (const s of serials) {
 // ── fetch the real 15m candle series (public, no auth) ──
 async function klines(symbol: string, endAt: number): Promise<Candle[]> {
   const start = endAt - 8 * 3600_000;
-  const url = `https://api.bybit.com/v5/market/kline?category=linear&symbol=${symbol}&interval=15&start=${start}&end=${endAt + 120_000}&limit=60`;
+  const url = `https://data-api.binance.vision/api/v3/klines?symbol=${symbol}&interval=15m&startTime=${start}&endTime=${endAt + 120_000}&limit=60`;
   const res = await fetch(url);
   const j = (await res.json()) as { result?: { list?: string[][] } };
   const list = j.result?.list ?? [];
-  // Bybit returns newest-first [start, open, high, low, close, volume, turnover]
+  // Binance klines are ASC [openTime, open, high, low, close, volume, closeTime] — shape handled below
   return list
     .map((r) => ({ start: Number(r[0]), open: Number(r[1]), high: Number(r[2]), low: Number(r[3]), close: Number(r[4]) }))
     .sort((a, b) => a.start - b.start);
@@ -150,7 +150,7 @@ function replayGates(t: Trade, candles: Candle[]): Array<{ gate: string; verdict
 
   // ④ SINGLE-VENUE / ⑤ NO-BINANCE-CONFIRM (engine.ts:1792-1808)
   if (t.venues === 1) {
-    out.push({ gate: "④ SINGLE-VENUE", verdict: "REFUSED", detail: `only ONE live venue (BYBIT) — cross-venue confirmation impossible, no Binance ticket → machine deploy refused` });
+    out.push({ gate: "④ SINGLE-VENUE", verdict: "REFUSED", detail: `only ONE live plane — cross-plane confirmation impossible, no Binance ticket → machine deploy refused` });
   } else if (t.venues >= 2 && !t.binanceLive) {
     out.push({ gate: "⑤ NO-BINANCE-CONFIRM", verdict: "SURCHARGE +12", detail: `${t.venues} live venues, BINANCE quote null → effective threshold +12 (higher bar, not a hard refusal)` });
   }

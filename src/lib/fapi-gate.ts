@@ -45,7 +45,7 @@
 // State lives on globalThis so Turbopack's dev module-graph duplication
 // (route graph vs engine graph) still shares ONE process-wide bucket.
 //
-// SPOT (api.binance.com) and other exchanges (OKX/Bybit/Hyperliquid) must
+// SPOT (api.binance.com) and mirror-plane hosts (v14.0 Binance-only) must
 // NOT pass through here — futures fapi host only.
 //
 // ── v12.0 EGRESS/IP MANAGER (Task 44-②, operator order «مدیریت egress/IP
@@ -72,7 +72,7 @@
 // NEXUS_FAPI_HOST in .env to a reachable futures-mirror and restart the app.
 // Default stays the canonical host. Downstream replaceability ladder is
 // already layered: fapi-gate (this) → SPOT-MIRROR aggTrade WS → spot REST
-// klines/price fallback → multi-venue liq (bybit/okx/bitget).
+// klines/price fallback → Binance-only liq lanes (v14.0).
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 
 const FAPI_HOST = process.env.NEXUS_FAPI_HOST?.trim().replace(/\/+$/, "") || "https://fapi.binance.com";
@@ -195,7 +195,7 @@ const state: GateState =
 // is MAJORITY-CLEAN, yet the v12.1 rule “one named-IP ban in the ledger ⇒
 // GLOBAL zero-network window until the worst ban end” blacked out the whole
 // fapi plane (flow BINANCE rung, venue consensus, OI/funding/tape/depth) for
-// up to 35min per event and pushed flow to BYBIT ×0.5 for most of its life.
+// up to 35min per event and pushed flow weighting ×0.5 for most of its life.
 //   · NAMED-IP entries («1.2.3.4»: until) = pool INTEL: recorded, retried
 //     around (≤2, 120ms — pool rotation), but they NO LONGER arm the global
 //     silence. Worst case stays bounded by the existing escalation ladder

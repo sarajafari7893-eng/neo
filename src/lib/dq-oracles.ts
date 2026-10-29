@@ -1,16 +1,12 @@
 /**
- * ── NEXUS//SIGNALS — DQ-ORACLES v1.1 (trace 1a181db841517571 + 1a184429d4bd0d05)
- * RESTORED 2026-10-29 after the 22:54Z golden-restore wipe (trace
- * 1a1849f647778885) — content recovered verbatim from the live session
- * transcripts of the original build + the v1.1 upgrade.
+ * ── NEXUS//SIGNALS — DQ-ORACLES v2.0 (v14.0 BINANCE-ONLY, trace 1a185042c872b4f9)
+ * Operator mandate: «ردپای OKX/Bybit در کجا وجود دارد و با بایننس جایگزین شود».
  *
- * Operator mandate: «پیشنهاد 3 اولویت API را کامل و مهندسی انجام بده» + the
- * follow-up question: are these feeds faster / more trustworthy than Binance?
- *
- * THE THREE ENGINEERED PRIORITY APIS (top-3 of the free-crypto-apis audit):
- *   P1  OKX v5 public (perp ticker + funding-rate + open-interest)
- *       → the ONLY keyless exchange-native mirror of Binance-USDT-perp
- *         price/funding/OI — the MIRROR-LAG + Binance-anomaly guard.
+ * THE THREE ENGINEERED PRIORITY APIS (Binance-only rewrite of the v1.1 stack):
+ *   P1  Binance FUTWS ring (per-symbol futures bookTicker WS, price-ws :3003)
+ *       → the exchange-native WS plane — INDEPENDENT of the REST reference
+ *         ladder (different process, different transport) — the MIRROR-LAG +
+ *         Binance-anomaly guard, now pure Binance.
  *   P2  Coinlore (keyless aggregator)
  *       → independent aggregated spot price + global metrics, no key, no caps.
  *   P3  CoinPaprika (keyless aggregator)
@@ -23,20 +19,17 @@
  * NEVER throws into callers. 45s in-process cache keeps the hot paths cheap.
  * Server-only: uses plain fetch; no keys, no secrets.
  *
- * v1.1 BINANCE-REFERENCE-LADDER (trace 1a184429d4bd0d05 — operator mandate
- * «صرافی بایننس (مرجع) قرار بده … اتصال پایدار»): the REFERENCE plane itself
- * must never die with one host. Spot bookTicker now walks the full official
- * spot-REST ladder (vision → api-gcp → api1-4 → api) with the shared per-host
- * 418/429 backoff gate — the same ladder every other spot-plane consumer
- * uses. fapi (premiumIndex/openInterest) stays single-host: probe 2026-10-28
- * re-confirmed fapi1/fapi2 are NOT API hosts (HTTP 202 empty — a wildcard
- * CDN trap, not a mirror); fapi-gate's per-IP pool rotation already owns
- * that plane's resilience.
+ * BINANCE-REFERENCE-LADDER (v1.1, kept): the REFERENCE plane never dies with
+ * one host — spot bookTicker walks the full official spot-REST ladder
+ * (vision → api-gcp → api1-4 → api) with the shared per-host 418/429 backoff
+ * gate. fapi (premiumIndex/openInterest) stays single-host: probe 2026-10-28
+ * re-confirmed fapi1/fapi2 are NOT API hosts (HTTP 202 empty — a wildcard CDN
+ * trap, not a mirror); fapi-gate's per-IP pool rotation owns that plane.
  */
 
 import { noteSpotHostThrottle, spotHostsReady } from "./spot-host-gate"; // v1.1 reference ladder
 
-export type DqProviderId = "okx" | "coinlore" | "coinpaprika";
+export type DqProviderId = "binance-futws" | "coinlore" | "coinpaprika";
 
 export type DqProviderQuote = {
   provider: DqProviderId;
@@ -77,7 +70,6 @@ export type DqReport = {
 // ── symbol mapping (BTC + ETH verified ids; other symbols degrade to nulls) ─
 const COINLORE_ID: Record<string, string> = { BTCUSDT: "90", ETHUSDT: "80" };
 const PAPRIKA_ID: Record<string, string> = { BTCUSDT: "btc-bitcoin", ETHUSDT: "eth-ethereum" };
-const OKX_INST: Record<string, string> = { BTCUSDT: "BTC-USDT-SWAP", ETHUSDT: "ETH-USDT-SWAP" };
 
 const num = (v: unknown): number | null => {
   const n = typeof v === "string" ? Number(v) : typeof v === "number" ? v : NaN;
@@ -151,27 +143,37 @@ async function binanceReference(symbol: string) {
 
 type Parsed = { px: number | null; funding: number | null; oiUsd: number | null; sourceTs: number | null };
 
-// ── P1: OKX v5 (exchange-native perp mirror) ─────────────────────────────────
-async function okxMirror(symbol: string) {
-  const inst = OKX_INST[symbol];
-  if (!inst) return { px: null, funding: null, oiUsd: null, sourceTs: null } satisfies Parsed;
-  const [tick, fund, oi] = await Promise.all([
-    getJson(`https://www.okx.com/api/v5/market/ticker?instId=${inst}`, 6000),
-    getJson(`https://www.okx.com/api/v5/public/funding-rate?instId=${inst}`, 6000),
-    getJson(`https://www.okx.com/api/v5/public/open-interest?instId=${inst}`, 6000),
-  ]);
-  const td = ((tick.j as { data?: Array<{ last?: string; ts?: string }> } | null)?.data ?? [])[0];
-  const fd = ((fund.j as { data?: Array<{ fundingRate?: string; ts?: string }> } | null)?.data ?? [])[0];
-  const od = ((oi.j as { data?: Array<{ oiCcy?: string }> } | null)?.data ?? [])[0];
-  const oiCoins = num(od?.oiCcy);
-  const px = num(td?.last);
-  // mark price is not on the ticker; approximate USD OI with last px (≤ few bps off)
-  return {
-    px,
-    funding: num(fd?.fundingRate),
-    oiUsd: oiCoins !== null && px !== null ? oiCoins * px : null,
-    sourceTs: num(td?.ts),
-  } satisfies Parsed;
+// ── P1: Binance FUTWS ring (exchange-native futures WS plane) ────────────────
+// price-ws :3003 holds the SUSTAINED per-symbol fstream bookTicker ring and
+// pushes .data/futws-quotes.json — REAL futures mids with zero REST weight.
+// Independent of the REST reference by transport AND by process.
+const FUTWS_FILE = "data/futws-quotes.json";
+const FUTWS_FILE_MAX_AGE_MS = 15_000;
+const FUTWS_QUOTE_FRESH_MS = 90_000;
+let futwsCache: { at: number; map: Map<string, { m: number; t: number }> } | null = null;
+async function futwsMirror(symbol: string): Promise<Parsed> {
+  try {
+    const now = Date.now();
+    if (!futwsCache || now - futwsCache.at > 3_000) {
+      const map = new Map<string, { m: number; t: number }>();
+      const { readFile } = await import("fs");
+      const raw = JSON.parse(await readFile(FUTWS_FILE, "utf8")) as { at?: number; rows?: Array<{ s?: string; m?: number; t?: number }> };
+      if (raw.at && now - raw.at <= FUTWS_FILE_MAX_AGE_MS && Array.isArray(raw.rows)) {
+        for (const r of raw.rows) {
+          const s = String(r.s ?? "").toUpperCase();
+          const m = Number(r.m);
+          const t = Number(r.t);
+          if (s.endsWith("USDT") && m > 0 && t > 0) map.set(s, { m, t });
+        }
+      }
+      futwsCache = { at: now, map };
+    }
+    const row = futwsCache.map.get(symbol);
+    if (!row || now - row.t > FUTWS_QUOTE_FRESH_MS) return { px: null, funding: null, oiUsd: null, sourceTs: null } satisfies Parsed;
+    return { px: row.m, funding: null, oiUsd: null, sourceTs: row.t } satisfies Parsed;
+  } catch {
+    return { px: null, funding: null, oiUsd: null, sourceTs: null } satisfies Parsed;
+  }
 }
 
 // ── P2: Coinlore (keyless aggregator) ────────────────────────────────────────
@@ -196,9 +198,10 @@ async function paprikaSpot(symbol: string): Promise<Parsed> {
 
 // ── verdict engine (thresholds calibrated on the 2026-10-28 benchmark) ──────
 const ALIGNED_BPS = 15;       // ≤ 15 bps vs Binance mid = normal cross-venue spread
-// Per-provider staleness tolerance (benchmark 2026-10-28: OKX ts ≈ 0-1s,
-// Coinpaprika self-ts ≈ 5min update cadence — 312s measured, healthy for it).
-const STALE_SEC_BY_PROVIDER: Record<DqProviderId, number> = { okx: 120, coinlore: 300, coinpaprika: 600 };
+// Per-provider staleness tolerance (benchmark 2026-10-28 + ring cadence 1-3s:
+// the futws row is stale past 90s by construction; Coinpaprika self-ts ≈ 5min
+// update cadence — 312s measured, healthy for it).
+const STALE_SEC_BY_PROVIDER: Record<DqProviderId, number> = { "binance-futws": 120, coinlore: 300, coinpaprika: 600 };
 
 function verdictOf(q: Omit<DqProviderQuote, "verdict" | "note">): { verdict: DqProviderQuote["verdict"]; note: string } {
   if (q.status !== "OK" || (q.px === null && q.funding === null)) return { verdict: "DOWN", note: `http=${q.httpStatus} — feed unreachable or unparsable` };
@@ -222,8 +225,8 @@ export async function dqSnapshot(symbol = "BTCUSDT"): Promise<DqReport> {
   if (cached && Date.now() - cached.at < CACHE_MS) return cached.report;
 
   const ref = await binanceReference(symbol);
-  const [okx, cl, cp] = await Promise.all([
-    okxMirror(symbol),
+  const [fw, cl, cp] = await Promise.all([
+    futwsMirror(symbol),
     coinloreSpot(symbol),
     paprikaSpot(symbol),
   ]);
@@ -249,7 +252,7 @@ export async function dqSnapshot(symbol = "BTCUSDT"): Promise<DqReport> {
   };
 
   const providers: DqProviderQuote[] = [
-    mk("okx", "OKX v5 perp mirror (price+funding+OI)", okx, okx.px !== null || okx.funding !== null ? 200 : 0, 0),
+    mk("binance-futws", "Binance FUTWS ring (futures WS mid)", fw, fw.px !== null ? 200 : 0, 0),
     mk("coinlore", "Coinlore keyless aggregator (price)", cl, cl.px !== null ? 200 : 0, 0),
     mk("coinpaprika", "CoinPaprika keyless aggregator (price+ts)", cp, cp.px !== null ? 200 : 0, 0),
   ];
@@ -257,15 +260,16 @@ export async function dqSnapshot(symbol = "BTCUSDT"): Promise<DqReport> {
   const downs = providers.filter(p => p.verdict === "DOWN").length;
   const divergents = providers.filter(p => p.verdict === "DIVERGENT").length;
   const stale = providers.filter(p => p.verdict === "STALE").length;
-  const okxQ = providers.find(p => p.provider === "okx");
-  // Calibration (trace 1a181db841517571): a single keyless aggregator drifting
-  // past the spread threshold is routine (aggregation lag — paprika measured
-  // 16-21 bps healthy). RED is reserved for the signals that actually cast
-  // doubt on the Binance mirror: the exchange-native mirror (OKX) itself, or
-  // two+ independent sources leaving consensus at once.
+  const fwQ = providers.find(p => p.provider === "binance-futws");
+  // Calibration (trace 1a181db841517571, v14.0 retune): a single keyless
+  // aggregator drifting past the spread threshold is routine (aggregation
+  // lag — paprika measured 16-21 bps healthy). RED is reserved for the
+  // signals that actually cast doubt on the Binance mirror: the exchange-
+  // native WS ring (futws) itself, or two+ independent sources leaving
+  // consensus at once.
   const verdict: DqReport["verdict"] =
     ref.status !== "OK" ? "RED"
-      : (okxQ && (okxQ.verdict === "DIVERGENT" || okxQ.verdict === "DOWN")) || divergents + downs >= 2 ? "RED"
+      : (fwQ && (fwQ.verdict === "DIVERGENT" || fwQ.verdict === "DOWN")) || divergents + downs >= 2 ? "RED"
       : divergents + downs + stale > 0 ? "AMBER"
       : "GREEN";
 

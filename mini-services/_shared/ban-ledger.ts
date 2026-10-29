@@ -25,7 +25,7 @@
 // returned 7×200 / 2×418 — the NAT pool is majority-clean. The old rule
 // (“ONE banned IP means any request may land on it” ⇒ pool-wide silence)
 // blacked out the fapi plane for up to 35min per named event and starved
-// flow into BYBIT ×0.5. New contract:
+// flow weighting ×0.5 (legacy). New contract:
 //   · NAMED-IP ban (writeLedgerBan("1.2.3.4", until)) → ONE keyed entry.
 //     Intel + per-lane 418 retry fuel — NEVER a pool-wide resume block.
 //   · UNKNOWN-SCOPE ban (writeLedgerBan(null, until)) → a "_pool" marker.

@@ -255,11 +255,10 @@ model FuturesSnapshot {
   liqLong10mUsd  Float?
   liqShort10mUsd Float?
   liqUsd1h       Float?
-  // family E — cross-exchange (Bybit / OKX USDT-M perps)
-  fundingByb    Float?
-  oiByb         Float? // base units
-  fundingOkx    Float?
-  oiOkx         Float? // base units
+  // family E — cross-plane divergence (v14.0: Binance-only — settled funding
+  // history vs predicted premiumIndex; current OI vs openInterestHist lane)
+  fundingSettled Float?
+  oiChk          Float? // base units
   // settled forward returns (unlevered %) — the learning substrate
   fwd15mPct Float?
   fwd1hPct  Float?

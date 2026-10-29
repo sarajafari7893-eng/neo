@@ -776,7 +776,7 @@ async function jobReview(): Promise<{ status: string }> {
 // Operator order 2026-09-26: «پیشنهاد ماموریت بعدی با چرخش کلید کنترل را کامل و
 // مهندسی انجام بده» — the sentinel-proposed 30-minute engineered watch:
 //   · FUTURES TAXONOMY sampler keeps landing LIVE rows on the tri-exchange
-//     fuel (fapi → Bybit → spot) — freshness window 35 min per tick
+//     fuel (fapi → SPOT-MIRROR) — freshness window 35 min per tick (v14.0 Binance-only)
 //   · shadow-veto arms fill toward the 30-sample veto threshold (honest n,
 //     no invented data)
 //   · app/ws/sentinel health each tick

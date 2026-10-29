@@ -155,7 +155,7 @@ async function measureTakerSweep(symbol: string): Promise<TakerSweep | null> {
   const hit = measCache.get(ck);
   if (hit && Date.now() - hit.at < MEAS_TTL) return hit.v as TakerSweep | null;
   // v12.3 TASK-52: fapi aggTrades (w20) is rung 1 — during fapi starvation the
-  // sweep survives on the bridge ladder (BYBIT tape → SPOT-MIRROR, honest venue).
+  // sweep survives on the bridge ladder (fapi → SPOT-MIRROR, honest plane tag).
   let trades = await fapi<AggTrade[]>(`/fapi/v1/aggTrades?symbol=${symbol}&limit=1000`);
   if (!trades || trades.length < 10) {
     const b = await bridgeTape(symbol).catch(() => null);
@@ -204,7 +204,7 @@ async function measureDepth(symbol: string): Promise<DepthMeasure | null> {
   const ck = `depth:${symbol}`;
   const hit = measCache.get(ck);
   if (hit && Date.now() - hit.at < MEAS_TTL) return hit.v as DepthMeasure | null;
-  // v12.3 TASK-52: depth rides the ladder — fapi (w5) → BYBIT linear book →
+  // v12.3 TASK-52 (v14.0): depth rides the ladder — fapi (w5) → SPOT-MIRROR book →
   // SPOT-MIRROR book; OBI/vacuum math is venue-shape-agnostic (bids DESC / asks ASC).
   const d = await bridgeDepth(symbol, 500);
   if (!d || d.bids.length === 0 || d.asks.length === 0) {

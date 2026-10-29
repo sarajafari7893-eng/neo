@@ -20,7 +20,7 @@
 import { db } from "@/lib/db";
 import { gateFetch } from "./fapi-gate";
 import { fetchFlowMetrics } from "./flow";
-import { bybitKlines, bybitHealth } from "./bybit-feed";
+import { mirrorHealth } from "./binance-mirror"; // v14.0 — Binance mirror client (bybit-feed retired)
 import { noteSpotHostThrottle, spotHostsReady } from "./spot-host-gate";
 
 export const SCAN_TFS = ["4h", "1h", "15m", "5m"] as const;
@@ -33,7 +33,7 @@ const BOARD_KEY = "flowscan.board";
 const BATCH = 6;
 // DATA-REVIVAL 2026-10-21 — 60s/6 symbols needed ~11min to rotate a 64-symbol
 // board; the operator mandate is flow tracking at HIGH SPEED. 20s/6 → full
-// board ~3.5min. Bybit public plane carries this easily; the fapi-gate
+// board ~3.5min. The SPOT-MIRROR ladder carries this easily; the fapi-gate
 // telemetry lane is sheddable as before.
 const MIN_INTERVAL_MS = 20_000;
 const NET_BIAS_MIN = 20; // |netScore| needed to call a LONG/SHORT board
@@ -63,7 +63,7 @@ export interface MtfRollup {
   tfs: MtfTfRow[];
   funding8h: number | null;
   oiDelta1h: number | null;
-  venue?: "BINANCE" | "BYBIT" | "MIXED"; // DATA-REVIVAL 2026-10-21 — honest venue tag on the kline plane
+  venue?: "BINANCE" | "BINANCE-SPOT" | "MIXED"; // DATA-REVIVAL 2026-10-21 — honest Binance-plane tag on the kline plane (v14.0)
 }
 
 interface FlowCandle {
@@ -77,8 +77,8 @@ interface FlowCandle {
 }
 
 // ── kline+flow fetch with per-(symbol,tf) cache and in-flight dedupe ──
-const klineFlowCache = new Map<string, { at: number; candles: FlowCandle[]; venue: "BINANCE" | "BYBIT" }>();
-const klineFlowInFlight = new Map<string, Promise<{ candles: FlowCandle[]; venue: "BINANCE" | "BYBIT" } | null>>();
+const klineFlowCache = new Map<string, { at: number; candles: FlowCandle[]; venue: "BINANCE" | "BINANCE-SPOT" }>();
+const klineFlowInFlight = new Map<string, Promise<{ candles: FlowCandle[]; venue: "BINANCE" | "BINANCE-SPOT" } | null>>();
 
 // RAM-SHED round-2 (P2-c): the tracked domain grew to ~900 symbols × 4 TFs ≈
 // 3.6k possible entries; every entry is 72-120 FlowCandle objects (~10-15KB),
@@ -89,7 +89,7 @@ const klineFlowInFlight = new Map<string, Promise<{ candles: FlowCandle[]; venue
 // would refetch on their next rotation anyway. The __nexusShed hook below
 // keeps its exact semantics — the cap just bounds what it has to trim.
 const KLINE_FLOW_CACHE_MAX = 600;
-type KlineFlowEntry = { at: number; candles: FlowCandle[]; venue: "BINANCE" | "BYBIT" };
+type KlineFlowEntry = { at: number; candles: FlowCandle[]; venue: "BINANCE" | "BINANCE-SPOT" };
 function klineFlowCacheSet(key: string, entry: KlineFlowEntry): void {
   if (!klineFlowCache.has(key)) {
     while (klineFlowCache.size >= KLINE_FLOW_CACHE_MAX) {
@@ -110,20 +110,20 @@ function klineFlowCacheSet(key: string, entry: KlineFlowEntry): void {
 
 // DATA-REVIVAL 2026-10-21 — silent-starvation fix: when the fapi plane fails
 // (IP-ban 418), the failure is COUNTED and rate-limit-logged, and the scan
-// falls back to the Bybit v5 kline plane with an honest venue tag. The old
-// code swallowed every failure → FlowScan froze for 25 days with zero logs.
+// falls back to the Binance SPOT mirror ladder with an honest plane tag
+// (v14.0: the old cross-venue rung is retired — Binance-only).
 const fbStats = (() => {
   // globalThis dedupe — Turbopack can instantiate per-route bundles; the
   // engine's tick loop and the /api/flows route MUST share one counter set.
-  const g = globalThis as { __nexusFlowFbStats?: { fapiFail: number; bybitOk: number; bybitFail: number; spotOk: number; lastWarnAt: number } };
-  g.__nexusFlowFbStats ??= { fapiFail: 0, bybitOk: 0, bybitFail: 0, spotOk: 0, lastWarnAt: 0 };
+  const g = globalThis as { __nexusFlowFbStats?: { fapiFail: number; mirrorOk: number; mirrorFail: number; spotOk: number; lastWarnAt: number } };
+  g.__nexusFlowFbStats ??= { fapiFail: 0, mirrorOk: 0, mirrorFail: 0, spotOk: 0, lastWarnAt: 0 };
   return g.__nexusFlowFbStats;
 })();
 
 // third rung — Binance SPOT klines via the data-vision mirror host family
 // (api.binance.com is IP-banned; data-api.binance.vision is NOT — proven live
 // by the feed probe). Spot klines share the exact field layout (takerBuy at
-// index 9) so CVD stays REAL. For niche Binance listings absent from Bybit
+// index 9) so CVD stays REAL. For niche Binance listings absent from spot
 // linear this is the only honest revival path.
 // v13.2.1 — per-host 418/429 backoff via the shared spot-host gate.
 async function spotKlines(symbol: string, tf: ScanTf, limit: number): Promise<FlowCandle[] | null> {
@@ -149,21 +149,21 @@ function warnFallback(msg: string) {
   fbStats.lastWarnAt = Date.now();
   console.warn(`[flow-scanner] ${msg}`);
 }
-export function flowScanHealth(): { fapiFail: number; bybitOk: number; bybitFail: number; spotOk: number; bybit: ReturnType<typeof bybitHealth> } {
-  return { fapiFail: fbStats.fapiFail, bybitOk: fbStats.bybitOk, bybitFail: fbStats.bybitFail, spotOk: fbStats.spotOk, bybit: bybitHealth() };
+export function flowScanHealth(): { fapiFail: number; mirrorOk: number; mirrorFail: number; spotOk: number; mirror: ReturnType<typeof mirrorHealth> } {
+  return { fapiFail: fbStats.fapiFail, mirrorOk: fbStats.mirrorOk, mirrorFail: fbStats.mirrorFail, spotOk: fbStats.spotOk, mirror: mirrorHealth() };
 }
 
-async function fetchKlinesFlow(symbol: string, tf: ScanTf): Promise<{ candles: FlowCandle[]; venue: "BINANCE" | "BYBIT" } | null> {
+async function fetchKlinesFlow(symbol: string, tf: ScanTf): Promise<{ candles: FlowCandle[]; venue: "BINANCE" | "BINANCE-SPOT" } | null> {
   const key = `${symbol}|${tf}`;
   const hit = klineFlowCache.get(key);
   if (hit && Date.now() - hit.at < TF_TTL[tf]) return hit;
   const existing = klineFlowInFlight.get(key);
   if (existing) return existing;
-  const p = (async (): Promise<{ candles: FlowCandle[]; venue: "BINANCE" | "BYBIT" } | null> => {
+  const p = (async (): Promise<{ candles: FlowCandle[]; venue: "BINANCE" | "BINANCE-SPOT" } | null> => {
     try {
       // v10.24 Task 34-a: klines through the central fapi-gate (telemetry lane
       // — a shedded (symbol,tf) simply re-scans on the next rotation).
-      let venue: "BINANCE" | "BYBIT" = "BINANCE";
+      let venue: "BINANCE" | "BINANCE-SPOT" = "BINANCE";
       let raw: (string | number)[][] | null = null;
       try {
         raw = await gateFetch<(string | number)[][]>(`/fapi/v1/klines?symbol=${symbol}&interval=${tf}&limit=${TF_LIMIT[tf]}`, { priority: "telemetry", timeoutMs: 6500 });
@@ -171,30 +171,21 @@ async function fetchKlinesFlow(symbol: string, tf: ScanTf): Promise<{ candles: F
         raw = null;
       }
       if (!raw || raw.length === 0) {
-        // honest fallback ladder — same-venue SPOT mirror first (keeps CVD REAL
-        // via taker-buy field 9), then Bybit perp (taker split unavailable →
-        // CVD null on those rows)
+        // v14.0 honest fallback ladder — the SPOT mirror only (keeps CVD REAL
+        // via taker-buy field 9). When the spot ladder also misses, the
+        // (symbol,tf) starves honestly — no cross-venue rows exist anymore.
         fbStats.fapiFail++;
         const spot = await spotKlines(symbol, tf, TF_LIMIT[tf]);
         if (spot && spot.length > 0) {
-          venue = "BINANCE"; // same venue, SPOT instrument class (vision mirror)
+          venue = "BINANCE-SPOT"; // same venue, SPOT instrument class (vision mirror)
           fbStats.spotOk++;
+          fbStats.mirrorOk++;
           warnFallback(`fapi kline unavailable (${symbol} ${tf}) → BINANCE-SPOT mirror (CVD real, spot tape)`);
           klineFlowCacheSet(key, { at: Date.now(), candles: spot, venue });
           return { candles: spot, venue };
         }
-        fbStats.spotOk += 0; // keep the counter shape stable
-        const alt = await bybitKlines(symbol, tf, TF_LIMIT[tf]);
-        if (alt && alt.length > 0) {
-          venue = "BYBIT";
-          fbStats.bybitOk++;
-          warnFallback(`spot+mirror miss (${symbol} ${tf}) → BYBIT perp fallback (CVD null on this row)`);
-          const candles = alt.map((k) => ({ openTime: k.openTime, open: k.open, high: k.high, low: k.low, close: k.close, volume: k.volume, takerBuy: NaN }));
-          klineFlowCacheSet(key, { at: Date.now(), candles, venue });
-          return { candles, venue };
-        }
-        fbStats.bybitFail++;
-        warnFallback(`kline starved on ALL planes: ${symbol} ${tf} (fapi + spot + bybit)`);
+        fbStats.mirrorFail++;
+        warnFallback(`kline starved on ALL Binance planes: ${symbol} ${tf} (fapi + spot mirror)`);
         return null;
       }
       const candles = raw.map((k) => ({
@@ -269,7 +260,7 @@ function analyzeTf(symbol: string, tf: ScanTf, raw: FlowCandle[], funding8h: num
   }
 
   // CVD over the last 12 closed bars — direct taker aggression from kline field 9.
-  // DATA-REVIVAL: Bybit-fallback candles carry takerBuy=NaN → cvdPct stays null
+  // DATA-REVIVAL: fallback candles without field-9 carry takerBuy=NaN → cvdPct stays null
   // (honest measured gap — never invented from price direction).
   const w12 = candles.slice(-12);
   const vol12 = w12.reduce((a, c) => a + c.volume, 0);
@@ -395,7 +386,7 @@ async function scanSymbol(symbol: string): Promise<MtfRollup | null> {
   const raw = settled.map((r) => (r.status === "fulfilled" ? r.value : null));
   if (raw.filter(Boolean).length < 3) return null; // honest: need ≥3 TFs, no invented rows
   const venues = raw.filter(Boolean).map((r) => r!.venue);
-  const rollupVenue: "BINANCE" | "BYBIT" | "MIXED" = venues.every((v) => v === "BINANCE") ? "BINANCE" : venues.every((v) => v === "BYBIT") ? "BYBIT" : "MIXED";
+  const rollupVenue: "BINANCE" | "BINANCE-SPOT" | "MIXED" = venues.every((v) => v === "BINANCE") ? "BINANCE" : venues.every((v) => v === "BINANCE-SPOT") ? "BINANCE-SPOT" : "MIXED";
 
   // derivatives context is TF-agnostic — one shared cached fetch (flow.ts)
   let funding8h: number | null = null;

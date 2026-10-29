@@ -7,7 +7,7 @@
 // METHOD (honest by construction):
 //   • regime per UTC day: 7d total-stable Δ ≥ +0.5% → RISK-ON · ≤ −0.5% →
 //     RISK-OFF · else NEUTRAL (same thresholds as src/lib/stableflow.ts)
-//   • forward 7d BTC return from Bybit SPOT daily klines (limit=1000 ≈ 2.7y)
+//   • forward 7d BTC return from Binance SPOT daily klines via the vision mirror (limit=1000 ≈ 2.7y)
 //   • TWO samples reported: OVERLAPPING (every day — 7× more points, but
 //     autocorrelated) and NON-OVERLAPPING (every 7th day — honest inference)
 //   • LEDGER JOIN: our own settled Signal rows bucketed by regime at deploy
@@ -54,8 +54,8 @@ function delta7dAt(series: Pt[], tMs: number): number | null {
   return ((now.u - past.u) / past.u) * 100;
 }
 
-async function bybitDaily(): Promise<Map<string, number>> {
-  const r = await fetch("https://api.bybit.com/v5/market/kline?category=spot&symbol=BTCUSDT&interval=D&limit=1000", { signal: AbortSignal.timeout(20000) });
+async function visionDaily(): Promise<Map<string, number>> {
+  const r = await fetch("https://data-api.binance.vision/api/v3/klines?symbol=BTCUSDT&interval=1d&limit=1000", { signal: AbortSignal.timeout(20000) });
   const j = await r.json();
   const list = j?.result?.list ?? [];
   const map = new Map<string, number>(); // "YYYY-MM-DD" → close
@@ -94,9 +94,9 @@ async function main() {
   console.log("║  STABLEFLOW BACKTEST — stable Δ7d regime vs forward BTC 7d   ║");
   console.log("╚══════════════════════════════════════════════════════════════╝");
   const stables = loadBackfill("TOTAL");
-  const btc = await bybitDaily();
+  const btc = await visionDaily();
   console.log(`stable series: ${stables.length} daily points (${new Date(stables[0]!.d).toISOString().slice(0, 10)} → ${new Date(stables[stables.length - 1]!.d).toISOString().slice(0, 10)})`);
-  console.log(`BTC spot klines: ${btc.size} days (Bybit, 1000-bar cap)`);
+  console.log(`BTC spot klines: ${btc.size} days (Binance vision mirror, 1000-bar cap)`);
 
   // overlapping sample — every day with regime + full forward window
   const overlap: Array<{ regime: string; fwd: number }> = [];
@@ -157,7 +157,7 @@ async function main() {
 
   writeFileSync(
     `${ROOT}/logs/stable-backtest-report.json`,
-    JSON.stringify({ generatedAt: new Date().toISOString(), method: "stable Δ7d regime vs forward 7d BTC (Bybit spot)", overlapping: repOv, nonOverlapping: repNo, ledger: ledgerLine }, null, 2),
+    JSON.stringify({ generatedAt: new Date().toISOString(), method: "stable Δ7d regime vs forward 7d BTC (Binance spot)", overlapping: repOv, nonOverlapping: repNo, ledger: ledgerLine }, null, 2),
   );
   console.log("\nreport → logs/stable-backtest-report.json");
 }

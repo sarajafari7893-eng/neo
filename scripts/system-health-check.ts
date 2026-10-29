@@ -3,7 +3,7 @@
 //  و ردیابی ها و تاییدیه های ارسال سیگنال رو چک کن و تست کن سالم باشن»
 //
 // Probes EVERY layer against LIVE state — no simulation:
-//   A. Engine + market feed (Binance/OKX/Bybit/Hyperliquid consensus)
+//   A. Engine + market feed (Binance multi-plane consensus, v14.0)
 //   B. Data layer: SQLite integrity + real row counts
 //   C. Learning loops: governor / supervisor / calibrator / ttl-gate /
 //      vol-onset study / volcause study / deep-learn / backtest autotune / regime
@@ -46,7 +46,7 @@ async function main() {
     const feed = (pulse?.feed ?? {}) as Record<string, unknown>;
     const account = (stats?.account ?? {}) as Record<string, unknown>;
     mark(status === 200, "A1 engine /api/pulse", `status=${status} total=${stats.totalSignals} active=${stats.activeCount} pnl24h=$${stats.pnl24hUsd} equity=$${account.equity ?? stats.totalPnlUsd}`);
-    mark(feed?.source === "LIVE", "A2 exchange feed LIVE", `source=${feed?.source} latency=${feed?.latencyMs}ms (Binance+OKX+Bybit+HL consensus)`);
+    mark(feed?.source === "LIVE", "A2 exchange feed LIVE", `source=${feed?.source} latency=${feed?.latencyMs}ms (Binance multi-plane consensus)`);
     const mk = ((pulse?.market ?? []) as Array<Record<string, unknown>>).length;
     mark(mk > 0, "A3 market snapshot", `${mk} symbols streaming`);
   } catch (e) {

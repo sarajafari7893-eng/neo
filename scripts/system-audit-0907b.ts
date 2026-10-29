@@ -122,13 +122,13 @@ async function main() {
     rec("EXCHANGES", "Binance USDT-M fapi", status === 200 ? "PASS" : "FAIL", `HTTP ${status}, serverTime skew ${skew !== null ? (skew / 1000).toFixed(1) + "s" : "?"} (${ms}ms)`);
   } catch (e: any) { rec("EXCHANGES", "Binance USDT-M fapi", "FAIL", String(e?.message ?? e).slice(0, 80)); }
   try {
-    const { status, json, ms } = await fetchJson("https://api.bybit.com/v5/market/time", undefined, 8000);
-    rec("EXCHANGES", "Bybit v5", status === 200 ? "PASS" : "WARN", `HTTP ${status} (${ms}ms)`);
-  } catch (e: any) { rec("EXCHANGES", "Bybit v5", "WARN", String(e?.message ?? e).slice(0, 80)); }
+    const { status, json, ms } = await fetchJson("https://data-api.binance.vision/api/v3/time", undefined, 8000);
+    rec("EXCHANGES", "Binance SPOT-MIRROR", status === 200 ? "PASS" : "WARN", `HTTP ${status} (${ms}ms)`);
+  } catch (e: any) { rec("EXCHANGES", "Binance SPOT-MIRROR", "WARN", String(e?.message ?? e).slice(0, 80)); }
   try {
-    const { status, ms } = await fetchJson("https://www.okx.com/api/v5/public/time", undefined, 8000);
-    rec("EXCHANGES", "OKX v5", status === 200 ? "PASS" : "WARN", `HTTP ${status} (${ms}ms)`);
-  } catch (e: any) { rec("EXCHANGES", "OKX v5", "WARN", String(e?.message ?? e).slice(0, 80)); }
+    const { status, ms } = await fetchJson("https://fapi.binance.com/fapi/v1/time", undefined, 8000);
+    rec("EXCHANGES", "Binance FAPI", status === 200 ? "PASS" : "WARN", `HTTP ${status} (${ms}ms)`);
+  } catch (e: any) { rec("EXCHANGES", "Binance FAPI", "WARN", String(e?.message ?? e).slice(0, 80)); }
   try {
     const { status, json, ms } = await fetchJson("https://api.hyperliquid.xyz/info", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ type: "allMids" }) }, 8000);
     const mids = json && typeof json === "object" ? Object.keys(json).length : 0;

@@ -15,7 +15,7 @@
 
 import { db } from "@/lib/db";
 import { gateFetch } from "./fapi-gate";
-import { bridgeOiHist, bybitTickerMap, bybitTickerRow } from "./flow-bridge";
+import { bridgeOiHist, futTickerMap, futTickerRow } from "./flow-bridge";
 
 const BOARD_KEY = "oifund.board";
 const BATCH = 6;
@@ -34,7 +34,7 @@ export interface OiFundRow {
   oiDelta1h: number | null; // %
   oiDelta4h: number | null; // %
   oiZ1h: number | null; // z-score of the last 1h OI change vs its own 4h distribution
-  /** v12.2 TASK-52 — venue that fed the OI ladder (BINANCE | BYBIT) when fapi starved. */
+  /** v12.2 TASK-52 — Binance plane that fed the OI ladder (v14.0: fapi-only, honest null on ban). */
   src?: string;
 }
 
@@ -75,10 +75,8 @@ async function fapi<T>(path: string, timeoutMs = 6000): Promise<T | null> {
 interface PremRow { lastFundingRate: string; markPrice: string; nextFundingTime: number }
 
 async function scanSymbol(symbol: string, prem: PremRow | null, prev: OiFundRow | null): Promise<OiFundRow | null> {
-  // v12.2 TASK-52 — OI LADDER: fapi openInterestHist → BYBIT open-interest
-  // history (perp-native; no spot equivalent exists). On the BYBIT rung the
-  // rows are base-denominated, so the notional comes from the batched tickers
-  // call (measured, not invented).
+  // v12.2 TASK-52 — OI LADDER: fapi openInterestHist (perp-native; v14.0 — the
+  // only rung; on a fapi ban the scan honestly returns null, no invented rows).
   const histB = await bridgeOiHist(symbol, "15m", 17).catch(() => null);
   if (!histB || histB.rows.length < 4) return null; // honest — no invented rows
   const hist = histB.rows.map((r) => ({ sumOpenInterest: String(r.sumOpenInterest), sumOpenInterestValue: String(r.sumOpenInterestValue ?? 0), timestamp: r.timestamp }));
@@ -108,9 +106,10 @@ async function scanSymbol(symbol: string, prem: PremRow | null, prev: OiFundRow 
 
   const oiUsdRow = Number(hist[hist.length - 1]?.sumOpenInterestValue ?? 0) || null;
   let oiUsd = oiUsdRow;
-  if (!oiUsd && histB.source === "BYBIT") {
-    // bybit history is base-only → notional from the batched tickers (openInterestValue)
-    oiUsd = (await bybitTickerRow(symbol).catch(() => null))?.openInterestValue ?? null;
+  if (!oiUsd) {
+    // v14.0 — notional fallback from the Binance composite ticker leg (fapi
+    // openInterest × markPrice); null honestly when the fapi plane is banned.
+    oiUsd = (await futTickerRow(symbol).catch(() => null))?.openInterestValue ?? null;
   }
   // op-audit-20260908: when the batch premiumIndex call missed (transient fapi
   // weight pressure), CARRY OVER the previous funding fields instead of
@@ -147,16 +146,17 @@ export async function maybeOiFundScan(symbols: string[]): Promise<void> {
     // markers, weight ~10) replaces 6 per-symbol calls per rotation — funding
     // coverage climbs 6/33 → full domain in one pass AND the per-second fapi
     // weight bursts that tripped -1003 endpoint bans disappear.
-    // v12.2 TASK-52: when the fapi batch starves, ONE batched bybit tickers
-    // call (weight-cheap, separate venue) feeds the whole rotation instead —
-    // funding + mark stay alive through ban windows.
+    // v12.2 TASK-52 (v14.0 rewrite): when the fapi batch starves, the Binance
+    // composite ticker leg feeds the whole rotation instead — the board
+    // carries funding only when the fapi plane priced it (spot rows keep
+    // funding honestly null, so the carry-over guard below stays truthful).
     const premRows = await fapi<Array<PremRow & { symbol: string }>>(`/fapi/v1/premiumIndex`).catch(() => null);
     let premMap = new Map<string, PremRow>();
     for (const p of premRows ?? []) if (p?.symbol) premMap.set(p.symbol, p);
     if (premMap.size === 0) {
-      const tickers = await bybitTickerMap().catch(() => null);
+      const tickers = await futTickerMap().catch(() => null);
       if (tickers && tickers.size > 0) {
-        console.log(`[oi-funding] fapi premiumIndex starved — bybit tickers batch (${tickers.size} symbols, Task-52)`);
+        console.log(`[oi-funding] fapi premiumIndex starved — Binance composite ticker board (${tickers.size} symbols, v14.0)`);
         for (const symbol of batch) {
           const t = tickers.get(symbol);
           if (t && t.fundingRate !== null) {

@@ -294,7 +294,7 @@ interface DepthRow {
   asks: Array<[number, number]>;
 }
 
-// v12.3 TASK-52 — the OBI poll rides the depth ladder (fapi w2 → BYBIT linear
+// v12.3 TASK-52 (v14.0) — the OBI poll rides the depth ladder (fapi w2 → SPOT-MIRROR
 // book → SPOT-MIRROR) instead of dying silently during fapi bans.
 async function depthPoll(symbol: string): Promise<DepthRow | null> {
   return bridgeDepth(symbol, 20);

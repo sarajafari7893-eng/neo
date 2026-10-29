@@ -1,18 +1,16 @@
-// ── VENUE LATENCY + COVERAGE FORENSICS (AUDIT-20261023 follow-up) ──
-// Operator mandate: «ممیزی بررسی شود سرعت داده های کدام صرافی سریعتر و معتبرتر
-// است؟» + «اگر جریانات اسپات کامل و معتبر نیست باید فقط از فیوچرز استفاده کرد».
+// ── BINANCE PLANE LATENCY + COVERAGE FORENSICS (v14.0 Binance-only rewrite) ──
+// Operator mandates: «ممیزی بررسی شود سرعت داده های کدام صرافی سریعتر و معتبرتر
+// است؟» + «ردپای OKX/Bybit در کجا وجود دارد و با بایننس جایگزین شود».
 //
 // Measures, from THIS machine's egress (the only honest vantage):
 //   ① WS event-time lag — exchange-stamped event time (E/ts) vs local receipt
-//     time, p50/p95 over a 45s window, message rate, stalls — for the three
-//     live planes: Binance SPOT, Bybit linear, OKX swap. Binance futures
-//     fstream probed too to document its silence (IP-suppressed).
-//   ② REST latency ×5 — spot ping / bybit time / okx time / fapi ping (expect
-//     ban — documented, not poked more than once).
-//   ③ Futures-coverage matrix for the blocked microcaps — which venue can
-//     become a SECOND venue (the structural rehabilitation path for the
-//     SINGLE-VENUE vetoes): OKX swap / Gate USDT futures / MEXC futures /
-//     HTX linear / Binance spot listing check.
+//     time, p50/p95 over a 45s window, message rate, stalls — for the Binance
+//     planes: SPOT trade stream, futures per-symbol bookTicker (the ring
+//     format), spot !miniTicker@arr, futures fstream sanity probe.
+//   ② REST latency ×5 — vision ping / api-gcp ping / fapi ping (ban-aware —
+//     documented, not poked more than once).
+//   ③ Binance coverage matrix — for the microcap pool: spot listing vs
+//     futures listing (the honest Binance-only coverage map).
 // READ-ONLY: public endpoints only, no auth, no writes. Run:
 //   bun scripts/venue-latency-probe.ts
 
@@ -102,39 +100,36 @@ async function exists(name: string, url: string, check: (j: any) => boolean): Pr
 
 // ── ① WS latency probes (parallel, 45s window) ──
 console.log("════ ① WS EVENT-TIME LAG (45s window, local receipt − exchange stamp) ════");
-const [spot, bybit, okx, fstream] = await Promise.all([
-  wsProbe("Binance SPOT  (btcusdt@trade)", "wss://stream.binance.com:9443/ws/btcusdt@trade", null, (m) => (m?.s === "BTCUSDT" && m?.E && m?.p ? { symbol: m.s, ts: m.E } : null)),
-  wsProbe("Bybit linear  (tickers.BTCUSDT)", "wss://stream.bybit.com/v5/public/linear", { op: "subscribe", args: ["tickers.BTCUSDT"] }, (m) => (m?.topic === "tickers.BTCUSDT" && m?.ts ? { symbol: "BTCUSDT", ts: m.ts } : null)),
-  wsProbe("OKX swap     (BTC-USDT tickers)", "wss://ws.okx.com:8443/ws/v5/public", { op: "subscribe", args: [{ channel: "tickers", instId: "BTC-USDT" }] }, (m) => (m?.arg?.instId === "BTC-USDT" && m?.data?.[0]?.ts ? { symbol: "BTC-USDT", ts: Number(m.data[0].ts) } : null)),
-  wsProbe("Binance FUTURES fstream (sanity)", "wss://fstream.binance.com/ws/btcusdt@trade", null, (m) => (m?.s === "BTCUSDT" && m?.E ? { symbol: m.s, ts: m.E } : null), 20_000),
+const [spot, futbook, miniarr, fstream] = await Promise.all([
+  wsProbe("Binance SPOT   (btcusdt@trade)", "wss://stream.binance.com:9443/ws/btcusdt@trade", null, (m) => (m?.s === "BTCUSDT" && m?.E && m?.p ? { symbol: m.s, ts: m.E } : null)),
+  wsProbe("Binance FUT-BOOK (btcusdt@bookTicker)", "wss://fstream.binance.com/ws/btcusdt@bookTicker", null, (m) => (m?.s === "BTCUSDT" && m?.E ? { symbol: m.s, ts: m.E } : null)),
+  wsProbe("Binance SPOT-ARR (!miniTicker@arr)", "wss://stream.binance.com:9443/ws/!miniTicker@arr", null, (m) => (m?.s === "BTCUSDT" && m?.E ? { symbol: m.s, ts: m.E } : null)),
+  wsProbe("Binance FUTURES fstream (aggTrade sanity)", "wss://fstream.binance.com/ws/btcusdt@aggTrade", null, (m) => (m?.s === "BTCUSDT" && m?.E ? { symbol: m.s, ts: m.E } : null), 20_000),
 ]);
-for (const r of [spot, bybit, okx, fstream]) {
+for (const r of [spot, futbook, miniarr, fstream]) {
   console.log(`  ${r.name.padEnd(40)} opens:${r.opens ? "YES" : "NO "} frames:${String(r.n).padStart(6)} rate:${String(r.rate).padStart(6)}/s lag p50:${Number.isNaN(r.p50) ? "  n/a" : r.p50 + "ms"} p95:${Number.isNaN(r.p95) ? "  n/a" : r.p95 + "ms"}  ${r.note}`);
 }
 
 // ── ② REST latency (×5 each) ──
 console.log("\n════ ② REST LATENCY (5 probes each) ════");
 const rests = await Promise.all([
-  restLatency("Binance SPOT  api/ping", "https://api.binance.com/api/v3/ping"),
-  restLatency("Binance fapi  /ping (banned?)", "https://fapi.binance.com/fapi/v1/ping"),
-  restLatency("Bybit         /market/time", "https://api.bybit.com/v5/market/time"),
-  restLatency("OKX           /public/time", "https://www.okx.com/api/v5/public/time"),
+  restLatency("Binance VISION /api/v3/ping", "https://data-api.binance.vision/api/v3/ping"),
+  restLatency("Binance GCP    /api/v3/ping", "https://api-gcp.binance.com/api/v3/ping"),
+  restLatency("Binance SPOT   api/ping", "https://api.binance.com/api/v3/ping"),
+  restLatency("Binance fapi   /ping (banned?)", "https://fapi.binance.com/fapi/v1/ping"),
 ]);
 for (const r of rests) console.log(`  ${r.name.padEnd(30)} ok:${r.ok}/5 p50:${Number.isNaN(r.p50) ? "n/a" : r.p50 + "ms"} ${r.note}`);
 
-// ── ③ Futures coverage matrix for the vetoed microcaps (rehabilitation map) ──
-console.log("\n════ ③ SECOND-VENUE COVERAGE MATRIX (futures planes — the rehab path) ════");
+// ── ③ Binance coverage matrix for the microcap pool (honest coverage map) ──
+console.log("\n════ ③ BINANCE COVERAGE MATRIX (spot vs futures — the v14.0 map) ════");
 const microcaps = ["JCT", "BTW", "BIR", "MAGMA", "IRYS"];
-console.log(`  ${"SYMBOL".padEnd(10)} OKX-swap  Gate-USDT  MEXC-fut  HTX-lin  BIN-spot`);
+console.log(`  ${"SYMBOL".padEnd(10)} BIN-spot  BIN-fapi`);
 for (const base of microcaps) {
-  const [okxR, gateR, mexcR, htxR, bspot] = await Promise.all([
-    exists(`${base} OKX`, `https://www.okx.com/api/v5/public/instruments?instType=SWAP&instId=${base}-USDT-SWAP`, (j) => Array.isArray(j?.data) && j.data.length > 0 && j.data[0]?.state === "live"),
-    exists(`${base} Gate`, `https://api.gateio.ws/api/v4/futures/usdt/contracts/${base}_USDT`, (j) => j?.name === `${base}_USDT` && j?.in_delisting !== true),
-    exists(`${base} MEXC`, `https://contract.mexc.com/api/v1/contract/detail?symbol=${base}_USDT`, (j) => j?.data?.symbol === `${base}_USDT` && j?.data?.state === 0),
-    exists(`${base} HTX`, `https://api.hbdm.com/linear-swap-api/v1/swap_contract_info?contract_code=${base}-USDT`, (j) => Array.isArray(j?.data) && j.data.length > 0 && j.data[0]?.contract_status === 1),
-    exists(`${base} Bspot`, `https://api.binance.com/api/v3/exchangeInfo?symbol=${base}USDT`, (j) => Array.isArray(j?.symbols) && j.symbols.length > 0 && j.symbols[0]?.status === "TRADING"),
+  const [bspot, bfut] = await Promise.all([
+    exists(`${base} spot`, `https://data-api.binance.vision/api/v3/exchangeInfo?symbol=${base}USDT`, (j) => Array.isArray(j?.symbols) && j.symbols.length > 0 && j.symbols[0]?.status === "TRADING"),
+    exists(`${base} fapi`, `https://fapi.binance.com/fapi/v1/exchangeInfo`, (j) => Array.isArray(j?.symbols) && j.symbols.some((s: any) => s?.symbol === `${base}USDT` && s?.status === "TRADING")),
   ]);
-  console.log(`  ${base.padEnd(10)} ${okxR.padEnd(9)} ${gateR.padEnd(10)} ${mexcR.padEnd(9)} ${htxR.padEnd(8)} ${bspot}`);
+  console.log(`  ${base.padEnd(10)} ${bspot.padEnd(9)} ${bfut}`);
 }
-console.log("\n  Verdict inputs: WS lag p50 = the venue's data-speed rank from THIS egress;");
-console.log("  coverage YES = a wireable second venue (lifts SINGLE-VENUE to NO-BINANCE-CONFIRM).");
+console.log("\n  Verdict inputs: WS lag p50 = the plane's data-speed rank from THIS egress;");
+console.log("  coverage = where the symbol actually trades on Binance (honest blind spots).");
