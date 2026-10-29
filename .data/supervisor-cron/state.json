@@ -2,15 +2,15 @@
  "ver": "supervisor-cron 1.6.0",
  "pid": 1869,
  "startedAt": "2026-10-28T22:55:30.935Z",
- "updatedAt": "2026-10-29T16:06:01.144Z",
+ "updatedAt": "2026-10-29T16:16:00.967Z",
  "jobs": {
   "sweep": {
-   "lastRunAt": 1793289960935,
+   "lastRunAt": 1793290560935,
    "nextRunAt": 1793290560935,
    "lastStatus": "ok",
-   "lastDurationMs": 203,
+   "lastDurationMs": 32,
    "lastError": null,
-   "runs": 172,
+   "runs": 173,
    "failures": 0
   },
   "progress": {
@@ -59,34 +59,34 @@
    "failures": 0
   },
   "keepwarm": {
-   "lastRunAt": 1793289960935,
-   "nextRunAt": 1793289960935,
-   "lastStatus": "ok",
-   "lastDurationMs": 209,
-   "lastError": null,
-   "runs": 264,
-   "failures": 47
+   "lastRunAt": 1793290560936,
+   "nextRunAt": 1793290860935,
+   "lastStatus": "error",
+   "lastDurationMs": 4,
+   "lastError": "HEARTBEAT COLD app:3000 0ms streak=2",
+   "runs": 266,
+   "failures": 49
   }
  },
  "lastSweep": {
-  "at": "2026-10-29T16:06:01.138Z",
-  "verdict": "AMBER",
-  "reason": "sentinel :3030 verdict AMBER · toobit-bridge doctrine: 3 violation(s) — last=MIRROR-LAG: card=SL but intent still OPEN 3455s — pollCards transition should have fired",
+  "at": "2026-10-29T16:16:00.966Z",
+  "verdict": "RED",
+  "reason": "app :3000 down",
   "services": {
    "app": {
-    "up": true,
-    "status": 200,
-    "ms": 156
+    "up": false,
+    "status": null,
+    "ms": 0
    },
    "liq": {
     "up": true,
     "status": 200,
-    "ms": 0
+    "ms": 5
    },
    "trade": {
     "up": true,
     "status": 200,
-    "ms": 0
+    "ms": 2
    },
    "armor": {
     "up": true,
@@ -101,12 +101,12 @@
    "sentinel": {
     "up": true,
     "status": 200,
-    "ms": 1
+    "ms": 4
    },
    "ws": {
     "up": true,
     "status": 400,
-    "ms": 1
+    "ms": 2
    },
    "bridge": {
     "up": true,
@@ -116,14 +116,19 @@
    "tbt": {
     "up": true,
     "status": 200,
-    "ms": 0
+    "ms": 1
    }
   },
   "anomalies": [
    {
-    "class": "sentinel-amber",
-    "sev": "warn",
-    "msg": "sentinel :3030 verdict AMBER"
+    "class": "app-down",
+    "sev": "crit",
+    "msg": "app :3000 DOWN (HTTP unreachable) · healthz=err → pulse fallback"
+   },
+   {
+    "class": "sentinel-red",
+    "sev": "crit",
+    "msg": "sentinel :3030 verdict RED"
    },
    {
     "class": "tbt-doctrine-violation",
@@ -154,14 +159,14 @@
   "newN": 2
  },
  "lastKeepwarm": {
-  "at": "2026-10-29T16:06:01.144Z",
-  "ok": true,
-  "ms": 209,
-  "bootAt": "2026-10-29T16:05:45.673Z",
-  "gitSha": "fbadf6c",
-  "coldStreak": 0
+  "at": "2026-10-29T16:16:00.936Z",
+  "ok": false,
+  "ms": 0,
+  "bootAt": null,
+  "gitSha": null,
+  "coldStreak": 2
  },
- "coldStreak": 0,
+ "coldStreak": 2,
  "alertLedger": {
   "sentinel-red": 1793289361493,
   "review-llm-unavailable": 1793271451151,
@@ -170,27 +175,6 @@
  "wsDownStreak": 0,
  "staleStreak": 0,
  "history": [
-  {
-   "id": "keepwarm",
-   "at": 1793280660935,
-   "status": "ok",
-   "durationMs": 114,
-   "detail": "HEARTBEAT OK 114ms boot=13:30:03Z sha=6a79f1d"
-  },
-  {
-   "id": "sweep",
-   "at": 1793280960935,
-   "status": "ok",
-   "durationMs": 71,
-   "detail": "AMBER: sentinel :3030 verdict AMBER · toobit-bridge doctrine: 3 violation(s) — last=MIRROR-LAG: card=SL but intent still OPEN 3"
-  },
-  {
-   "id": "keepwarm",
-   "at": 1793280960935,
-   "status": "ok",
-   "durationMs": 72,
-   "detail": "HEARTBEAT OK 72ms boot=13:35:46Z sha=6a79f1d"
-  },
   {
    "id": "keepwarm",
    "at": 1793281260936,
@@ -519,6 +503,27 @@
    "status": "ok",
    "durationMs": 209,
    "detail": "HEARTBEAT OK 209ms boot=16:05:45Z sha=fbadf6c"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1793290260935,
+   "status": "error",
+   "durationMs": 2,
+   "detail": "HEARTBEAT COLD app:3000 0ms streak=1"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1793290560936,
+   "status": "error",
+   "durationMs": 4,
+   "detail": "HEARTBEAT COLD app:3000 0ms streak=2"
+  },
+  {
+   "id": "sweep",
+   "at": 1793290560935,
+   "status": "ok",
+   "durationMs": 32,
+   "detail": "RED: app :3000 down"
   }
  ],
  "watchRuns": [
