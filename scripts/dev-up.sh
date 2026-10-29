@@ -56,6 +56,21 @@ STREAK_DIR="/home/z/my-project/.data/dev-up"
 STREAK_FILE="$STREAK_DIR/fail-streak"
 mkdir -p "$STREAK_DIR"
 
+# ── v9.3 STAB-20261029 (trace 1a184d8bbb826f0d) — SINGLE-FLIGHT LOCK ─────────
+# Lesson measured live 23:49-23:53Z: concurrent dev-up invocations (stale
+# platform-boot instance + supervisor loop + manual run) race the pre-kill/
+# spawn gate — a stale instance's pkill landed 40s AFTER a fresh spawn and
+# the app thrashed (Ready→pkill→Ready→pkill, pulse never settled). flock
+# makes the whole script single-flight: a second caller exits immediately.
+# --stop stays lock-free so an operator can always stop through a jammed lock.
+if [ "${1:-}" != "--stop" ]; then
+  exec 8>"/home/z/my-project/.data/dev-up.lock"
+  if ! flock -n 8; then
+    echo "[dev-up] another instance holds the single-flight lock — exit ($(date -u '+%H:%M:%SZ'))"
+    exit 0
+  fi
+fi
+
 # probe-gated restart of the Next.js dev server
 code=$(curl -s -m 5 -o /dev/null -w '%{http_code}' http://localhost:3000/api/pulse 2>/dev/null || true)
 if [ "$code" = "200" ]; then
