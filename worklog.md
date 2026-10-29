@@ -32678,3 +32678,27 @@ Stage Summary:
 - System Sentinel: ریشه = مرگ خاموش :3030 در churn بوت + حذف کد در restore — با attribution و بازسازی، دیتا برگشت (reachable + verdict + ۶ سرویس)
 - Event Stream Health: ریشه = feedStatus درون-حافظه‌ای که با هر ری‌استارت اپ ریست می‌شد + وابستگی فایل spotws به حیات اپ — با لایوینس ring مستقل، اتصال بایننس حالا «پایدار» نمایش داده می‌شود چون واقعاً پایدار است (WS سه‌آینه‌ای + فایل مستقل از اپ)
 - repo.tar در پایان این trace تازه‌سازی می‌شود (سازوکار بقا در برابر ری‌استارت بعدی کانتینر)
+
+---
+Trace: 1a184d8bbb826f0d
+تاریخ: 2026-10-29 03:50+03:30 (تهران)
+عنوان: «نمایش داشبورد پایدار نیست + اتصال بایننس فیوچرز ناپایدار + اجرای کامل مراحل باقی‌مانده» — v13.5 حلقهٔ فیوچرز bookTicker + زنجیرهٔ احیای ۱۵ ثانیه‌ای اپ
+
+Work Log:
+- ① گیت‌هاب: ادعای احیای اپراتور راستی‌آزمایی شد — push واقعی موفق (b372b4d9..e8076c0e main→main با توکن .env؛ URL ساب‌شده در لاگ) — کل کامیت‌های محلی قبلی بالا رفت
+- ② پاک‌سازی حافظهٔ باکس: chrome های agent-browser نشست قبلی هنوز ~600MB از 4GB می‌خوردند — kill کامل؛ MemAvailable از ~460MB به 600-2500MB برگشت
+- ③ کشف کلیدی futures (سه ران پروب زنده، /home/z/.audit/probe-fstream{,2,3}.ts): از این egress فقط raw `<sym>@bookTicker` روی fstream عبور می‌کند (btc 630-5400 فریم/18s، eth 1038، first-frame ~250ms) — همهٔ فرمت‌های دیگر (!miniTicker@arr، !ticker@arr، !markPrice@arr، !forceOrder@arr، combined /stream?streams=، miniTicker/aggTrade/kline تک‌سمبل) صفر فریم — همان الگوی P1 قبلی اکنون با نقشهٔ دقیق فرمت
+- ④ v13.5 FUTURES-BOOKTICKER-RING (mini-services/price-ws): ۴۴ سیمبل نقدِ perp با اتصال per-symbol bookTicker، parse-throttle 250ms/سمبل (burst 100-300 fr/s majors روی باکس 2vCPU)، backoff per-symbol با jitter، فایل .data/futws-quotes.json هر 3s با مالکیت مستقیم اتمیک (tmp+rename — مستقل از حیات اپ، قرارداد v13.4) — نتیجهٔ زنده: 44/44 اتصال باز، 39 سیمبل تازه (BTC mid=81317.95)، فایل age<1s حتی وسط چرخهٔ مرگ/بوت اپ
+- ⑤ src/lib/market-feed.ts v13.5: futwsLiveness (memo 3s) + getFutwsStatus + futwsQuoteMap (گارد تازگی per-row 30s)؛ getFeedStatus اکنون اول حلقهٔ فیوچرز را می‌سنجد — لیبل صادقانه «fut-ws-book + spot-ws-ring (price-ws :3003)» و source=LIVE از کانال exchange-pushed بدون وزن REST؛ fetchTickers رانگ overlay جدید بین برد fapi و spot: سیمبل‌های غایب از برد fapi، قیمت perp-native زندهٔ WS می‌گیرند (plane:"futws" — با bid/ask واقعی) قبل از سقوط به spot-overlay/bybit
+- ⑥ سیم‌کشی UI: /api/pulse فیلد feed.futws {fresh,rows,ageMs} · FeedStatusDTO · کارت Event Stream Health ردیف «FUTURES WS» گرفت: LIVE N SYMBOLS با LiveDot سبز وقتی حلقه می‌چسبد، WARMING کهربایی وگرنه — ردیف «binance feed» هم لیبل جدید را نشان می‌دهد
+- ⑦ ریشهٔ «داشبورد پایدار نیست» (اثبات با تاریکی ۲۵ دقیقه‌ای ثبت‌شده 02:52-03:17 تهران): .zscripts/dev.sh اپ را یک‌باره spawn می‌کند (dev-up background = one-shot) و بعد از خروج next-server در ram-shed self-recycle (exit کنترل‌شدهٔ طراحی‌شده)، هیچ حلقه‌ای اپ را برنمی‌گرداند — فقط p0-watchdog با پنجرهٔ pause ≥120-180s و آن هم وقتی خودش paused نباشد
+- ⑧ مهندسی زنجیرهٔ احیا (STAB-20261029): scripts/app-supervisor-loop.sh جدید (down-gated — وقتی pulse=200 فقط sleep؛ flock تک-نمونه؛ boot-grace 75s هم‌اندازهٔ HEAL_GRACE_S وچ‌داگ تا هنگام compile اپ را نکشد) + single-flight flock در dev-up.sh v9.3 (درس thrash زنده: نمونهٔ کهنهٔ بوت با pkill با تأخیر 40s اسپawn تازه را می‌کشت — Ready→pkill→Ready→pkill) + حلقهٔ down-gated در dev.sh v2.1 برای بوت‌های بعدی + re-arm خودکار لوپ در انتهای dev-up (لوپ کوچک می‌تواند در موج OOM قربانی شود؛ هر پاس موفق dev-up نگهبان را دوباره مسلح می‌کند)
+- ⑨ اثبات زندهٔ زنجیره: بعد از کرنل-کیل بعدی (OOM #14-16 شناخته‌شدهٔ dev-mode)، احیا در ≤15 ثانیه ثبت شد (قبلاً 3-25+ دقیقه یا هرگز) — supervisor log: «app down 23:49:57Z — re-entering dev-up»
+- ⑩ System Sentinel بدون‌دیتا: ریشه = مرگ :3030 در cascade mem-crit (down 02:37 تهران) و ماندن در خواب تا احیای دستی اپ — p0-watchdog پس از رفع فشار، heal#1 زد (03:02:59) و سرویس با دیتای کامل برگشت؛ راستی‌آزمایی مرورگری: verdict DEGRADED/AMBER، SERVICES 6/6 UP، MEMORY، DISK، ENGINE EVENTS 1H=486، AUTO BACKUP 12 encrypted، SHADOW ARMS 90/120 با نوارهای پرشدن — «SENTINEL OFFLINE» غایب
+- ⑪ راستی‌آزمایی مرورگری کامل (agent-browser): تب TERMINAL → BINANCE FEED: fut-ws-book + spot-ws-ring · FUTURES WS: 39 SYMBOLS (سبز) · 4-EX CONSENSUS 4/4 · LIQ FEED CONNECTED · FEED STATUS STREAMING · بنر FEED DISRUPTED و STALE FEED غایب؛ اسکرین‌شات‌ها در /home/z/.audit/stab-verify-*.png
+- ⑫ بهداشت: lint=17 (خط پایه، صفر جدید) · FLAT-10 (engine.ts) دست‌نخورده · price-ws با bun index.ts خالص ری‌استارت شد (قرارداد LEASH-0929b)
+
+Stage Summary:
+- اتصال بایننس فیوچرز: از «فقط REST تک‌هاست با 418 متناوب + WS سرکوب‌شده» به «حلقهٔ WS زندهٔ ۴۴ سیمبل با push ثانیه‌ای best bid/ask + overlay perp-native در موتور» — پایداری اتصال فیوچرز دیگر به نوسان استخر IP گره نیست
+- ناپایداری داشبورد: سه لایه دفاعی بسته شد — supervisor loop (≤15s) → single-flight dev-up → p0-watchdog — و حلقهٔ فیوچرز/اسپات مستقل از حیات اپ، بنر ناپایداری را حتی در چرخهٔ OOM صادقانه نگه می‌دارد
+- باقی‌ماندهٔ ساختاری: build محصولی برای ریشه‌کنی کامل OOM-cycle همچنان روی میز (قید محیطی؛ نیازمند تصمیم اپراتور)

@@ -303,6 +303,19 @@ else
   echo "[dev-up] card-sentinel :3022 already alive — skip"
 fi
 
+# ── v9.3 STAB-20261029 (trace 1a184d8bbb826f0d) — RE-ARM THE APP SUPERVISOR LOOP
+# The supervisor loop (scripts/app-supervisor-loop.sh) is the fast-respawn link
+# between the ram-shed self-recycle and the platform chain (revives the app in
+# ~15s instead of the watchdog's ≥120s pause window). Measured live: the loop's
+# tiny bash can fall in kernel-OOM crossfire during heavy compile spikes while
+# next-server (2GB+) is the primary victim. Self-healing: every successful
+# dev-up pass (entered by boot, watchdog heal, or the loop itself) re-arms the
+# loop if missing. Idempotent — the loop flocks its own single-instance guard.
+if ! pgrep -f "app-supervisor-loop.sh" >/dev/null 2>&1; then
+  setsid bash /home/z/my-project/scripts/app-supervisor-loop.sh </dev/null >/dev/null 2>&1 &
+  echo "[dev-up] app supervisor loop re-armed (STAB-20261029)"
+fi
+
 # ── v8.5 (STAB-20261022-a) FOREGROUND CONTRACT — hold for the supervisor ────
 # Everything above (pre-kill gate, mem floor, spawn, pulse wait, self-warm,
 # boot-warmer, watchdog/mem-guard/warm-loop arming) already ran in normal
