@@ -29,6 +29,22 @@
 //     سیگنال (Signal.leverage) — pre-entry set-leverage per card, re-set only
 //     on change; margin stays FIXED $5 → notional = 5 × cardLev.
 //   • plain bun, NO --hot (LEASH-0929b doctrine), state in .data/toobit-bridge.
+// v1.5.0 (operator mandate trace 1a1899d2237473d9 — «فعال کن با بالانس ۳$ ثابت،
+//   ژورنال‌نویسی تمام وقایع برای گزارش و نمودار — دکترین مهندسی و کامل»):
+//   ① ACTIVATION — execEnabled true via the one-time cfgRev=3 migration; the
+//      FIXED per-signal margin drops $5 → $3 and paperBalanceUsdt=3 becomes
+//      the FIXED paper account anchor. LIVE stays double-gated (explicit
+//      approval AND positive futures balance — unchanged).
+//   ② PAPER MONEY TRUTH — every PAPER bank/close now prices the exit on the
+//      LIVE taker side of the real book and books REAL PnL (qty × Δprice ×
+//      contractMultiplier) into the intent and the fixed-anchor account
+//      (equity = 3$ + Σ realized, capped 400-point equity curve, win/loss
+//      ledger). Previously PAPER fills carried zero PnL accounting.
+//   ③ FULL-EVENT JOURNAL — audit() now counts every event by kind since boot
+//      (evCount), and GET /journal serves the reporting contract: account
+//      summary, equity curve, since-boot event counters, raw audit tail
+//      (last 120 rows), closed-intent PnL board, latency percentiles. The
+//      dashboard renders the chart + journal feed via /api/*/journal proxy.
 //   • v1.3.0 DOCTRINE SUPERVISOR (trace 1a15f7d945d27ead — «سوپروایزر مهندسی
 //     ارشد برای پیگیری و دکترین»): every intent carries doctrine fields
 //     (levSrc, expectedNotional, actualNotional, entryDriftBps, entryAgeMs,
@@ -47,7 +63,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import { Database } from "bun:sqlite";
 import { createHmac } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 
 // v1.4.4 RISK-CAP (trace 1a17357988d00515 «حساب لایو داره از بین میره»):
 //   • notional = margin×cardLev is now a CEILING — scaled DOWN so that
@@ -58,7 +74,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync
 //   • doctrine notional audit is risk-cap aware; /config accepts maxRiskPct 0.1..10.
 // v1.4.5 PHANTOM-PNL FIX (trace 1a174e9c2aa28295): never-executed intents must
 // never inherit the symbol's fill history; books self-heal at boot.
-const VER = "toobit-bridge 1.4.5";
+const VER = "toobit-bridge 1.5.0";
 // v1.4.3 (operator order trace 1a172ca1af260c0d — «مارجین 5$/$0.5 به‌جای 10$، چرا هیچ سیگنالی در سود بسته نشده، وضعیت NX-3139 در لایو متفاوت است — اقدامات حیاتی فوری»):
 //   Forensics proved FOUR independent root causes, all fixed here:
 //   ① CONTRACT-MULTIPLIER SIZING BUG (the $0.5 margin) — exchangeInfo carries
@@ -147,6 +163,7 @@ const METRICS_WINDOW = 50;
 interface BridgeConfig {
   notionalUsdt: number;   // LEGACY (pre-1.1.0 sizing) — kept only for old persisted state; UI must read marginUsdt × cardLev instead
   marginUsdt: number;     // FIXED per-signal entry MARGIN (v1.1.0 operator mandate trace 1a15bc29d2bb2c29) — notional = marginUsdt × cardLev
+  paperBalanceUsdt: number; // v1.5.0 — FIXED paper account balance anchor ($3 mandate trace 1a1899d2237473d9)
   maxRiskPct: number;     // v1.4.4 — max % of WALLET equity risked per trade (notional × stopDistance); sizing scales DOWN to fit
   maxConcurrent: number;  // max simultaneous open intents — 0 = UNLIMITED (v1.4.1 operator mandate)
   cfgRev?: number;        // config migration revision (2 = cap lifted to unlimited)
@@ -160,7 +177,8 @@ interface BridgeConfig {
 }
 const DEFAULT_CFG: BridgeConfig = {
   notionalUsdt: 15,
-  marginUsdt: 5,
+  marginUsdt: 3,          // v1.5.0 — $3 fixed margin (operator mandate trace 1a1899d2237473d9 «بالانس ۳$ ثابت»)
+  paperBalanceUsdt: 3,    // v1.5.0 — fixed $3 paper anchor
   maxRiskPct: 2,          // v1.4.4 — 2% of wallet equity per trade (trace 1a17357988d00515)
   maxConcurrent: 0,       // v1.4.1 — 0 = UNLIMITED simultaneous open intents (operator mandate)
   tp1Frac: 0.4,
@@ -179,6 +197,20 @@ interface DoctrineState {
   violations: DoctrineViolation[];    // last 20 doctrine violations
   lastScanAt: number;
   orphans: number;                    // v1.4.0 — ACTIVE cards seen without any execution intent
+}
+
+// v1.5.0 — fixed-anchor PAPER account (بالانس ثابت) + equity curve for the chart
+interface PaperPoint { at: number; eq: number; pnl: number }
+interface PaperAccount {
+  anchorUsdt: number;   // FIXED $3 mandate — the paper account anchor
+  realizedUsdt: number; // cumulative paper realized PnL (live-book priced)
+  equityUsdt: number;   // anchor + realized
+  closedN: number; wins: number; losses: number;
+  curve: PaperPoint[];  // capped equity curve (PAPER_CURVE_CAP)
+}
+const PAPER_CURVE_CAP = 400;
+function newPaperAccount(anchor: number): PaperAccount {
+  return { anchorUsdt: anchor, realizedUsdt: 0, equityUsdt: Number(anchor.toFixed(4)), closedN: 0, wins: 0, losses: 0, curve: [] };
 }
 
 interface Latency { detectMs: number | null; execMs: number | null; totalMs: number | null; slipBps: number | null }
@@ -226,15 +258,19 @@ interface BridgeState {
   levMap: Record<string, number>; // v1.2.0 — last-set leverage per toobit symbol (re-set only on change)
   floorLearn: Record<string, number>; // v1.4.2 — learned per-symbol real order floor (USDT notional) from server rejections
   doctrine: DoctrineState;        // v1.3.0 — supervisor counters + violation journal
+  paper: PaperAccount;            // v1.5.0 — fixed-$3 paper account + equity curve
 }
-let S: BridgeState = { cfg: { ...DEFAULT_CFG }, lastCreatedAtMs: 0, intents: {}, metrics: [], levMap: {}, floorLearn: {}, doctrine: { opens: 0, skipBy: {}, violations: [], lastScanAt: 0, orphans: 0 } };
+let S: BridgeState = { cfg: { ...DEFAULT_CFG }, lastCreatedAtMs: 0, intents: {}, metrics: [], levMap: {}, floorLearn: {}, doctrine: { opens: 0, skipBy: {}, violations: [], lastScanAt: 0, orphans: 0 }, paper: newPaperAccount(DEFAULT_CFG.paperBalanceUsdt) };
 
 const tehran = (d: number = Date.now()) =>
   new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Tehran", hour12: false, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(d);
 function log(level: "info" | "warn" | "crit", msg: string, extra: Record<string, unknown> = {}): void {
   try { appendFileSync(`${ROOT}/logs/toobit-bridge.log`, `${tehran()} ${level.toUpperCase()} ${msg} ${JSON.stringify(extra)}\n`); } catch { /* never */ }
 }
+// v1.5.0 — since-boot event counters (the journal "counters" contract)
+const evCount = new Map<string, number>();
 function audit(ev: string, det: Record<string, unknown>): void {
+  evCount.set(ev, (evCount.get(ev) ?? 0) + 1);
   try { appendFileSync(AUDIT, JSON.stringify({ at: Date.now(), ev, ...det }) + "\n"); } catch { /* never */ }
   if (ev.startsWith("EXEC") || ev.startsWith("RECON-DRIFT") || ev.startsWith("SKIP") || ev.startsWith("DOCTRINE")) log(ev.startsWith("RECON") || ev.startsWith("DOCTRINE") ? "warn" : "info", ev, det);
 }
@@ -288,6 +324,24 @@ function loadState(): void {
       // v1.4.1 migration: lift the legacy concurrency cap (3) once — operator
       // mandate «باید بدون سقف باشد». Explicit later /config writes persist normally.
       if ((S.cfg.cfgRev ?? 0) < 2) { S.cfg.maxConcurrent = 0; S.cfg.cfgRev = 2; }
+      // v1.5.0 migration (cfgRev 3) — operator ACTIVATION mandate (trace
+      // 1a1899d2237473d9): fixed $3 margin + fixed $3 paper anchor + exec ON.
+      // One-time; later /config writes persist normally. LIVE stays double-gated.
+      if ((S.cfg.cfgRev ?? 0) < 3) {
+        S.cfg.marginUsdt = 3;
+        S.cfg.paperBalanceUsdt = 3;
+        S.cfg.execEnabled = true;
+        S.cfg.cfgRev = 3;
+        audit("CFG-ACTIVATE", { trace: "1a1899d2237473d9", marginUsdt: 3, paperBalanceUsdt: 3, execEnabled: true, note: "fixed-$3 activation mandate" });
+      }
+      // v1.5.0 — paper account load: cfg anchor is the source of truth; equity
+      // always re-derives from (anchor + realized) so a /config anchor change
+      // re-bases the curve honestly.
+      S.paper = raw.paper
+        ? { ...newPaperAccount(S.cfg.paperBalanceUsdt), ...raw.paper, anchorUsdt: S.cfg.paperBalanceUsdt }
+        : newPaperAccount(S.cfg.paperBalanceUsdt);
+      S.paper.equityUsdt = Number((S.paper.anchorUsdt + S.paper.realizedUsdt).toFixed(6));
+      S.paper.anchorUsdt = S.cfg.paperBalanceUsdt;
       // v1.2.0 hardening: pre-v1.2.0 persisted intents have no leverage field —
       // backfill so notional math (margin × leverage) can never see undefined.
       // v1.3.0 hardening: backfill doctrine fields on legacy intents too.
@@ -782,7 +836,17 @@ async function doBank(it: Intent, fracOfOrig: number, reason: string): Promise<v
   } else {
     // v1.4.0 — PAPER سیو سود was invisible in audit.jsonl (only in state.json);
     // the paper fill rides the REAL toobit book so it deserves the same trail.
-    audit("EXEC-BANK-PAPER", { serial: it.serial, reason, qty, note: "paper fill on real book" });
+    // v1.5.0 — paper money truth: the banked slice is priced at the LIVE taker
+    // side and books REAL PnL into the intent + fixed-$3 account.
+    const tick = await tbTicker(it.tbSymbol);
+    const exit = tick ? (it.direction === "LONG" ? tick.bid : tick.ask) : null;
+    const entry = it.fillPrice ?? it.cardEntry;
+    const sign = it.direction === "LONG" ? 1 : -1;
+    const mult = it.contractMult ?? instruments.get(it.tbSymbol)?.mult ?? 1;
+    const pnl = exit !== null && entry > 0 ? (exit - entry) * qty * sign * mult : 0;
+    it.realizedPnlUsdt = Number(((it.realizedPnlUsdt ?? 0) + pnl).toFixed(6));
+    audit("EXEC-BANK-PAPER", { serial: it.serial, reason, qty, exit: exit ?? null, pnl: Number(pnl.toFixed(6)), note: "paper fill on real book (v1.5.0 priced)" });
+    if (pnl !== 0) paperBook(it, pnl, `${reason} bank`);
   }
   it.qtyRemaining = Number((it.qtyRemaining - qty).toFixed(10));
   if (reason === "TP1") it.qtyBankedTp1 = qty;
@@ -811,6 +875,21 @@ async function doClose(it: Intent, reason: string): Promise<void> {
         return;
       }
     }
+  }
+  // v1.5.0 — PAPER close books the remaining slice at the LIVE taker side and
+  // settles the intent's full realized PnL into the fixed-$3 account.
+  if (it.mode === "PAPER" && it.status === "CLOSING") {
+    const tick = await tbTicker(it.tbSymbol);
+    const exit = tick ? (it.direction === "LONG" ? tick.bid : tick.ask) : null;
+    const entry = it.fillPrice ?? it.cardEntry;
+    const sign = it.direction === "LONG" ? 1 : -1;
+    const mult = it.contractMult ?? instruments.get(it.tbSymbol)?.mult ?? 1;
+    const pnl = exit !== null && entry > 0 ? (exit - entry) * it.qtyRemaining * sign * mult : 0;
+    it.realizedPnlUsdt = Number(((it.realizedPnlUsdt ?? 0) + pnl).toFixed(6));
+    audit("EXEC-PNL-PAPER", { serial: it.serial, reason, exit: exit ?? null, closePnl: Number(pnl.toFixed(6)), totalPnl: it.realizedPnlUsdt });
+    if (pnl !== 0) paperBook(it, pnl, `close:${reason}`);
+    S.paper.closedN++;
+    if ((it.realizedPnlUsdt ?? 0) > 0) S.paper.wins++; else S.paper.losses++;
   }
   it.qtyRemaining = 0;
   it.status = "CLOSED";
@@ -1074,6 +1153,46 @@ async function reconcile(): Promise<void> {
   } finally { reconBusy = false; }
 }
 
+// ── v1.5.0 PAPER fixed-anchor account bookkeeping + journal tail ────────────
+function paperBook(it: Intent, pnlUsdt: number, note: string): void {
+  const p = S.paper;
+  p.realizedUsdt = Number((p.realizedUsdt + pnlUsdt).toFixed(6));
+  p.equityUsdt = Number((p.anchorUsdt + p.realizedUsdt).toFixed(6));
+  p.curve.push({ at: Date.now(), eq: p.equityUsdt, pnl: Number(pnlUsdt.toFixed(6)) });
+  if (p.curve.length > PAPER_CURVE_CAP) p.curve = p.curve.slice(-PAPER_CURVE_CAP);
+  audit("PAPER-EQUITY", { serial: it.serial, pnl: Number(pnlUsdt.toFixed(6)), equity: p.equityUsdt, realized: p.realizedUsdt, note });
+}
+function paperSummary() {
+  const p = S.paper;
+  return {
+    anchorUsdt: Number(p.anchorUsdt.toFixed(2)),
+    realizedUsdt: Number(p.realizedUsdt.toFixed(4)),
+    equityUsdt: Number(p.equityUsdt.toFixed(4)),
+    closedN: p.closedN, wins: p.wins, losses: p.losses,
+    winRate: p.closedN > 0 ? Number(((p.wins / p.closedN) * 100).toFixed(1)) : null,
+    curveN: p.curve.length,
+  };
+}
+/** v1.5.0 — last N rows of audit.jsonl (tail-read, torn-line tolerant). */
+function auditTail(maxRows = 120): Array<Record<string, unknown>> {
+  try {
+    const stat = statSync(AUDIT);
+    const READ = 256 * 1024;
+    const start = Math.max(0, stat.size - READ);
+    const fh = openSync(AUDIT, "r");
+    const len = stat.size - start;
+    const buf = Buffer.alloc(len);
+    readSync(fh, buf, 0, len, start);
+    closeSync(fh);
+    const lines = buf.toString("utf8").split("\n").filter((l) => l.trim().length > 0);
+    const rows: Array<Record<string, unknown>> = [];
+    for (let i = lines.length - 1; i >= 0 && rows.length < maxRows; i--) {
+      try { rows.push(JSON.parse(lines[i]!) as Record<string, unknown>); } catch { /* torn/partial line — skip */ }
+    }
+    return rows;
+  } catch { return []; }
+}
+
 // ── metrics helpers ──────────────────────────────────────────────────────────
 const pct = (arr: Array<number | null>, p: number): number | null => {
   const v = arr.filter((x): x is number => x !== null && Number.isFinite(x)).sort((a, b) => a - b);
@@ -1185,6 +1304,23 @@ Bun.serve({
         openIntents: intents.filter((i) => i.status === "OPEN" || i.status === "OPENING").map((i) => ({ serial: i.serial, symbol: i.symbol, direction: i.direction, lev: i.leverage, levSrc: i.levSrc ?? "card", expectedNotional: i.expectedNotional ?? null, actualNotional: i.actualNotional ?? null, entryAgeMs: i.entryAgeMs ?? null, entryDriftBps: i.entryDriftBps ?? null, cardStatus: i.cardStatus ?? i.lastStatusSeen, status: i.status, mode: i.mode, protected: i.protected ?? (i.mode !== "LIVE"), openedAt: i.openedAt, lat: i.lat })),
       });
     }
+    if (req.method === "GET" && path === "/journal") {
+      // v1.5.0 — full-event journal (report + chart contract, trace 1a1899d2237473d9)
+      const jIntents = Object.values(S.intents).sort((a, b) => (b.closedAt ?? b.openedAt ?? 0) - (a.closedAt ?? a.openedAt ?? 0));
+      const closed = jIntents.filter((i) => i.status === "CLOSED" && typeof i.realizedPnlUsdt === "number").slice(0, 25)
+        .map((i) => ({ serial: i.serial, symbol: i.symbol, mode: i.mode, closeReason: i.closeReason, realizedPnlUsdt: i.realizedPnlUsdt, closedAt: i.closedAt, cardEntry: i.cardEntry, fillPrice: i.fillPrice }));
+      let totalSinceBoot = 0;
+      for (const v of evCount.values()) totalSinceBoot += v;
+      return Response.json({
+        ok: true, ver: VER, mode: isLiveMode() ? "LIVE" : "PAPER",
+        account: paperSummary(),
+        equityCurve: S.paper.curve.slice(-300),
+        counters: { totalSinceBoot, byKind: Object.fromEntries([...evCount.entries()].sort((a, b) => b[1] - a[1])), skipBy: S.doctrine.skipBy, opens: S.doctrine.opens, orphans: S.doctrine.orphans ?? 0 },
+        closed,
+        latency: metricsSummary(),
+        recent: auditTail(120),
+      });
+    }
     if (req.method === "GET" && path === "/status") {
       const intents = Object.values(S.intents).sort((a, b) => (b.openedAt ?? b.closedAt ?? 0) - (a.openedAt ?? a.closedAt ?? 0));
       // v1.4.3 — LIVE money truth: exchange-verified realized (closed) + mark PnL (open)
@@ -1203,6 +1339,7 @@ Bun.serve({
           closedN: liveClosed.length,
           openN: liveOpen.length,
         },
+        paper: { ...paperSummary(), openN: intents.filter((i) => i.mode === "PAPER" && (i.status === "OPEN" || i.status === "OPENING")).length }, // v1.5.0 — fixed-$3 paper account
         killFile: killFile(),
         openIntents: intents.filter((i) => i.status === "OPEN" || i.status === "OPENING"),
         recent: intents.slice(-12).reverse(),
@@ -1232,6 +1369,11 @@ Bun.serve({
       if (path === "/config") {
         const c = S.cfg;
         if (typeof body.marginUsdt === "number" && body.marginUsdt >= 1 && body.marginUsdt <= 100) c.marginUsdt = body.marginUsdt;
+        if (typeof body.paperBalanceUsdt === "number" && body.paperBalanceUsdt >= 1 && body.paperBalanceUsdt <= 1000) { // v1.5.0 — re-anchor the fixed paper account
+          c.paperBalanceUsdt = body.paperBalanceUsdt;
+          S.paper.anchorUsdt = c.paperBalanceUsdt;
+          S.paper.equityUsdt = Number((c.paperBalanceUsdt + S.paper.realizedUsdt).toFixed(6));
+        }
         if (typeof body.maxRiskPct === "number" && body.maxRiskPct >= 0.1 && body.maxRiskPct <= 10) c.maxRiskPct = body.maxRiskPct; // v1.4.4 — % of wallet equity risked per trade (entry→SL)
         if (typeof body.notionalUsdt === "number" && body.notionalUsdt >= 5 && body.notionalUsdt <= 500) c.notionalUsdt = body.notionalUsdt;
         if (typeof body.maxConcurrent === "number" && body.maxConcurrent >= 0 && body.maxConcurrent <= 50) c.maxConcurrent = Math.floor(body.maxConcurrent); // 0 = UNLIMITED (v1.4.1)

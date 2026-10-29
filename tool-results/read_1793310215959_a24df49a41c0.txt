@@ -1,0 +1,462 @@
+    30→//     on change; margin stays FIXED $5 → notional = 5 × cardLev.
+    31→//   • plain bun, NO --hot (LEASH-0929b doctrine), state in .data/toobit-bridge.
+    32→//   • v1.3.0 DOCTRINE SUPERVISOR (trace 1a15f7d945d27ead — «سوپروایزر مهندسی
+    33→//     ارشد برای پیگیری و دکترین»): every intent carries doctrine fields
+    34→//     (levSrc, expectedNotional, actualNotional, entryDriftBps, entryAgeMs,
+    35→//     protected) and two hard ENTRY GATES replace blind market entries:
+    36→//       ENTRY-DRIFT — skip if |refPrice − cardEntry| > maxEntryDriftBps
+    37→//                     (فیلتر سیگنال‌هایی با اختلاف قیمتی بالا)
+    38→//       ENTRY-DELAY — skip if card age at entry > maxEntryAgeMs
+    39→//                     (فیلتر فاصله زمانی با تأخیر)
+    40→//     doctrineScan() every 30s audits OPEN intents (leverage↔card mirror,
+    41→//     notional math, card-status mirror lag, protection) → DOCTRINE-VIOLATION
+    42→//     journal + GET /doctrine + .data/toobit-bridge/doctrine-latest.json.
+    43→//     The «Notional shows another number» root cause was the UI reading the
+    44→//     LEGACY cfg.notionalUsdt (15) — sizing since v1.1.0 is margin(5)×cardLev;
+    45→//     v1.3.0 exposes expected/actual notional per intent so the panel shows
+    46→//     the real math (step-rounding floor makes actual ≤ expected by design).
+    47→// ─────────────────────────────────────────────────────────────────────────────
+    48→import { Database } from "bun:sqlite";
+    49→import { createHmac } from "node:crypto";
+    50→import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+    51→
+    52→// v1.4.4 RISK-CAP (trace 1a17357988d00515 «حساب لایو داره از بین میره»):
+    53→//   • notional = margin×cardLev is now a CEILING — scaled DOWN so that
+    54→//     notional × cardStopDistance ≤ maxRiskPct% (default 2%) of WALLET equity.
+    55→//     Audit of 2026-10-25: a ~5% stop on $60–100 notional burned $2.7–4.3 per
+    56→//     SL hit on a $47 account (−22% in one day) — risk was unbounded.
+    57→//   • walletUsdt captured from futures/balance (balance ≠ availableBalance).
+    58→//   • doctrine notional audit is risk-cap aware; /config accepts maxRiskPct 0.1..10.
+    59→// v1.4.5 PHANTOM-PNL FIX (trace 1a174e9c2aa28295): never-executed intents must
+    60→// never inherit the symbol's fill history; books self-heal at boot.
+    61→const VER = "toobit-bridge 1.4.5";
+    62→// v1.4.3 (operator order trace 1a172ca1af260c0d — «مارجین 5$/$0.5 به‌جای 10$، چرا هیچ سیگنالی در سود بسته نشده، وضعیت NX-3139 در لایو متفاوت است — اقدامات حیاتی فوری»):
+    63→//   Forensics proved FOUR independent root causes, all fixed here:
+    64→//   ① CONTRACT-MULTIPLIER SIZING BUG (the $0.5 margin) — exchangeInfo carries
+    65→//      contractMultiplier (0.1 for SUI/FARTCOIN, 1 for WLD/...) which was ignored:
+    66→//      the bridge believed it sent $50/$80 notional while the book saw $4.98/$7.93
+    67→//      → margin $0.49 on the exchange (NX-3126/NX-3140). Now qty = notional ÷
+    68→//      (price × mult) with mult parsed per symbol; floors/notionals are REAL USDT.
+    69→//   ② newClientOrderId REQUIRED (why no signal closed in profit) — Toobit
+    70→//      rejects every order without newClientOrderId (-1004). Opens always set it;
+    71→//      ALL TP1/TP2 bank orders and both SL close-fallbacks omitted it → 5/5
+    72→//      «سیو سود» banks rejected, no profit ever locked in LIVE. placeOrder now
+    73→//      auto-generates a clientOrderId for every order.
+    74→//   ③ ONE-SHOT TRANSITIONS (NX-3139 class divergence) — pollCards stamped
+    75→//      lastStatusSeen BEFORE the action; a rejected bank/close never retried and
+    76→//      the engine's stop-move (breakeven after TP1) never mirrored to the
+    77→//      exchange → ledger said SL +3.92% while the real position lost -0.59.
+    78→//      Now: failed bank/close revert the transition (retry next poll, capped),
+    79→//      and engine stopLoss/tp mutations on OPEN cards mirror to the exchange.
+    80→//   ④ RECON RE-ATTACH SPAM — 4176 re-attach events in ~10h because position-
+    81→//      level TP/SL never appears in openOrders. Re-assert is throttled to once
+    82→//      per 10min per symbol; stop-move mirrors bypass the throttle.
+    83→//   ⑤ LIVE PnL TELEMETRY — per-intent realizedPnlUsdt (position realizedPnL
+    84→//      via recon + userTrades at close) and /status.livePnl aggregate, so «چرا
+    85→//      هیچ سیگنالی در سود بسته نشده» is answerable in money, not guesses.
+    86→//   ⑥ BALANCE-CAP GATE — LIVE entries skip honestly (BALANCE-CAP) when the
+    87→//      fixed margin no longer fits the available balance (fresh balance read
+    88→//      at entry). marginUsdt stays $5 (standing v1.1.0 operator mandate;
+    89→//      $10 per entry does not fit the current balance — operator knob via /config).
+    90→// v1.4.2 (operator order trace 1a172a8554da03ad — «چرا سیستم با LIVE مشابه نیست؟» LIVE-signal audit):
+    91→//   TOOBIT REAL FLOOR LEARNING — exchangeInfo reports minNotional=0, but the
+    92→//   server enforces a real per-symbol order floor (~121-124+ USDT observed).
+    93→//   High-price symbols (BNB/ETH/TAO/ZEC) at fixed-$5 margin × card leverage
+    94→//   (notional 60-100) were OPEN-REJECTED -1199/-1202 "quantity too small" →
+    95→//   six FAILED intents whose cards were PAPER-profitable in the engine ledger
+    96→//   (3128 ZEC +6.5%, 3137 ETH +3.5% — phantom vs LIVE). Now: the first
+    97→//   "quantity too small" rejection teaches a per-symbol floor (floorLearn),
+    98→//   reclassifies the intent as an honest MIN-FLOOR SKIP (not FAILED), and
+    99→//   pre-skips future cards for that symbol while their notional ≤ learned floor.
+   100→// v1.4.1 (operator mandate trace 1a170bba02dff781 — «چرا سقف هم‌زمانی 3 است؟ باید بدون سقف باشد»):
+   101→//   UNLIMITED CONCURRENCY — maxConcurrent 0 = بدون سقف (مقدار پیش‌فرض). One-time
+   102→//   cfgRev=2 migration lifts the persisted legacy cap (3). /config accepts 0..50
+   103→//   (0 = unlimited). MAX-CONCURRENT skip + retry window now only exist when a
+   104→//   positive cap is explicitly configured. LIVE keys installed (gitignored .env).
+   105→// v1.4.0 (operator mandate trace 1a1704d407f00dad — «ممیزی TOOBIT EXEC BRIDGE + راستی‌آزمایی تمام دستورات مدیریت سیگنال‌ها»):
+   106→//   ① SINGLETON PID LOCK — forensics found the service running under `bun --hot`:
+   107→//      every file touch re-exec'd a NEW module generation INSIDE the same process
+   108→//      while the OLD generation's timers kept firing → two writers flip-flopped
+   109→//      state.json every ~30s ({146 intents, 3 open} ↔ {92 intents, 0 open}) and
+   110→//      one restart could lose the open intents to the ghost's stale snapshot.
+   111→//      Lock = one verified-alive pid file; second instance refuses to boot.
+   112→//      Dev script is now plain bun (LEASH-0929b restored).
+   113→//   ② ORPHAN SWEEP — ~52 cards (3055-3107) born during the ghost/downtime window
+   114→//      never got an intent (silent holes in the execution mirror). Every 60s the
+   115→//      sweep makes each unmirrored ACTIVE card an auditable ORPHAN-CARD event
+   116→//      (read-only; entries stay behind ENTRY-DELAY/DRIFT — no late chasing).
+   117→//   ③ RETRY WINDOW — MAX-CONCURRENT skips previously never re-entered the queue
+   118→//      (a freed slot within 90s was wasted). Now a skipped card retries while it
+   119→//      is still inside the ENTRY-DELAY window; beyond it RETRY-EXPIRED honestly.
+   120→//   ④ PAPER bank visibility — EXEC-BANK-PAPER events now reach audit.jsonl
+   121→//      (previously PAPER سیو سود was invisible there, only in state.json).
+   122→// v1.3.0 trace-1a15f7d945d27ead: DOCTRINE SUPERVISOR — entry gates (drift/delay), expected-vs-actual notional, /doctrine audit endpoint; v1.2.0 per-card leverage & v1.1.0 fixed-$5 margin unchanged
+   123→const ROOT = "/home/z/my-project";
+   124→const DATA = `${ROOT}/.data/toobit-bridge`;
+   125→const STATE = `${DATA}/state.json`;
+   126→const AUDIT = `${DATA}/audit.jsonl`;
+   127→const PORT = 3021;
+   128→const AUTH_KEY = "3195f6883529fa43a9d62d0fa92b01e7adc851ed0ed3b2b6";
+   129→const DB_PATH = `${ROOT}/db/custom.db`;
+   130→
+   131→// keys live in mini-services/toobit-bridge/.env (gitignored) — fallback empty
+   132→let API_KEY = "";
+   133→let API_SECRET = "";
+   134→try {
+   135→  const env = readFileSync(`${ROOT}/mini-services/toobit-bridge/.env`, "utf8");
+   136→  API_KEY = /^TOOBIT_API_KEY=(.*)$/m.exec(env)?.[1]?.trim() ?? "";
+   137→  API_SECRET = /^TOOBIT_API_SECRET=(.*)$/m.exec(env)?.[1]?.trim() ?? "";
+   138→} catch { /* keys absent → PAPER with no exchange account calls */ }
+   139→
+   140→const BASE = "https://api.toobit.com";
+   141→const POLL_MS = 1500;
+   142→const RECON_MS = 15_000; // v1.1.0 (operator mandate): راستی‌آزمایی حساب با کمترین اختلاف زمانی — 30s → 15s
+   143→const STALE_SKIP_MS = 10 * 60_000; // a card older than this at first sight is never executed
+   144→const TRACK_LIMIT = 40;
+   145→const METRICS_WINDOW = 50;
+   146→
+   147→interface BridgeConfig {
+   148→  notionalUsdt: number;   // LEGACY (pre-1.1.0 sizing) — kept only for old persisted state; UI must read marginUsdt × cardLev instead
+   149→  marginUsdt: number;     // FIXED per-signal entry MARGIN (v1.1.0 operator mandate trace 1a15bc29d2bb2c29) — notional = marginUsdt × cardLev
+   150→  maxRiskPct: number;     // v1.4.4 — max % of WALLET equity risked per trade (notional × stopDistance); sizing scales DOWN to fit
+   151→  maxConcurrent: number;  // max simultaneous open intents — 0 = UNLIMITED (v1.4.1 operator mandate)
+   152→  cfgRev?: number;        // config migration revision (2 = cap lifted to unlimited)
+   153→  tp1Frac: number;        // fraction of ORIGINAL qty banked at TP1
+   154→  tp2Frac: number;        // additional fraction banked at TP2
+   155→  leverage: number;       // FALLBACK for legacy cards with leverage<=0 (v1.2.0: per-card Signal.leverage is authoritative)
+   156→  execEnabled: boolean;   // master switch for NEW entries (closes always run)
+   157→  liveApproved: boolean;  // operator gate for real-money execution
+   158→  maxEntryDriftBps: number; // v1.3.0 ENTRY-DRIFT gate — skip when market has run away from cardEntry (bps)
+   159→  maxEntryAgeMs: number;    // v1.3.0 ENTRY-DELAY gate — skip when card age at entry exceeds this (ms)
+   160→}
+   161→const DEFAULT_CFG: BridgeConfig = {
+   162→  notionalUsdt: 15,
+   163→  marginUsdt: 5,
+   164→  maxRiskPct: 2,          // v1.4.4 — 2% of wallet equity per trade (trace 1a17357988d00515)
+   165→  maxConcurrent: 0,       // v1.4.1 — 0 = UNLIMITED simultaneous open intents (operator mandate)
+   166→  tp1Frac: 0.4,
+   167→  tp2Frac: 0.3,
+   168→  leverage: 5,
+   169→  execEnabled: true,
+   170→  liveApproved: false,
+   171→  maxEntryDriftBps: 80,     // 0.8% from card entry — beyond that the edge on the card is gone
+   172→  maxEntryAgeMs: 90_000,    // 90s entry window — دقت و سرعت بالای ورود
+   173→};
+   174→
+   175→interface DoctrineViolation { at: number; serial: number; kind: string; detail: string }
+   176→interface DoctrineState {
+   177→  opens: number;                      // doctrine-clean opens counted since boot
+   178→  skipBy: Record<string, number>;     // skip counters by reason (incl. ENTRY-DRIFT / ENTRY-DELAY)
+   179→  violations: DoctrineViolation[];    // last 20 doctrine violations
+   180→  lastScanAt: number;
+   181→  orphans: number;                    // v1.4.0 — ACTIVE cards seen without any execution intent
+   182→}
+   183→
+   184→interface Latency { detectMs: number | null; execMs: number | null; totalMs: number | null; slipBps: number | null }
+   185→interface Intent {
+   186→  cardId: string; serial: number; symbol: string; tbSymbol: string;
+   187→  direction: "LONG" | "SHORT";
+   188→  leverage: number; // v1.2.0 — the card's own leverage, mirrored onto the exchange before entry
+   189→  status: "OPENING" | "OPEN" | "CLOSING" | "CLOSED" | "FAILED" | "SKIP";
+   190→  mode: "LIVE" | "PAPER";
+   191→  qtyOrig: number; qtyRemaining: number;
+   192→  qtyBankedTp1: number; qtyBankedTp2: number;
+   193→  cardEntry: number; tp1: number; tp2: number; tp3: number; stopLoss: number;
+   194→  clientOrderId: string; orderId: string | null;
+   195→  fillPrice: number | null; openedAt: number | null; closedAt: number | null;
+   196→  closeReason: string | null;
+   197→  createdAt0?: number;
+   198→  lat: Latency;
+   199→  lastStatusSeen: string;
+   200→  cardStatus?: string;          // v1.3.0 doctrine — mirrored DB card status (open-management audit)
+   201→  contractMult?: number;        // v1.4.3 — exchange contractMultiplier at entry (real notional = qty × price × mult)
+   202→  sizingRev?: number;           // v1.4.3 — 3 = multiplier-aware sizing; 2 = pre-1.4.3 legacy (doctrine exempts from NOTIONAL-DELTA)
+   203→  realizedPnlUsdt?: number;     // v1.4.3 — exchange-verified realized PnL (position lifetime / close fills)
+   204→  unrealizedPnlUsdt?: number;   // v1.4.3 — current mark-to-market PnL from recon positions read
+   205→  prevStatusSeen?: string;      // v1.4.3 — status before the current transition (revert-on-reject retry)
+   206→  actionAttempts?: number;      // v1.4.3 — retry cap for reverted bank/close transitions
+   207→  lastAttemptedStatus?: string; // v1.4.3 — the card status whose action attempts are counted
+   208→  levSrc?: "card" | "fallback"; // v1.3.0 doctrine — where the entry leverage came from
+   209→  expectedNotional?: number;    // v1.3.0 doctrine — marginUsdt × leverage (the card math)
+   210→  actualNotional?: number;      // v1.3.0 doctrine — qty × fillPrice (what the book actually saw)
+   211→  entryDriftBps?: number;       // v1.3.0 doctrine — |refPrice − cardEntry| at entry, bps
+   212→  entryAgeMs?: number;          // v1.3.0 doctrine — card age at entry (created → filled)
+   213→  protected?: boolean;          // v1.3.0 doctrine — protective TP/SL attached (LIVE) / sim active (PAPER)
+   214→  events: Array<{ at: number; ev: string; note?: string }>;
+   215→}
+   216→interface MetricsRow {
+   217→  serial: number; symbol: string; direction: string; mode: string;
+   218→  detectMs: number | null; execMs: number | null; totalMs: number | null;
+   219→  slipBps: number | null; fillPrice: number | null; cardEntry: number; at: number;
+   220→}
+   221→interface BridgeState {
+   222→  cfg: BridgeConfig;
+   223→  lastCreatedAtMs: number;
+   224→  intents: Record<string, Intent>;   // by cardId
+   225→  metrics: MetricsRow[];
+   226→  levMap: Record<string, number>; // v1.2.0 — last-set leverage per toobit symbol (re-set only on change)
+   227→  floorLearn: Record<string, number>; // v1.4.2 — learned per-symbol real order floor (USDT notional) from server rejections
+   228→  doctrine: DoctrineState;        // v1.3.0 — supervisor counters + violation journal
+   229→}
+   230→let S: BridgeState = { cfg: { ...DEFAULT_CFG }, lastCreatedAtMs: 0, intents: {}, metrics: [], levMap: {}, floorLearn: {}, doctrine: { opens: 0, skipBy: {}, violations: [], lastScanAt: 0, orphans: 0 } };
+   231→
+   232→const tehran = (d: number = Date.now()) =>
+   233→  new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Tehran", hour12: false, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(d);
+   234→function log(level: "info" | "warn" | "crit", msg: string, extra: Record<string, unknown> = {}): void {
+   235→  try { appendFileSync(`${ROOT}/logs/toobit-bridge.log`, `${tehran()} ${level.toUpperCase()} ${msg} ${JSON.stringify(extra)}\n`); } catch { /* never */ }
+   236→}
+   237→function audit(ev: string, det: Record<string, unknown>): void {
+   238→  try { appendFileSync(AUDIT, JSON.stringify({ at: Date.now(), ev, ...det }) + "\n"); } catch { /* never */ }
+   239→  if (ev.startsWith("EXEC") || ev.startsWith("RECON-DRIFT") || ev.startsWith("SKIP") || ev.startsWith("DOCTRINE")) log(ev.startsWith("RECON") || ev.startsWith("DOCTRINE") ? "warn" : "info", ev, det);
+   240→}
+   241→// v1.3.0 doctrine counters — single funnel for every skip reason
+   242→function countSkip(reason: string): void {
+   243→  S.doctrine.skipBy[reason] = (S.doctrine.skipBy[reason] ?? 0) + 1;
+   244→}
+   245→function doctrineViolation(serial: number, kind: string, detail: string): void {
+   246→  S.doctrine.violations.push({ at: Date.now(), serial, kind, detail });
+   247→  if (S.doctrine.violations.length > 20) S.doctrine.violations = S.doctrine.violations.slice(-20);
+   248→  audit("DOCTRINE-VIOLATION", { serial, kind, detail });
+   249→}
+   250→let stateDirty = false;
+   251→function persistState(): void { stateDirty = true; }
+   252→function flushState(): void {
+   253→  if (!stateDirty) return;
+   254→  try {
+   255→    const tmp = `${STATE}.tmp`;
+   256→    writeFileSync(tmp, JSON.stringify(S));
+   257→    renameSync(tmp, STATE);
+   258→    stateDirty = false;
+   259→  } catch (e) { log("warn", "state flush failed", { err: String(e) }); }
+   260→}
+   261→function loadState(): void {
+   262→  try {
+   263→    if (existsSync(STATE)) {
+   264→      const raw = JSON.parse(readFileSync(STATE, "utf8")) as Partial<BridgeState>;
+   265→      S = {
+   266→        cfg: { ...DEFAULT_CFG, ...(raw.cfg ?? {}) },
+   267→        lastCreatedAtMs: raw.lastCreatedAtMs ?? 0,
+   268→        intents: raw.intents ?? {},
+   269→        metrics: raw.metrics ?? [],
+   270→        levMap: raw.levMap ?? {},
+   271→        floorLearn: raw.floorLearn ?? {},
+   272→        doctrine: { opens: raw.doctrine?.opens ?? 0, skipBy: raw.doctrine?.skipBy ?? {}, violations: raw.doctrine?.violations ?? [], lastScanAt: raw.doctrine?.lastScanAt ?? 0, orphans: raw.doctrine?.orphans ?? 0 },
+   273→      };
+   274→      // v1.4.5 — phantom-PnL purge: DETECTed-but-never-executed intents carry
+   275→      // no exchange fills; a close-path userTrades sum with openedAt=null once
+   276→      // re-counted the symbol's WHOLE history into them (proven exact matches
+   277→      // ENA/BTW/PEPE). Heal the persisted books at boot.
+   278→      let purged = 0;
+   279→      for (const it of Object.values(S.intents)) {
+   280→        if (it.mode === "LIVE" && it.status === "CLOSED" && !it.orderId && !it.openedAt && it.realizedPnlUsdt != null) {
+   281→          it.realizedPnlUsdt = null;
+   282→          it.closeReason = `${it.closeReason ?? "CLOSED"} (بدون اجرا)`;
+   283→          it.events.push({ at: Date.now(), ev: "PHANTOM-PNL-PURGED", note: "never-executed intent — symbol-history sum removed" });
+   284→          purged++;
+   285→        }
+   286→      }
+   287→      if (purged > 0) { audit("PHANTOM-PNL-PURGE", { purged }); persistState(); }
+   288→      // v1.4.1 migration: lift the legacy concurrency cap (3) once — operator
+   289→      // mandate «باید بدون سقف باشد». Explicit later /config writes persist normally.
+   290→      if ((S.cfg.cfgRev ?? 0) < 2) { S.cfg.maxConcurrent = 0; S.cfg.cfgRev = 2; }
+   291→      // v1.2.0 hardening: pre-v1.2.0 persisted intents have no leverage field —
+   292→      // backfill so notional math (margin × leverage) can never see undefined.
+   293→      // v1.3.0 hardening: backfill doctrine fields on legacy intents too.
+   294→      // v1.4.3 hardening: stamp pre-multiplier intents (sizingRev 2) so the
+   295→      // doctrine never mistakes their bookkeeping notional for a live violation,
+   296→      // and backfill the revert-retry bookkeeping.
+   297→      for (const it of Object.values(S.intents)) {
+   298→        if (!(it.leverage >= 1)) { it.leverage = S.cfg.leverage; it.levSrc = "fallback"; }
+   299→        if (it.levSrc === undefined) it.levSrc = "card";
+   300→        if (it.sizingRev === undefined) {
+   301→          it.sizingRev = 2;
+   302→          if (it.status === "OPEN" || it.status === "OPENING") {
+   303→            it.events.push({ at: Date.now(), ev: "MULT-SIZING-LEGACY", note: "opened pre-1.4.3: entry qty ignored contractMultiplier — real exchange notional/margin smaller than bookkeeping (NX-3126/NX-3140 class)" });
+   304→          }
+   305→        }
+   306→        if (it.prevStatusSeen === undefined) it.prevStatusSeen = it.lastStatusSeen;
+   307→        if (it.expectedNotional === undefined) it.expectedNotional = Number((S.cfg.marginUsdt * it.leverage).toFixed(6));
+   308→        if (it.actualNotional === undefined && it.qtyOrig > 0 && it.fillPrice) it.actualNotional = Number((it.qtyOrig * it.fillPrice).toFixed(6));
+   309→        if (it.entryAgeMs === undefined && it.lat.totalMs !== null) it.entryAgeMs = it.lat.totalMs;
+   310→        if (it.entryDriftBps === undefined && it.lat.slipBps !== null) it.entryDriftBps = Math.abs(it.lat.slipBps);
+   311→      }
+   312→    }
+   313→  } catch (e) { log("crit", "state load failed — starting clean", { err: String(e) }); }
+   314→}
+   315→
+   316→// ── toobit HTTP (v1 form-urlencoded signing — live-verified scheme) ─────────
+   317→let clockOffset = 0; // serverTime - localTime
+   318→async function syncClock(): Promise<void> {
+   319→  try {
+   320→    const r = await fetch(`${BASE}/api/v1/time`, { signal: AbortSignal.timeout(5000) });
+   321→    const j = (await r.json()) as { serverTime: number };
+   322→    clockOffset = j.serverTime - Date.now();
+   323→    log("info", "clock synced", { offsetMs: clockOffset });
+   324→  } catch (e) { log("warn", "clock sync failed", { err: String(e) }); }
+   325→}
+   326→function hmac(secret: string, s: string): string { return createHmac("sha256", secret).update(s).digest("hex"); }
+   327→
+   328→async function pubGet<T>(path: string, params: Record<string, string | number> = {}): Promise<T | null> {
+   329→  try {
+   330→    const qs = new URLSearchParams(Object.entries(params).map(([k, v]) => [k, String(v)])).toString();
+   331→    const r = await fetch(`${BASE}${path}${qs ? `?${qs}` : ""}`, { signal: AbortSignal.timeout(6500) });
+   332→    if (!r.ok) return null;
+   333→    return (await r.json()) as T;
+   334→  } catch { return null; }
+   335→}
+   336→
+   337→/** Signed v1 request — ALL params in the form body (query string empty),
+   338→    signature = HMAC_SHA256(secret, totalParams) appended as body param. */
+   339→async function signed<T>(method: "GET" | "POST", path: string, params: Record<string, string | number> = {}): Promise<{ ok: boolean; status: number; data: T | null; err: string | null }> {
+   340→  if (!API_KEY || !API_SECRET) return { ok: false, status: 0, data: null, err: "no API credentials" };
+   341→  const full: Record<string, string> = {};
+   342→  for (const [k, v] of Object.entries(params)) full[k] = String(v);
+   343→  full.timestamp = String(Date.now() + clockOffset);
+   344→  full.recvWindow = "5000";
+   345→  const qs = Object.entries(full).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join("&");
+   346→  const sig = hmac(API_SECRET, qs);
+   347→  try {
+   348→    const init: RequestInit = method === "GET"
+   349→      ? { signal: AbortSignal.timeout(8000) }
+   350→      : { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded", "X-BB-APIKEY": API_KEY }, body: `${qs}&signature=${sig}`, signal: AbortSignal.timeout(8000) };
+   351→    if (method === "GET") (init as Record<string, unknown>).headers = { "X-BB-APIKEY": API_KEY };
+   352→    const url = method === "GET" ? `${BASE}${path}?${qs}&signature=${sig}` : `${BASE}${path}`;
+   353→    const r = await fetch(url, init);
+   354→    const text = await r.text();
+   355→    let data: unknown = null;
+   356→    try { data = JSON.parse(text); } catch { /* non-json */ }
+   357→    return { ok: r.ok, status: r.status, data: (data ?? null) as T | null, err: r.ok ? null : text.slice(0, 240) };
+   358→  } catch (e) {
+   359→    return { ok: false, status: 0, data: null, err: String(e) };
+   360→  }
+   361→}
+   362→
+   363→// ── instruments (tick/step/min rounding source of truth) ────────────────────
+   364→interface Instr { tickSize: number; stepSize: number; minQty: number; maxQty: number; minNotional: number; mult: number } // v1.4.3 mult = contractMultiplier (real notional = qty × price × mult)
+   365→let instruments = new Map<string, Instr>();
+   366→let instrumentsAt = 0;
+   367→async function refreshInstruments(): Promise<void> {
+   368→  const j = await pubGet<{ contracts?: Array<{ symbol: string; contractMultiplier?: string; filters?: Array<{ filterType?: string; filter?: string; tickSize?: string; stepSize?: string; minQty?: string; maxQty?: string; minNotional?: string }> }> }>("/api/v1/exchangeInfo");
+   369→  const out = new Map<string, Instr>();
+   370→  for (const c of j?.contracts ?? []) {
+   371→    let instr: Partial<Instr> = {};
+   372→    for (const f of c.filters ?? []) {
+   373→      const t = f.filterType ?? f.filter ?? "";
+   374→      if (t === "PRICE_FILTER") instr.tickSize = Number(f.tickSize);
+   375→      if (t === "LOT_SIZE") { instr.stepSize = Number(f.stepSize); instr.minQty = Number(f.minQty); instr.maxQty = Number(f.maxQty); }
+   376→      if (t === "MIN_NOTIONAL") instr.minNotional = Number(f.minNotional);
+   377→    }
+   378→    if (instr.stepSize && instr.stepSize > 0) out.set(c.symbol, { tickSize: instr.tickSize ?? 0, stepSize: instr.stepSize, minQty: instr.minQty ?? 0, maxQty: instr.maxQty ?? 0, minNotional: instr.minNotional ?? 0, mult: Number(c.contractMultiplier) > 0 ? Number(c.contractMultiplier) : 1 });
+   379→  }
+   380→  if (out.size > 0) {
+   381→    const non1 = [...out.values()].filter((i) => i.mult !== 1).length;
+   382→    instruments = out; instrumentsAt = Date.now();
+   383→    log("info", "instruments refreshed", { contracts: out.size, nonUnityContractMultiplier: non1 }); // v1.4.3 — visibility into the sizing trap
+   384→  }
+   385→}
+   386→const toobitSymbol = (sym: string): string => `${sym.replace(/USDT$/, "")}-SWAP-USDT`;
+   387→function floorStep(q: number, step: number): number {
+   388→  if (!(step > 0)) return q;
+   389→  return Math.floor(q / step + 1e-9) * step;
+   390→}
+   391→function fmtQty(q: number): string { return q.toFixed(8).replace(/0+$/, "").replace(/\.$/, ""); }
+   392→
+   393→// ── ledger reader (READ-ONLY — Prisma owns writes, doctrine) ────────────────
+   394→interface CardRow {
+   395→  id: string; serial: number; symbol: string; direction: string;
+   396→  entryPrice: number; tp1: number; tp2: number; tp3: number; stopLoss: number;
+   397→  leverage: number; // v1.2.0 per-card leverage (Signal.leverage)
+   398→  status: string; qualityFlag: string | null; createdAt: string | number;
+   399→}
+   400→let sqldb: Database | null = null;
+   401→function openDb(): boolean {
+   402→  try {
+   403→    sqldb = new Database(DB_PATH, { readonly: true });
+   404→    return true;
+   405→  } catch (e) {
+   406→    log("crit", "sqlite readonly open failed", { err: String(e) });
+   407→    return false;
+   408→  }
+   409→}
+   410→function parseTs(v: string | number): number {
+   411→  if (typeof v === "number") return v;
+   412→  const t = Date.parse(String(v).replace(" ", "T"));
+   413→  return Number.isFinite(t) ? t : 0;
+   414→}
+   415→function fetchRecentCards(limit = 60): CardRow[] {
+   416→  if (!sqldb) return [];
+   417→  try {
+   418→    const rows = sqldb.query(`SELECT id, serial, symbol, direction, entryPrice, tp1, tp2, tp3, stopLoss, leverage, status, qualityFlag, createdAt FROM Signal ORDER BY createdAt DESC LIMIT ${limit}`).all() as unknown as CardRow[];
+   419→    return rows;
+   420→  } catch (e) { log("warn", "card read failed", { err: String(e) }); return []; }
+   421→}
+   422→function fetchCardsByIds(ids: string[]): CardRow[] {
+   423→  if (!sqldb || ids.length === 0) return [];
+   424→  try {
+   425→    const ph = ids.map(() => "?").join(",");
+   426→    const rows = sqldb.query(`SELECT id, serial, symbol, direction, entryPrice, tp1, tp2, tp3, stopLoss, leverage, status, qualityFlag, createdAt FROM Signal WHERE id IN (${ph})`).all(...ids) as unknown as CardRow[];
+   427→    return rows;
+   428→  } catch (e) { log("warn", "card refresh failed", { err: String(e) }); return []; }
+   429→}
+   430→
+   431→// ── market data for PAPER fills / drift checks ──────────────────────────────
+   432→const tickCache = new Map<string, { at: number; last: number; bid: number; ask: number }>();
+   433→async function tbTicker(tbSymbol: string): Promise<{ last: number; bid: number; ask: number } | null> {
+   434→  const hit = tickCache.get(tbSymbol);
+   435→  if (hit && Date.now() - hit.at < 2000) return hit;
+   436→  const j = await pubGet<Array<{ c?: string; b?: string; a?: string }>>("/quote/v1/contract/ticker/24hr", { symbol: tbSymbol });
+   437→  const row = Array.isArray(j) ? j[0] : null;
+   438→  const last = Number(row?.c), bid = Number(row?.b), ask = Number(row?.a);
+   439→  if (!(last > 0)) return null;
+   440→  const v = { last, bid: bid > 0 ? bid : last, ask: ask > 0 ? ask : last, at: Date.now() };
+   441→  tickCache.set(tbSymbol, v);
+   442→  return v;
+   443→}
+   444→
+   445→// ── execution engine ─────────────────────────────────────────────────────────
+   446→const EXEC_DISABLED_FILE = `${DATA}/DISABLED`;
+   447→const killFile = (): boolean => existsSync(EXEC_DISABLED_FILE);
+   448→
+   449→// ── v1.4.0 SINGLETON LOCK (trace 1a1704d407f00dad) ───────────────────────────
+   450→const PID_FILE = `${DATA}/bridge.pid`;
+   451→function acquireSingletonLock(): boolean {
+   452→  try {
+   453→    if (!existsSync(DATA)) mkdirSync(DATA, { recursive: true });
+   454→    if (existsSync(PID_FILE)) {
+   455→      const old = Number(readFileSync(PID_FILE, "utf8").trim());
+   456→      if (Number.isFinite(old) && old > 0 && old !== process.pid) {
+   457→        try { process.kill(old, 0); log("crit", "another bridge instance is alive — refusing to boot", { pid: old }); return false; }
+   458→        catch { /* pid gone — stale lock, take over */ }
+   459→      }
+   460→    }
+   461→    writeFileSync(PID_FILE, String(process.pid));
+   462→    return true;
+   463→  } catch (e) { log("crit", "singleton lock failed", { err: String(e) }); return false; }
+   464→}
+   465→function releaseSingletonLock(): void {
+   466→  try { if (existsSync(PID_FILE) && readFileSync(PID_FILE, "utf8").trim() === String(process.pid)) rmSync(PID_FILE); } catch { /* never */ }
+   467→}
+   468→
+   469→// v1.2.0 (trace 1a15ddbdbabf84a9): the exchange leverage must MATCH the signal
+   470→// card's leverage — set per symbol before entry, re-set only when the value
+   471→// actually changes (previous per-symbol memo ignored card-level differences).
+   472→async function ensureLeverage(tbSymbol: string, lev: number): Promise<void> {
+   473→  if (S.levMap[tbSymbol] === lev) return;
+   474→  const m = await signed("POST", "/api/v1/futures/marginType", { symbol: tbSymbol, marginType: "ISOLATED" });
+   475→  if (!m.ok && !/no need|already|unchanged|-4076/i.test(m.err ?? "")) log("warn", "marginType set failed (continuing)", { tbSymbol, err: m.err });
+   476→  const l = await signed("POST", "/api/v1/futures/leverage", { symbol: tbSymbol, leverage: lev });
+   477→  if (!l.ok) log("warn", "leverage set failed (continuing)", { tbSymbol, lev, err: l.err });
+   478→  S.levMap[tbSymbol] = lev;
+   479→  persistState();
+   480→}
+   481→
+   482→async function placeOrder(tbSymbol: string, side: "BUY_OPEN" | "SELL_OPEN" | "BUY_CLOSE" | "SELL_CLOSE", qty: number, opts: { takeProfit?: number; stopLoss?: number; clientOrderId?: string } = {}): Promise<{ ok: boolean; orderId: string | null; err: string | null }> {
+   483→  const params: Record<string, string | number> = {
+   484→    symbol: tbSymbol,
+   485→    side,
+   486→    type: "LIMIT",
+   487→    priceType: "MARKET", // v1 market entry — matches at last price ±5% band
+   488→    quantity: fmtQty(qty),
+   489→  };
+
+[showing lines 30-489 of 1322; use offset=490 with limit to continue reading]
