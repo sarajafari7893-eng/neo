@@ -1,0 +1,244 @@
+     1→/home/z/my-project/src/hooks/usePriceStream.ts:20:export type PriceSource = "WS PUSH" | "WS·BYBIT" | "WS·REST 2.5S" | "WS OFFLINE";
+     2→/home/z/my-project/src/lib/multi-exchange.ts:2:// Median price across Binance + OKX + Bybit + Hyperliquid + GATE (outlier-resistant).
+     3→/home/z/my-project/src/lib/multi-exchange.ts:6:// OKX = instType SWAP, Bybit = category linear. A venue that errors degrades
+     4→/home/z/my-project/src/lib/multi-exchange.ts:10:// (weight 40 full-universe ticker, critical lane). OKX/Bybit/Hyperliquid are
+     5→/home/z/my-project/src/lib/multi-exchange.ts:74:async function bybitBatch(symbols: string[]): Promise<Map<string, number>> {
+     6→/home/z/my-project/src/lib/multi-exchange.ts:78:  const res = await fetchWithTimeout("https://api.bybit.com/v5/market/tickers?category=linear");
+     7→/home/z/my-project/src/lib/multi-exchange.ts:178:// with a FRESH timestamp while Binance/Bybit agree at ~298. With one healthy
+     8→/home/z/my-project/src/lib/multi-exchange.ts:386:    const [binance, okx, bybit, hl, gate] = await Promise.allSettled([binanceFuturesBatch(symbols), okxBatch(symbols), bybitBatch(symbols), hyperliquidAll(symbols), gateBatch(symbols)]);
+     9→/home/z/my-project/src/lib/multi-exchange.ts:389:    const bybitMap = bybit.status === "fulfilled" ? bybit.value : new Map<string, number>();
+    10→/home/z/my-project/src/lib/multi-exchange.ts:397:    if (bybitMap.size > 0) venueLastOkAt.set("BYBIT", now);
+    11→/home/z/my-project/src/lib/multi-exchange.ts:406:        { venue: "BYBIT", price: bybitMap.get(sym) ?? null, latencyMs: null, ok: bybitMap.has(sym) },
+    12→/home/z/my-project/src/lib/multi-exchange.ts:435:    { venue: "BYBIT", ok: fresh("BYBIT"), latencyMs: null },
+    13→/home/z/my-project/src/lib/flow.ts:11:import { bridgeOiHist, bridgeTape, bridgeKlines, bybit5mMove, bybitTickerRow, okx5mMove, type FlowSource } from "./flow-bridge";
+    14→/home/z/my-project/src/lib/flow.ts:60:  /** v12.2 TASK-52 — venue that actually fed this bundle (BINANCE | SPOT-MIRROR | BYBIT | MIXED) when fapi starved. */
+    15→/home/z/my-project/src/lib/flow.ts:191:          if (b.source === "BYBIT") {
+    16→/home/z/my-project/src/lib/flow.ts:192:            // bybit OI history is base-denominated only — notional from the
+    17→/home/z/my-project/src/lib/flow.ts:194:            const t = await bybitTickerRow(symbol).catch(() => null);
+    18→/home/z/my-project/src/lib/flow.ts:209:        const t = await bybitTickerRow(symbol).catch(() => null);
+    19→/home/z/my-project/src/lib/flow.ts:212:          srcNote("BYBIT");
+    20→/home/z/my-project/src/lib/flow.ts:245:      // v12.2 TASK-52: tape ladder — fapi aggTrades → BYBIT recent-trade →
+    21→/home/z/my-project/src/lib/flow.ts:532:  // whether the tape agrees. NX-3046: BYBIT-only JCT showed CVD +18.5%
+    22→/home/z/my-project/src/lib/flow.ts:536:  // (BYBIT-tape → OKX cross-check; Binance/SPOT-MIRROR-tape → BYBIT
+    23→/home/z/my-project/src/lib/flow.ts:555:      if (consensusSrc === "BYBIT") {
+    24→/home/z/my-project/src/lib/flow.ts:559:        secondName = "BYBIT";
+    25→/home/z/my-project/src/lib/flow.ts:560:        secondMove = await cachedConsensusVal(`BYB5M|${symbol}`, 60_000, () => bybit5mMove(symbol));
+    26→/home/z/my-project/src/lib/flow.ts:580:  // while its source was the BYBIT bridge (fapi banned) on a symbol whose
+    27→/home/z/my-project/src/lib/whales.ts:38:import { bridgeTape, bybitTickerRow, bridgeDepth, type TapeTrade } from "./flow-bridge";
+    28→/home/z/my-project/src/lib/whales.ts:144: * BYBIT linear recent-trade → SPOT-MIRROR trades) instead of a raw weight-20
+    29→/home/z/my-project/src/lib/whales.ts:286:  // v12.2 TASK-52 — the heavy tape leg rides the bridge ladder (fapi → BYBIT
+    30→/home/z/my-project/src/lib/whales.ts:289:  // v12.3 TASK-52 — the book leg now rides the depth ladder too (fapi → BYBIT
+    31→/home/z/my-project/src/lib/whales.ts:321:    // v12.2 TASK-52: bybit tickers carry openInterestValue — the absolute OI
+    32→/home/z/my-project/src/lib/whales.ts:323:    const t = await bybitTickerRow(symbol).catch(() => null);
+    33→/home/z/my-project/src/lib/oi-funding.ts:18:import { bridgeOiHist, bybitTickerMap, bybitTickerRow } from "./flow-bridge";
+    34→/home/z/my-project/src/lib/oi-funding.ts:37:  /** v12.2 TASK-52 — venue that fed the OI ladder (BINANCE | BYBIT) when fapi starved. */
+    35→/home/z/my-project/src/lib/oi-funding.ts:78:  // v12.2 TASK-52 — OI LADDER: fapi openInterestHist → BYBIT open-interest
+    36→/home/z/my-project/src/lib/oi-funding.ts:79:  // history (perp-native; no spot equivalent exists). On the BYBIT rung the
+    37→/home/z/my-project/src/lib/oi-funding.ts:111:  if (!oiUsd && histB.source === "BYBIT") {
+    38→/home/z/my-project/src/lib/oi-funding.ts:112:    // bybit history is base-only → notional from the batched tickers (openInterestValue)
+    39→/home/z/my-project/src/lib/oi-funding.ts:113:    oiUsd = (await bybitTickerRow(symbol).catch(() => null))?.openInterestValue ?? null;
+    40→/home/z/my-project/src/lib/oi-funding.ts:150:    // v12.2 TASK-52: when the fapi batch starves, ONE batched bybit tickers
+    41→/home/z/my-project/src/lib/oi-funding.ts:157:      const tickers = await bybitTickerMap().catch(() => null);
+    42→/home/z/my-project/src/lib/oi-funding.ts:159:        console.log(`[oi-funding] fapi premiumIndex starved — bybit tickers batch (${tickers.size} symbols, Task-52)`);
+    43→/home/z/my-project/src/lib/futures-snapshot-settle.ts:23:// data-api.binance.vision — separate ban pool) → BYBIT v5 linear. If all
+    44→/home/z/my-project/src/lib/futures-snapshot-settle.ts:46:const BYBIT_URL = "https://api.bybit.com";
+    45→/home/z/my-project/src/lib/futures-snapshot-settle.ts:48:const PAGE_MAX = 1000; // spot/bybit page cap (fapi caps at 1500, we stay at 1000)
+    46→/home/z/my-project/src/lib/futures-snapshot-settle.ts:51:function bybitInterval(interval: string): string | null {
+    47→/home/z/my-project/src/lib/futures-snapshot-settle.ts:105:  // rung 3 — BYBIT v5 linear perp (list is newest-first → reverse to ASC)
+    48→/home/z/my-project/src/lib/futures-snapshot-settle.ts:106:  const bi = bybitInterval(interval);
+    49→/home/z/my-project/src/lib/futures-snapshot-settle.ts:109:      `${BYBIT_URL}/v5/market/kline?category=linear&symbol=${symbol}&interval=${bi}&start=${startMs}&end=${endMs}&limit=${PAGE_MAX}`,
+    50→/home/z/my-project/src/lib/futures-snapshot-settle.ts:116:      return { candles, source: "BYBIT" };
+    51→/home/z/my-project/src/lib/futures-snapshot-settle.ts:199:  source: string; // SIBLING | PRICEPOINT | FAPI | SPOT-MIRROR | BYBIT | NONE
+    52→/home/z/my-project/src/lib/futures-snapshot-settle.ts:200:  rungNotes: string; // honest per-rung audit trail, e.g. "sibling:miss pricepoint:miss kit:BYBIT"
+    53→/home/z/my-project/src/lib/cascade-alerts.ts:27:  lane: string; // WS lane that saw it (WS·SPOT / WS PUSH / WS·BYBIT)
+    54→/home/z/my-project/src/lib/engine.ts:27://       (Binance futures batch, OKX SWAP, Bybit linear) + 90s venue health.
+    55→/home/z/my-project/src/lib/engine.ts:152://   ④ SINGLE-VENUE DEPLOY BLOCK: only ONE live venue → machine deploy refused, operator-forced passes tagged SINGLE-VENUE-FORCED (JCT/MAGMA class — 12 deploys/48h on BYBIT-only tape)
+    56→/home/z/my-project/src/lib/engine.ts:154://   ⑥ MULTI-VENUE CONSENSUS (flow.ts): independent second-venue 15m-window direction (OKX↔BYBIT↔Binance) — cross-venue tape conflict clamps conviction ±6, can never CONFIRM
+    57→/home/z/my-project/src/lib/engine.ts:484: *  the pool (BINANCE-FAPI / BYBIT-MIRROR / PERSISTED), per the honesty laws. */
+    58→/home/z/my-project/src/lib/engine.ts:1592:  // the data-vision spot mirror + 4-venue consensus + Bybit fallback were
+    59→/home/z/my-project/src/lib/engine.ts:1821:    // SHORT deploys in 48h on BYBIT-only tape while the DISLOCATION-GATE was
+    60→/home/z/my-project/src/lib/engine.ts:1865:          void recordGateBlock({ gate: "SINGLE-VENUE", symbol: asset.symbol, direction: conf.direction, reason: `only ONE live venue (${sole?.venue ?? "?"}) — cross-venue confirmation impossible, no Binance ticket (JCT treadmill forensics: 12 deploys/48h on BYBIT-only tape, venue-blind dislocation gate, NX-3046 −61.35% in 23.4s) · rehabilitation paths: ② probation list (EngineSetting single-venue-probation) or ① wire a second venue` });
+    61→/home/z/my-project/src/lib/engine.ts:2997:  // riding a SURROGATE flow tape (source ≠ BINANCE — the BYBIT bridge / SPOT
+    62→/home/z/my-project/src/components/ai/FlowMatrixCard.tsx:98:              <span className={uni.poolSource === "BYBIT-MIRROR" ? "text-cyan-neon" : "text-amber-neon"}> · via {uni.poolSource}</span>
+    63→/home/z/my-project/src/lib/research-factors.ts:297:// v12.3 TASK-52 — the OBI poll rides the depth ladder (fapi w2 → BYBIT linear
+    64→/home/z/my-project/src/lib/bybit-feed.ts:1:// ── NEXUS//SIGNALS — Bybit v5 public REST feed (server-only) ────────────────
+    65→/home/z/my-project/src/lib/bybit-feed.ts:6:// honestly-venue-tagged alternate plane — Bybit v5 linear perps, public
+    66→/home/z/my-project/src/lib/bybit-feed.ts:11:// splits that Bybit does not provide stay null (measured gap, not invented).
+    67→/home/z/my-project/src/lib/bybit-feed.ts:13:const BYBIT = "https://api.bybit.com";
+    68→/home/z/my-project/src/lib/bybit-feed.ts:16:export type BybitVenue = "BYBIT";
+    69→/home/z/my-project/src/lib/bybit-feed.ts:18:interface BybitHealth {
+    70→/home/z/my-project/src/lib/bybit-feed.ts:31:  const g = globalThis as { __nexusBybitHealth?: BybitHealth };
+    71→/home/z/my-project/src/lib/bybit-feed.ts:32:  g.__nexusBybitHealth ??= { lastOkAt: null, lastErrorAt: null, lastError: null, consecutiveFailures: 0, latencyMs: null, klinesOk: 0, tickersOk: 0, metricsOk: 0 };
+    72→/home/z/my-project/src/lib/bybit-feed.ts:33:  return g.__nexusBybitHealth;
+    73→/home/z/my-project/src/lib/bybit-feed.ts:35:export function bybitHealth(): Readonly<BybitHealth> {
+    74→/home/z/my-project/src/lib/bybit-feed.ts:39:async function bybitFetch<T>(path: string): Promise<T | null> {
+    75→/home/z/my-project/src/lib/bybit-feed.ts:44:    const res = await fetch(`${BYBIT}${path}`, { signal: ctrl.signal, cache: "no-store" });
+    76→/home/z/my-project/src/lib/bybit-feed.ts:68:  takerBuy: number | null; // Bybit klines carry no taker-buy split — honest null (CVD gap)
+    77→/home/z/my-project/src/lib/bybit-feed.ts:71:const TF_TO_BYBIT: Record<string, string> = { "1m": "1", "5m": "5", "15m": "15", "30m": "30", "1h": "60", "4h": "240", "1d": "D" };
+    78→/home/z/my-project/src/lib/bybit-feed.ts:74:export async function bybitKlines(symbol: string, interval: string, limit: number): Promise<FlowCandleLike[] | null> {
+    79→/home/z/my-project/src/lib/bybit-feed.ts:75:  const iv = TF_TO_BYBIT[interval];
+    80→/home/z/my-project/src/lib/bybit-feed.ts:77:  const json = await bybitFetch<{ result?: { list?: string[][] } }>(`/v5/market/kline?category=linear&symbol=${symbol}&interval=${iv}&limit=${Math.min(1000, limit)}`);
+    81→/home/z/my-project/src/lib/bybit-feed.ts:91:    .reverse(); // Bybit returns newest-first — normalize to Binance order
+    82→/home/z/my-project/src/lib/bybit-feed.ts:94:export interface BybitTicker {
+    83→/home/z/my-project/src/lib/bybit-feed.ts:104:export async function bybitTickers(): Promise<Map<string, BybitTicker>> {
+    84→/home/z/my-project/src/lib/bybit-feed.ts:105:  const out = new Map<string, BybitTicker>();
+    85→/home/z/my-project/src/lib/bybit-feed.ts:106:  const json = await bybitFetch<{ result?: { list?: Array<{ symbol: string; lastPrice: string; price24hPcnt: string; highPrice24h: string; lowPrice24h: string; turnover24h: string }> } }>(`/v5/market/tickers?category=linear`);
+    86→/home/z/my-project/src/lib/bybit-feed.ts:125:export async function bybitFunding8h(symbol: string): Promise<number | null> {
+    87→/home/z/my-project/src/lib/bybit-feed.ts:126:  const json = await bybitFetch<{ result?: { list?: Array<{ fundingRate: string }> } }>(`/v5/market/funding/history?category=linear&symbol=${symbol}&limit=1`);
+    88→/home/z/my-project/src/lib/bybit-feed.ts:134:/** 1h open-interest delta % (last closed hourly OI vs previous), Bybit linear. */
+    89→/home/z/my-project/src/lib/bybit-feed.ts:135:export async function bybitOiDelta1h(symbol: string): Promise<number | null> {
+    90→/home/z/my-project/src/lib/bybit-feed.ts:136:  const json = await bybitFetch<{ result?: { list?: Array<{ openInterest: string; timestamp: string }> } }>(`/v5/market/open-interest?category=linear&symbol=${symbol}&intervalTime=1h&limit=2`);
+    91→/home/z/my-project/src/lib/futures-taxonomy.ts:11://   E  Cross-exchange   funding/OI divergence Binance vs Bybit vs OKX
+    92→/home/z/my-project/src/lib/futures-taxonomy.ts:120:interface BybitTicker { retCode: number; result?: { list?: Array<{ fundingRate: string; openInterest: string; lastPrice: string }> } }
+    93→/home/z/my-project/src/lib/futures-taxonomy.ts:127:    jsonUrl<BybitTicker>(`https://api.bybit.com/v5/market/tickers?category=linear&symbol=${symbol}`),
+    94→/home/z/my-project/src/lib/futures-taxonomy.ts:140:    // Task 35 — Bybit linear lastPrice rides the SAME tickers call (zero extra
+    95→/home/z/my-project/src/lib/futures-taxonomy.ts:146:// Task 35 — Bybit v5 linear klines: futures-true candle closes from the second
+    96→/home/z/my-project/src/lib/futures-taxonomy.ts:148:async function bybitKlines(symbol: string, interval: string, limit: number): Promise<Array<[number, string, string, string, string]> | null> {
+    97→/home/z/my-project/src/lib/futures-taxonomy.ts:150:    `https://api.bybit.com/v5/market/kline?category=linear&symbol=${symbol}&interval=${interval}&limit=${limit}`,
+    98→/home/z/my-project/src/lib/futures-taxonomy.ts:202:        // Task 34-4/35 — price fallback tiers: fapi markPrice → Bybit linear
+    99→/home/z/my-project/src/lib/futures-taxonomy.ts:221:        if (closes.length < 4) closes = (await bybitKlines(symbol, "5", 4))?.map((k) => Number(k[4])) ?? [];
+   100→/home/z/my-project/src/lib/futures-taxonomy.ts:230:          if (!k1) k1 = await bybitKlines(symbol, "60", 3);
+   101→/home/z/my-project/src/components/layout/Footer.tsx:63:              SOURCE <span className="text-ink-2">BINANCE · OKX · BYBIT · HYPERLIQUID</span>
+   102→/home/z/my-project/src/components/layout/Footer.tsx:82:            NOT FINANCIAL ADVICE. MARKET DATA VIA BINANCE/OKX/BYBIT/HYPERLIQUID PUBLIC APIs · PAPER TRADING ONLY.
+   103→/home/z/my-project/src/lib/triggers.ts:158:  // sweep survives on the bridge ladder (BYBIT tape → SPOT-MIRROR, honest venue).
+   104→/home/z/my-project/src/lib/triggers.ts:207:  // v12.3 TASK-52: depth rides the ladder — fapi (w5) → BYBIT linear book →
+   105→/home/z/my-project/src/lib/fapi-gate.ts:48:// SPOT (api.binance.com) and other exchanges (OKX/Bybit/Hyperliquid) must
+   106→/home/z/my-project/src/lib/fapi-gate.ts:75:// klines/price fallback → multi-venue liq (bybit/okx/bitget).
+   107→/home/z/my-project/src/lib/fapi-gate.ts:198:// up to 35min per event and pushed flow to BYBIT ×0.5 for most of its life.
+   108→/home/z/my-project/src/lib/liq-heatmap.ts:24:import { spotMirrorKlines, bybitKlines } from "./flow-bridge"; // v12.3 TASK-52 — kline ladders
+   109→/home/z/my-project/src/lib/liq-heatmap.ts:72:// volume×price math, venue-agnostic); fapi gate is rung 2; BYBIT linear rung 3.
+   110→/home/z/my-project/src/lib/liq-heatmap.ts:83:  const byb = await bybitKlines(symbol, "15m", 96).catch(() => null);
+   111→/home/z/my-project/src/lib/market-feed.ts:16:import { spotMirrorKlines, bybitKlines, bybitTickerMap } from "./flow-bridge"; // v12.3 TASK-52 klines · v12.4 TASK-53 pool mirror
+   112→/home/z/my-project/src/lib/market-feed.ts:41:  fallbackVenue?: string | null; // DATA-REVIVAL 2026-10-21 — venue feeding when Binance planes are banned ("BYBIT" | "SPOT-MIRROR")
+   113→/home/z/my-project/src/lib/market-feed.ts:46:// v12.5 — throttled telemetry for the bybit mirror rung (one line / 10min max)
+   114→/home/z/my-project/src/lib/market-feed.ts:47:let lastBybitMirrorEventAt = 0;
+   115→/home/z/my-project/src/lib/market-feed.ts:151:    // (bybit-v5-mirror) must not mask the Binance plane printing every 3s.
+   116→/home/z/my-project/src/lib/market-feed.ts:172: * but the Bybit linear mirror is serving genuine ticks, that is LIVE data —
+   117→/home/z/my-project/src/lib/market-feed.ts:174: * (measured 2026-10-20: 10–28 consecutive failures while Bybit served prices
+   118→/home/z/my-project/src/lib/market-feed.ts:183:  feedStatus.fallbackVenue = host.includes("bybit") ? "BYBIT" : host.includes("binance.vision") ? "SPOT-MIRROR" : feedStatus.fallbackVenue;
+   119→/home/z/my-project/src/lib/market-feed.ts:233:   * v12.5 TASK-52-REVIVAL: "bybit" = the Bybit v5 linear mirror rung — a
+   120→/home/z/my-project/src/lib/market-feed.ts:238:  plane?: "fapi" | "spot" | "bybit" | "futws";
+   121→/home/z/my-project/src/lib/market-feed.ts:263:  // live price instead of sliding to the spot overlay (basis) or bybit.
+   122→/home/z/my-project/src/lib/market-feed.ts:289:      /* bybit mirror rung below */
+   123→/home/z/my-project/src/lib/market-feed.ts:292:  // v12.5 TASK-52-REVIVAL — BYBIT LINEAR MIRROR rung (perp-native, zero fapi
+   124→/home/z/my-project/src/lib/market-feed.ts:301:      const byb = await bybitTickerMap();
+   125→/home/z/my-project/src/lib/market-feed.ts:310:            // Bybit reports 24h change as a FRACTION (price24hPcnt 0.0096 = +0.96%)
+   126→/home/z/my-project/src/lib/market-feed.ts:317:            plane: "bybit",
+   127→/home/z/my-project/src/lib/market-feed.ts:325:          markFeedOk("bybit-v5-mirror");
+   128→/home/z/my-project/src/lib/market-feed.ts:326:          if (Date.now() - lastBybitMirrorEventAt > 600_000) {
+   129→/home/z/my-project/src/lib/market-feed.ts:327:            lastBybitMirrorEventAt = Date.now();
+   130→/home/z/my-project/src/lib/market-feed.ts:328:            console.log(`[market-feed] BYBIT-MIRROR serving ${served} ticker(s) — both Binance REST planes unavailable (Task-52 revival rung)`);
+   131→/home/z/my-project/src/lib/market-feed.ts:360: * critical) for 1000X-style perp-only listings; rung 3 is BYBIT linear.
+   132→/home/z/my-project/src/lib/market-feed.ts:375:    /* bybit rung below */
+   133→/home/z/my-project/src/lib/market-feed.ts:377:  const byb = await bybitKlines(symbol, interval, limit).catch(() => null);
+   134→/home/z/my-project/src/lib/market-feed.ts:388: * them), but the ladder degrades to SPOT-MIRROR → BYBIT during fapi
+   135→/home/z/my-project/src/lib/market-feed.ts:402:    /* bybit rung below */
+   136→/home/z/my-project/src/lib/market-feed.ts:404:  const byb = await bybitKlines(symbol, interval, limit).catch(() => null);
+   137→/home/z/my-project/src/lib/market-feed.ts:449:  source: "BINANCE-FAPI" | "BYBIT-MIRROR" | "PERSISTED";
+   138→/home/z/my-project/src/lib/market-feed.ts:484:/** BYBIT-MIRROR rung — v5 linear tickers (ONE weight-cheap call, zero fapi weight). */
+   139→/home/z/my-project/src/lib/market-feed.ts:485:async function bybitPoolStats(): Promise<FuturesPoolStats | null> {
+   140→/home/z/my-project/src/lib/market-feed.ts:486:  const map = await bybitTickerMap().catch(() => null);
+   141→/home/z/my-project/src/lib/market-feed.ts:494:    source: "BYBIT-MIRROR",
+   142→/home/z/my-project/src/lib/market-feed.ts:499: *  v5.2 LADDER: fapi (weight-40 board) → BYBIT-MIRROR (v5 linear tickers) →
+   143→/home/z/my-project/src/lib/market-feed.ts:516:    // fapi banned/unreachable — mirror rung (Task 53): count the pool off Bybit
+   144→/home/z/my-project/src/lib/market-feed.ts:517:    const mirror = await bybitPoolStats().catch(() => null);
+   145→/home/z/my-project/src/lib/market-feed.ts:519:      console.log(`[pool-stats] fapi unavailable — BYBIT-MIRROR serving pool board ${mirror.totalUsdtPerps}/${mirror.liquidPool} (Task-53)`); // honest venue telemetry
+   146→/home/z/my-project/src/lib/vol-forecast.ts:25:import { spotMirrorKlines, bybitKlines } from "./flow-bridge"; // v12.3 TASK-52 — kline ladders
+   147→/home/z/my-project/src/lib/vol-forecast.ts:97:      // gate is rung 2; BYBIT linear is rung 3.
+   148→/home/z/my-project/src/lib/vol-forecast.ts:107:        const byb = await bybitKlines(symbol, "15m", 97);
+   149→/home/z/my-project/src/lib/gate-journal.ts:96:  | "SINGLE-VENUE" // v12.9 AUDIT-NX3046 — only ONE live venue: cross-venue confirmation impossible, machine deploy refused (JCT 12 deploys/48h on BYBIT-only tape); operator-forced passes tagged
+   150→/home/z/my-project/src/lib/flow-scanner.ts:23:import { bybitKlines, bybitHealth } from "./bybit-feed";
+   151→/home/z/my-project/src/lib/flow-scanner.ts:36:// board ~3.5min. Bybit public plane carries this easily; the fapi-gate
+   152→/home/z/my-project/src/lib/flow-scanner.ts:66:  venue?: "BINANCE" | "BYBIT" | "MIXED"; // DATA-REVIVAL 2026-10-21 — honest venue tag on the kline plane
+   153→/home/z/my-project/src/lib/flow-scanner.ts:80:const klineFlowCache = new Map<string, { at: number; candles: FlowCandle[]; venue: "BINANCE" | "BYBIT" }>();
+   154→/home/z/my-project/src/lib/flow-scanner.ts:81:const klineFlowInFlight = new Map<string, Promise<{ candles: FlowCandle[]; venue: "BINANCE" | "BYBIT" } | null>>();
+   155→/home/z/my-project/src/lib/flow-scanner.ts:92:type KlineFlowEntry = { at: number; candles: FlowCandle[]; venue: "BINANCE" | "BYBIT" };
+   156→/home/z/my-project/src/lib/flow-scanner.ts:113:// falls back to the Bybit v5 kline plane with an honest venue tag. The old
+   157→/home/z/my-project/src/lib/flow-scanner.ts:118:  const g = globalThis as { __nexusFlowFbStats?: { fapiFail: number; bybitOk: number; bybitFail: number; spotOk: number; lastWarnAt: number } };
+   158→/home/z/my-project/src/lib/flow-scanner.ts:119:  g.__nexusFlowFbStats ??= { fapiFail: 0, bybitOk: 0, bybitFail: 0, spotOk: 0, lastWarnAt: 0 };
+   159→/home/z/my-project/src/lib/flow-scanner.ts:126:// index 9) so CVD stays REAL. For niche Binance listings absent from Bybit
+   160→/home/z/my-project/src/lib/flow-scanner.ts:152:export function flowScanHealth(): { fapiFail: number; bybitOk: number; bybitFail: number; spotOk: number; bybit: ReturnType<typeof bybitHealth> } {
+   161→/home/z/my-project/src/lib/flow-scanner.ts:153:  return { fapiFail: fbStats.fapiFail, bybitOk: fbStats.bybitOk, bybitFail: fbStats.bybitFail, spotOk: fbStats.spotOk, bybit: bybitHealth() };
+   162→/home/z/my-project/src/lib/flow-scanner.ts:156:async function fetchKlinesFlow(symbol: string, tf: ScanTf): Promise<{ candles: FlowCandle[]; venue: "BINANCE" | "BYBIT" } | null> {
+   163→/home/z/my-project/src/lib/flow-scanner.ts:162:  const p = (async (): Promise<{ candles: FlowCandle[]; venue: "BINANCE" | "BYBIT" } | null> => {
+   164→/home/z/my-project/src/lib/flow-scanner.ts:166:      let venue: "BINANCE" | "BYBIT" = "BINANCE";
+   165→/home/z/my-project/src/lib/flow-scanner.ts:175:        // via taker-buy field 9), then Bybit perp (taker split unavailable →
+   166→/home/z/my-project/src/lib/flow-scanner.ts:187:        const alt = await bybitKlines(symbol, tf, TF_LIMIT[tf]);
+   167→/home/z/my-project/src/lib/flow-scanner.ts:189:          venue = "BYBIT";
+   168→/home/z/my-project/src/lib/flow-scanner.ts:190:          fbStats.bybitOk++;
+   169→/home/z/my-project/src/lib/flow-scanner.ts:191:          warnFallback(`spot+mirror miss (${symbol} ${tf}) → BYBIT perp fallback (CVD null on this row)`);
+   170→/home/z/my-project/src/lib/flow-scanner.ts:196:        fbStats.bybitFail++;
+   171→/home/z/my-project/src/lib/flow-scanner.ts:197:        warnFallback(`kline starved on ALL planes: ${symbol} ${tf} (fapi + spot + bybit)`);
+   172→/home/z/my-project/src/lib/flow-scanner.ts:272:  // DATA-REVIVAL: Bybit-fallback candles carry takerBuy=NaN → cvdPct stays null
+   173→/home/z/my-project/src/lib/flow-scanner.ts:398:  const rollupVenue: "BINANCE" | "BYBIT" | "MIXED" = venues.every((v) => v === "BINANCE") ? "BINANCE" : venues.every((v) => v === "BYBIT") ? "BYBIT" : "MIXED";
+   174→/home/z/my-project/src/lib/flow-bridge.ts:6://  ① BYBIT FLOW BRIDGE — during fapi bans/pool silence the flow scanners used
+   175→/home/z/my-project/src/lib/flow-bridge.ts:8://     48h). Bybit v5 public market endpoints give a semantically-close perp
+   176→/home/z/my-project/src/lib/flow-bridge.ts:15://     BELOW Bybit linear (spot flow ≠ perp flow).
+   177→/home/z/my-project/src/lib/flow-bridge.ts:17:// LADDERS (best → last): klines fapi→SPOT-MIRROR→BYBIT · tape fapi→BYBIT→
+   178→/home/z/my-project/src/lib/flow-bridge.ts:18:// SPOT-MIRROR · OI/funding fapi→BYBIT (perp-native, no spot equivalent).
+   179→/home/z/my-project/src/lib/flow-bridge.ts:25:// SPOT-MIRROR rung 404s on them and the ladder falls through to Bybit, which
+   180→/home/z/my-project/src/lib/flow-bridge.ts:33:export type FlowSource = "BINANCE" | "SPOT-MIRROR" | "BYBIT";
+   181→/home/z/my-project/src/lib/flow-bridge.ts:42:  /** field-9 taker-buy base volume — null ⇒ venue does not report it (BYBIT v5 kline). */
+   182→/home/z/my-project/src/lib/flow-bridge.ts:57:  /** notional OI in USD — null on BYBIT history (base-denominated only). */
+   183→/home/z/my-project/src/lib/flow-bridge.ts:62:export interface BybitTicker {
+   184→/home/z/my-project/src/lib/flow-bridge.ts:69:  /** 24h quote turnover in USD — powers the BYBIT-MIRROR pool-stats rung (Task 53). */
+   185→/home/z/my-project/src/lib/flow-bridge.ts:96:// ── bybit 429 backoff (multi-exchange HL pattern) — our own storm guard ──
+   186→/home/z/my-project/src/lib/flow-bridge.ts:97:let bybitCooldownUntil = 0;
+   187→/home/z/my-project/src/lib/flow-bridge.ts:98:let bybitCooldownJournaled = false;
+   188→/home/z/my-project/src/lib/flow-bridge.ts:100:function noteBybit429(context: string): void {
+   189→/home/z/my-project/src/lib/flow-bridge.ts:101:  if (Date.now() >= bybitCooldownUntil) bybitCooldownJournaled = false;
+   190→/home/z/my-project/src/lib/flow-bridge.ts:102:  bybitCooldownUntil = Date.now() + 60_000;
+   191→/home/z/my-project/src/lib/flow-bridge.ts:103:  if (!bybitCooldownJournaled) {
+   192→/home/z/my-project/src/lib/flow-bridge.ts:104:    bybitCooldownJournaled = true;
+   193→/home/z/my-project/src/lib/flow-bridge.ts:105:    console.log(`[flow-bridge] BYBIT 429 on ${context} — bridge leg paused 60s (backoff, Task-52)`);
+   194→/home/z/my-project/src/lib/flow-bridge.ts:109:const bybitOpen = (): boolean => Date.now() >= bybitCooldownUntil;
+   195→/home/z/my-project/src/lib/flow-bridge.ts:111:async function bybitJfetch<T>(url: string): Promise<T | null> {
+   196→/home/z/my-project/src/lib/flow-bridge.ts:112:  if (!bybitOpen()) return null;
+   197→/home/z/my-project/src/lib/flow-bridge.ts:118:      noteBybit429(url);
+   198→/home/z/my-project/src/lib/flow-bridge.ts:168:function bybitInterval(interval: string): string | null {
+   199→/home/z/my-project/src/lib/flow-bridge.ts:179:/** BYBIT rung — v5 linear perp kline. NO field-9 taker volume ⇒ takerBuyBase null. */
+   200→/home/z/my-project/src/lib/flow-bridge.ts:180:export async function bybitKlines(symbol: string, interval: string, limit: number): Promise<KlineRow[] | null> {
+   201→/home/z/my-project/src/lib/flow-bridge.ts:181:  const bi = bybitInterval(interval);
+   202→/home/z/my-project/src/lib/flow-bridge.ts:183:  const j = await bybitJfetch<{ result?: { list?: string[][] } }>(`https://api.bybit.com/v5/market/kline?category=linear&symbol=${symbol}&interval=${bi}&limit=${Math.min(limit, 1000)}`);
+   203→/home/z/my-project/src/lib/flow-bridge.ts:198:/** kline LADDER — fapi (gate) → SPOT-MIRROR → BYBIT linear. */
+   204→/home/z/my-project/src/lib/flow-bridge.ts:204:  const byb = await bybitKlines(symbol, interval, limit).catch(() => null);
+   205→/home/z/my-project/src/lib/flow-bridge.ts:205:  if (byb && byb.length > 0) return { rows: byb, source: "BYBIT" };
+   206→/home/z/my-project/src/lib/flow-bridge.ts:211:function tapeFromBybit(list: Array<{ price: string; size: string; side: string; time: string }>): TapeTrade[] {
+   207→/home/z/my-project/src/lib/flow-bridge.ts:222:/** BYBIT rung — linear recent-trade (perp tape on another venue). */
+   208→/home/z/my-project/src/lib/flow-bridge.ts:223:export async function bybitTape(symbol: string): Promise<TapeTrade[] | null> {
+   209→/home/z/my-project/src/lib/flow-bridge.ts:224:  const j = await bybitJfetch<{ result?: { list?: Array<{ price: string; size: string; side: string; time: string }> } }>(`https://api.bybit.com/v5/market/recent-trade?category=linear&symbol=${symbol}&limit=1000`);
+   210→/home/z/my-project/src/lib/flow-bridge.ts:227:  return tapeFromBybit(list);
+   211→/home/z/my-project/src/lib/flow-bridge.ts:237:/** tape LADDER — fapi aggTrades → BYBIT linear recent-trade → SPOT-MIRROR trades. */
+   212→/home/z/my-project/src/lib/flow-bridge.ts:246:  const byb = await bybitTape(symbol).catch(() => null);
+   213→/home/z/my-project/src/lib/flow-bridge.ts:247:  if (byb && byb.length > 0) return { trades: byb, source: "BYBIT" };
+   214→/home/z/my-project/src/lib/flow-bridge.ts:255:/** BYBIT rung — v5 open-interest history, base-denominated (notional null). */
+   215→/home/z/my-project/src/lib/flow-bridge.ts:256:export async function bybitOiHist(symbol: string, period: "5m" | "15m", limit: number): Promise<OiRow[] | null> {
+   216→/home/z/my-project/src/lib/flow-bridge.ts:258:  const j = await bybitJfetch<{ result?: { list?: Array<{ openInterest: string; timestamp: string }> } }>(`https://api.bybit.com/v5/market/open-interest?category=linear&symbol=${symbol}&intervalTime=${iv}&limit=${limit}`);
+   217→/home/z/my-project/src/lib/flow-bridge.ts:265:/** OI LADDER — fapi openInterestHist → BYBIT. */
+   218→/home/z/my-project/src/lib/flow-bridge.ts:274:  const byb = await bybitOiHist(symbol, period, limit).catch(() => null);
+   219→/home/z/my-project/src/lib/flow-bridge.ts:275:  if (byb && byb.length > 0) return { rows: byb, source: "BYBIT" };
+   220→/home/z/my-project/src/lib/flow-bridge.ts:287:/** BYBIT rung — v5 linear orderbook (perp-native book on another venue). */
+   221→/home/z/my-project/src/lib/flow-bridge.ts:288:export async function bybitDepth(symbol: string, limit: number): Promise<DepthBook | null> {
+   222→/home/z/my-project/src/lib/flow-bridge.ts:292:  const j = await bybitJfetch<{ result?: { b?: string[][]; a?: string[][] } }>(`https://api.bybit.com/v5/market/orderbook?category=linear&symbol=${symbol}&limit=${lv}`);
+   223→/home/z/my-project/src/lib/flow-bridge.ts:299:    source: "BYBIT",
+   224→/home/z/my-project/src/lib/flow-bridge.ts:316:/** depth LADDER — fapi (gate) → BYBIT linear book → SPOT-MIRROR book. */
+   225→/home/z/my-project/src/lib/flow-bridge.ts:326:  const byb = await bybitDepth(symbol, limit).catch(() => null);
+   226→/home/z/my-project/src/lib/flow-bridge.ts:333:// ── batched bybit tickers — funding + mark + OI notional for the WHOLE domain
+   227→/home/z/my-project/src/lib/flow-bridge.ts:337:let tickCache: { at: number; map: Map<string, BybitTicker> } | null = null;
+   228→/home/z/my-project/src/lib/flow-bridge.ts:338:let tickInFlight: Promise<Map<string, BybitTicker>> | null = null;
+   229→/home/z/my-project/src/lib/flow-bridge.ts:340:export async function bybitTickerMap(): Promise<Map<string, BybitTicker>> {
+   230→/home/z/my-project/src/lib/flow-bridge.ts:344:    const out = new Map<string, BybitTicker>();
+   231→/home/z/my-project/src/lib/flow-bridge.ts:345:    const j = await bybitJfetch<{ result?: { list?: Array<Record<string, string>> } }>("https://api.bybit.com/v5/market/tickers?category=linear");
+   232→/home/z/my-project/src/lib/flow-bridge.ts:375:export async function bybitTickerRow(symbol: string): Promise<BybitTicker | null> {
+   233→/home/z/my-project/src/lib/flow-bridge.ts:376:  return (await bybitTickerMap().catch(() => new Map<string, BybitTicker>())).get(symbol) ?? null;
+   234→/home/z/my-project/src/lib/flow-bridge.ts:383:// (BYBIT — no Binance/OKX/Hyperliquid listing exists), its bundle was stamped
+   235→/home/z/my-project/src/lib/flow-bridge.ts:384:// source BYBIT, and the deploy fired on tech-only confluence while the
+   236→/home/z/my-project/src/lib/flow-bridge.ts:405:/** BYBIT rung — linear perp kline 5m, same math. */
+   237→/home/z/my-project/src/lib/flow-bridge.ts:406:export async function bybit5mMove(symbol: string): Promise<number | null> {
+   238→/home/z/my-project/src/lib/flow-bridge.ts:407:  const rows = await bybitKlines(symbol, "5m", 4);
+   239→/home/z/my-project/src/app/api/flows/route.ts:4:import { bybitHealth } from "@/lib/bybit-feed";
+   240→/home/z/my-project/src/app/api/flows/route.ts:11: *  dataQuality block — which kline plane fed the board (BINANCE/BYBIT/MIXED),
+   241→/home/z/my-project/src/app/api/flows/route.ts:27:        bybitOk: fh.bybitOk,
+   242→/home/z/my-project/src/app/api/flows/route.ts:28:        bybitFail: fh.bybitFail,
+   243→/home/z/my-project/src/app/api/flows/route.ts:30:        bybitLastOkAt: fh.bybit.lastOkAt,
+   244→/home/z/my-project/src/app/api/pulse/route.ts:83:    const exchanges = ["BINANCE", "OKX", "BYBIT", "HYPERLIQUID"].map((venue) => {
