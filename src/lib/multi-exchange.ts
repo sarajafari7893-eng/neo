@@ -1,23 +1,29 @@
-// ── FlowRadar Neo multi-exchange consensus (server-only) ──
-// Median price across Binance + OKX + Bybit + Hyperliquid + GATE (outlier-resistant).
-// v10.16 P1 FUTURES PRICE UNIFICATION — every venue now quotes the SAME
-// instrument class the engine trades (USDT-M linear perps), not a spot/perp
-// mix: Binance = real futures batch (the null-price BINANCE quote is gone),
-// OKX = instType SWAP, Bybit = category linear. A venue that errors degrades
-// to "no quote for that venue" — never to sim; the terminal price stays live
-// if ANY real venue responded.
-// v10.24 Task 34-a: ONLY the Binance futures leg goes through the fapi-gate
-// (weight 40 full-universe ticker, critical lane). OKX/Bybit/Hyperliquid are
-// different hosts with different budgets — they keep their direct fetch.
-// v12.10 VENUE-EXPANSION (AUDIT-20261023 follow-up, operator mandate «وتوی یک
-// ارز ... ریشه‌ای احیا و کالیبره شود»): GATE USDT-futures wired as venue #5 —
-// the coverage probe proved JCT/BTW/MAGMA/IRYS list on Gate while being
-// Binance-absent, so the "single-venue" vetoes were a DATA-COVERAGE artifact,
-// not a market fact. One full-tickers GET per sweep (15s shared cache).
+// ── FlowRadar Neo BINANCE MULTI-PLANE consensus (server-only) ──
+// v14.0 BINANCE-ONLY RE-ARCHITECTURE (operator mandate trace 1a185042c872b4f9
+// — «ردپای OKX/Bybit در کجا وجود دارد و با بایننس جایگزین شود»): the old
+// cross-exchange median (Binance+OKX+Bybit+Hyperliquid+GATE) is replaced by
+// FOUR Binance planes — ONE exchange, FOUR independent network paths — so the
+// outlier defense (robustMedian) survives on pure Binance data:
+//   ① BINANCE       — composite: rung 0 spot-ws prints (price-ws :3003 push
+//                     file) → gated fapi batch → SPOT-POOL mirror ladder
+//   ② BINANCE-SPOT  — the vision-primary spot-pool ladder (data-api.binance.
+//                     vision → api-gcp → api1-4 → api), separate ban budget
+//   ③ BINANCE-FUTWS — the futures bookTicker ring pushed by price-ws (:3003,
+//                     per-symbol fstream WS) — REAL futures plane, zero REST
+//                     weight, mid = (bid+ask)/2 from .data/futws-quotes.json
+//   ④ BINANCE-GCP   — gcp-pinned spot ladder (api-gcp → api1-4 → api) — an
+//                     independent host path from the vision-primary ladder
+// A plane that errors degrades to "no quote for that plane" — never to sim;
+// the terminal price stays live if ANY real plane responded.
+// v10.24 Task 34-a: only the composite leg's fapi batch rides the fapi-gate
+// (weight 40 full-universe ticker, critical lane); the spot ladders keep their
+// own direct fetch + shared spot-host gate (v13.2.1).
+// The v12.10 venue-expansion (GATE) and Task-49 HL allowlist are RETIRED here —
+// the system is Binance-only by mandate; PHANTOM-FEED outlier defense is now
+// carried by robustMedian across the four Binance planes (v10.30 doctrine).
 
 import { getFeedStatus } from "./market-feed";
 import { gateFetch } from "./fapi-gate";
-import { HL_KEY_ALLOWLIST } from "./hl-allowlist";
 import { promises as fs } from "fs";
 import { noteSpotHostThrottle, spotHostsReady } from "./spot-host-gate";
 import path from "path";
@@ -54,119 +60,6 @@ async function fetchWithTimeout(url: string, init?: RequestInit): Promise<Respon
   }
 }
 
-/** "ETHUSDT" → OKX SWAP instId "ETH-USDT-SWAP" (v10.16 perp unification). */
-export function toOkxInstId(symbol: string): string {
-  return `${symbol.replace(/USDT$/, "")}-USDT-SWAP`;
-}
-
-async function okxBatch(symbols: string[]): Promise<Map<string, number>> {
-  const out = new Map<string, number>();
-  // v10.16 (b) SWAP (linear perp) instruments — the SPOT endpoint mis-priced
-  // perp settlement; instIds map BTCUSDT → BTC-USDT-SWAP.
-  const res = await fetchWithTimeout("https://www.okx.com/api/v5/market/tickers?instType=SWAP");
-  if (!res.ok) return out;
-  const json = (await res.json()) as { data?: Array<{ instId: string; last: string }> };
-  const want = new Set(symbols.map(toOkxInstId));
-  for (const row of json.data ?? []) if (want.has(row.instId)) out.set(row.instId.replace("-USDT-SWAP", "USDT"), Number(row.last));
-  return out;
-}
-
-async function bybitBatch(symbols: string[]): Promise<Map<string, number>> {
-  const out = new Map<string, number>();
-  // v10.16 (c) linear perps — the engine trades USDT-M perpetuals, so the
-  // consensus must read category=linear, not the spot book.
-  const res = await fetchWithTimeout("https://api.bybit.com/v5/market/tickers?category=linear");
-  if (!res.ok) return out;
-  const json = (await res.json()) as { result?: { list?: Array<{ symbol: string; lastPrice: string }> } };
-  const want = new Set(symbols);
-  for (const row of json.result?.list ?? []) if (want.has(row.symbol)) out.set(row.symbol, Number(row.lastPrice));
-  return out;
-}
-
-// v12.10 VENUE-EXPANSION — Gate USDT-M futures batch (one full-tickers GET,
-// shared 30s cache). "BTCUSDT" → Gate contract "BTC_USDT".
-let gateCache: { at: number; data: Map<string, number> } | null = null;
-
-async function gateBatch(symbols: string[]): Promise<Map<string, number>> {
-  if (gateCache && Date.now() - gateCache.at < 30_000) {
-    const out = new Map<string, number>();
-    for (const s of symbols) {
-      const p = gateCache.data.get(s);
-      if (p) out.set(s, p);
-    }
-    return out;
-  }
-  const out = new Map<string, number>();
-  try {
-    const res = await fetchWithTimeout("https://api.gateio.ws/api/v4/futures/usdt/tickers");
-    if (!res.ok) return out;
-    const rows = (await res.json()) as Array<{ contract: string; last: string }>;
-    const all = new Map<string, number>();
-    for (const r of rows) {
-      const p = Number(r.last);
-      if (Number.isFinite(p) && p > 0) all.set(r.contract.replace("_USDT", "USDT"), p);
-    }
-    gateCache = { at: Date.now(), data: all };
-    for (const s of symbols) {
-      const p = all.get(s);
-      if (p) out.set(s, p);
-    }
-  } catch {
-    /* keep stale/empty — honest nulls downstream */
-  }
-  return out;
-}
-
-async function hyperliquidAll(symbols: string[]): Promise<Map<string, number>> {
-  const out = new Map<string, number>();
-  if (Date.now() < hlCooldownUntil) return out; // 429 backoff — stay silent, retry after cooldown
-  const res = await fetchWithTimeout("https://api.hyperliquid.xyz/info", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ type: "allMids" }) });
-  if (res.status === 429) {
-    hlCooldownUntil = Date.now() + 120_000;
-    if (!hlCooldownJournaled) {
-      hlCooldownJournaled = true;
-      console.log("[multi-exchange] HYPERLIQUID 429 — leg paused 2min (backoff, Task 49)");
-      setTimeout(() => {
-        hlCooldownJournaled = false;
-      }, 120_000);
-    }
-    return out;
-  }
-  if (!res.ok) return out;
-  const json = (await res.json()) as Record<string, string>;
-  // v11.1 TASK-56 HL-ALLOWLIST (operator: «نگاشت کلید Hyperliquid به allowlist
-  // محدود شود»): the old map-every-key `${k}USDT` loop let same-ticker-
-  // different-asset HL tokens (HL "ARK"=0.1067 vs Binance ARKUSDT) impersonate
-  // traded symbols — the PHANTOM-FEED-0930 root. Only keys vetted by
-  // scripts/hl-vet.ts (plain ticker + exists on Binance fapi + price within
-  // 3% of the real perp) are mapped; unvetted/colliding keys are dropped and
-  // journaled once per process so new collisions stay visible, not silent.
-  const want = new Set(symbols);
-  for (const [k, v] of Object.entries(json)) {
-    const sym = `${k}USDT`;
-    if (!want.has(sym)) continue;
-    if (!HL_KEY_ALLOWLIST.has(k)) {
-      if (!hlBlockedJournaled.has(k)) {
-        hlBlockedJournaled.add(k);
-        console.log(`[multi-exchange] HL key "${k}" in allMids but NOT allowlisted (unvetted/colliding ticker) — quote dropped at root (Task 56)`);
-      }
-      continue;
-    }
-    const p = Number(v);
-    if (Number.isFinite(p) && p > 0) out.set(sym, p);
-  }
-  return out;
-}
-
-const hlBlockedJournaled = new Set<string>(); // Task 56: one journal line per blocked key per process
-
-// v12.1 TASK-49 — HL 429 cooldown: the venue 429s under pool-wide throttling;
-// re-poking every 15s sweep extends it. On 429 the HL leg goes silent for
-// 2min (quotes degrade to "no quote" — the robust median handles that) and
-// a single journal line marks the pause instead of silent dark bars.
-let hlCooldownUntil = 0;
-let hlCooldownJournaled = false;
-
 function median(values: number[]): number {
   const sorted = [...values].sort((a, b) => a - b);
   const mid = Math.floor(sorted.length / 2);
@@ -174,20 +67,12 @@ function median(values: number[]): number {
 }
 
 // ── v10.30 PHANTOM-FEED-0930 — robust median + outlier refusal ─────────────
-// Root cause (NX-0884/0887 phantom full-TP): OKX QNT-USDT-SWAP quotes ~49.2
-// with a FRESH timestamp while Binance/Bybit agree at ~298. With one healthy
-// venue temporarily absent, the plain median of [49.2, 298] = 173.6 — a price
-// that exists on NO exchange — flowed into PricePoint and the settlement
-// engine, instantly "full-TP"ing shorts anchored at the real ~290. A frozen
-// timestamp filter can NOT catch this (OKX ts is live); the guard must be
-// statistical.
-//
 // Rule: the median is trusted only while every quote is within 8% of it.
 // Otherwise: if a CLEAR MAJORITY exists (strictly fewer deviants than
 // agreements) reject the minority quotes and recompute; if two or more
 // disagreeing clusters remain (no majority), return null — the engine then
 // falls back to the real Binance fapi ticker instead of inventing a midpoint
-// that no market ever printed.
+// that no market ever printed. (QNT phantom-print doctrine, carried over.)
 const ROBUST_DEV_PCT = 8;
 
 export function robustMedian(quotes: VenueQuote[]): { median: number | null; degraded: boolean } {
@@ -209,23 +94,13 @@ export function robustMedian(quotes: VenueQuote[]): { median: number | null; deg
   return { median: null, degraded: true };
 }
 
-// v10.16 (a) REAL Binance futures quote — batch /fapi/v1/ticker/24hr once per
-// sweep (15s cache so concurrent sweeps/venues share one call).
-// v12.11 RUNG 0 — SPOT-PRINT FILE STORE (operator mandate: Binance anchor from
-// a REAL Binance plane while both REST pools are 418-banned). EVIDENCE CHAIN
-// 2026-10-23: fstream (futures WS) was ATTEMPTED and REFUTED — handshake OK,
-// data MUTED from this egress (sustain probe: 240s ZERO frames on
-// btcusdt@aggTrade with the socket open; the v12.10 p50=30ms reading was a
-// short-window burst artifact — probe kept as re-runnable evidence). In-app
-// WS rings were also refuted (dev-mode per-bundle module instances churn
-// connections; compile-ramp OOM budget). FINAL DESIGN: price-ws :3003 — the
-// one process that already holds the SUSTAINED Binance plane (spot
-// !miniTicker@arr WS, hours-proven) — pushes lane-isolated spot prints every
-// 3s to /api/internal/spotws-quotes which persists .data/spotws-quotes.json.
-// Rung 0 reads that file (real-time Binance spot, zero REST weight); REST
-// rungs below fill only what it cannot price; futures-only microcaps are
-// absent from the store → honestly NULL → NO-BINANCE-CONFIRM +12 keeps
-// firing exactly where no Binance ticket exists (market fact, not blindness).
+// v10.16 (a) REAL Binance composite quote — rung 0 spot prints → batch
+// /fapi/v1/ticker/24hr once per sweep (15s cache) → SPOT-POOL mirror on ban.
+// v12.11 RUNG 0 — SPOT-PRINT FILE STORE: price-ws :3003 (the process that
+// holds the SUSTAINED Binance spot WS plane) pushes lane-isolated spot prints
+// every 3s; this file read costs zero REST weight. REST rungs fill only what
+// it cannot price; futures-only microcaps stay honestly NULL.
+// v14.0 — unchanged leg, now venue "BINANCE" of the four-plane consensus.
 
 const SPOTWS_FILE = path.resolve(".data/spotws-quotes.json");
 const SPOTWS_FILE_MAX_AGE_MS = 12_000; // pushes every 3s — older means price-ws down
@@ -273,7 +148,7 @@ async function binanceFuturesBatch(symbols: string[]): Promise<Map<string, numbe
   if (symbols.length > 0 && out.size === symbols.length) {
     if (Date.now() - lastSpotwsLogAt > 600_000) {
       lastSpotwsLogAt = Date.now();
-      console.log(`ulti-exchange] v12.11 BINANCE venue fully spotws-fed (${out.size}/${symbols.length} spot prints ≤90s) — zero Binance REST contact this sweep`);
+      console.log(`[multi-exchange] v14.0 BINANCE plane fully spotws-fed (${out.size}/${symbols.length} spot prints ≤90s) — zero Binance REST contact this sweep`);
     }
     return out;
   }
@@ -288,14 +163,10 @@ async function binanceFuturesBatch(symbols: string[]): Promise<Map<string, numbe
   // v10.24 Task 34-a: full-universe /fapi/v1/ticker/24hr — weight 40, gated.
   const json = await gateFetch<Array<{ symbol: string; lastPrice: string }>>("/fapi/v1/ticker/24hr", { priority: "critical", weight: 40, timeoutMs: TIMEOUT_MS });
   if (!json) {
-    // v12.8 AUDIT-20261023 — SPOT-POOL MIRROR rung: measured 10:20-10:35Z the
-    // whole fapi plane is 418-banned from this egress while api.binance.com
-    // (spot — SEPARATE pool) answers 200. A banned fapi poll used to leave the
-    // BINANCE venue null → consensus degraded to 2 venues → dislocation
-    // warnings fired while the engine still deployed. The mirror keeps the
+    // v12.8 SPOT-POOL MIRROR rung: a banned fapi poll must not leave the
+    // BINANCE venue null — the spot pool (separate ban budget) keeps the
     // reference venue priced (spot ≈ perp within bps on shared tickers);
-    // futures-only tickers stay null (honest). NOT routed through fapi-gate —
-    // this is the spot pool with its own budget and its own soft backoff.
+    // futures-only tickers stay null (honest).
     const mirrored = await binanceSpotMirrorBatch();
     if (mirrored.size > 0) {
       binanceFutCache = { at: Date.now(), data: mirrored };
@@ -307,7 +178,7 @@ async function binanceFuturesBatch(symbols: string[]): Promise<Map<string, numbe
       }
       if (Date.now() - lastSpotMirrorLogAt > 600_000) {
         lastSpotMirrorLogAt = Date.now();
-        console.log(`[multi-exchange] v12.8 BINANCE venue fed by SPOT-POOL MIRROR (${mirrored.size} tickers) — fapi plane banned, spot pool alive`);
+        console.log(`[multi-exchange] v14.0 BINANCE plane fed by SPOT-POOL MIRROR (${mirrored.size} tickers) — fapi plane banned, spot pool alive`);
       }
     }
     return out;
@@ -325,24 +196,25 @@ async function binanceFuturesBatch(symbols: string[]): Promise<Map<string, numbe
   return out;
 }
 
-// v12.8 — spot-pool mirror state (separate budget/pool from fapi, by design)
-let binanceSpotMirrorCache: { at: number; data: Map<string, number> } | null = null;
+// v14.0 — the two SPOT ladders as consensus planes. The vision-primary ladder
+// (v13.3, shared with flow-bridge via the spot-host gate) is plane ②; the
+// gcp-pinned ladder is plane ④ — an independent host path so a vision outage
+// or a bad vision snapshot cannot take BOTH spot planes down at once.
+const SPOT_LADDER_VISION = ["https://data-api.binance.vision", "https://api-gcp.binance.com", "https://api1.binance.com", "https://api2.binance.com", "https://api3.binance.com", "https://api4.binance.com", "https://api.binance.com"]; // v13.3 ladder + api-gcp
+const SPOT_LADDER_GCP = ["https://api-gcp.binance.com", "https://api1.binance.com", "https://api2.binance.com", "https://api3.binance.com", "https://api4.binance.com", "https://api.binance.com"]; // v14.0 — gcp-pinned independent path
+
+interface SpotBatchState { at: number; data: Map<string, number> }
+const spotPlaneCache = new Map<string, SpotBatchState>();
 let lastSpotMirrorLogAt = 0;
 
-async function binanceSpotMirrorBatch(): Promise<Map<string, number>> {
-  if (binanceSpotMirrorCache && Date.now() - binanceSpotMirrorCache.at < 60_000) return binanceSpotMirrorCache.data;
+async function spotLadderBatch(symbols: string[], hosts: string[], plane: string): Promise<Map<string, number>> {
+  const hit = spotPlaneCache.get(plane);
+  if (hit && Date.now() - hit.at < 60_000) return hit.data;
   const out = new Map<string, number>();
-  // v13.2 SPOT-HOST LADDER (operator mandate trace 1a1704d407f00dad — «جریان زندهٔ لحظه‌ای باید با بایننس باشد»):
-  // data-api.binance.vision is the PRIMARY spot host — measured 32/32 HTTP 200 p50 57ms on 2026-10-25
-  // while api.binance.com rides 418 ban-storms from this shared egress; api stays as the fallback rung.
-  // v13.2.1 — per-host 418/429 backoff via the shared spot-host gate (the old
-  // last-rung-only 10min ban let the primary rung be re-poked during its own
-  // ban every sweep — live evidence: vision 418 @467wt/min, retry-after 889s).
-  // v13.2.3 (trace 1a170bba02dff781): api1-4 added as mid rungs (200 @356-408ms probed 2026-10-25), api last.
-  const HOSTS = ["https://data-api.binance.vision", "https://api-gcp.binance.com", "https://api1.binance.com", "https://api2.binance.com", "https://api3.binance.com", "https://api4.binance.com", "https://api.binance.com"]; // v13.3 ladder + api-gcp (restored 1a1849f647778885)
-  const ready = spotHostsReady(HOSTS);
-  if (ready.length === 0) return binanceSpotMirrorCache?.data ?? out;
+  const ready = spotHostsReady(hosts);
+  if (ready.length === 0) return hit?.data ?? out;
   for (const host of ready) {
+    const t0 = Date.now();
     try {
       const ctrl = new AbortController();
       const t = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
@@ -358,12 +230,54 @@ async function binanceSpotMirrorBatch(): Promise<Map<string, number>> {
         const p = Number(r.lastPrice);
         if (Number.isFinite(p) && p > 0) out.set(r.symbol, p);
       }
-      binanceSpotMirrorCache = { at: Date.now(), data: out };
+      spotPlaneCache.set(plane, { at: Date.now(), data: out });
+      if (out.size > 0 && Date.now() - lastSpotMirrorLogAt > 600_000) {
+        lastSpotMirrorLogAt = Date.now();
+        console.log(`[multi-exchange] v14.0 ${plane} plane fed by ${host.replace("https://", "")} (${out.size} tickers, ${Date.now() - t0}ms)`);
+      }
       return out;
     } catch {
       continue; // next rung — honest nulls downstream if all fail
     }
   }
+  return out;
+}
+
+// v14.0 — BINANCE-FUTWS plane: the per-symbol futures bookTicker ring pushed
+// by price-ws :3003 (.data/futws-quotes.json). Real Binance futures mids with
+// ZERO REST weight; the ring is the v13.5 fstream per-symbol design that is
+// live-proven from this egress (market-wide !arr streams are muted here, but
+// per-symbol bookTicker streams sustain).
+const FUTWS_FILE = path.resolve(".data/futws-quotes.json");
+const FUTWS_FILE_MAX_AGE_MS = 15_000; // ring pushes continuously — older means the ring is down
+const FUTWS_QUOTE_FRESH_MS = 90_000;
+let futwsFileCache: { at: number; data: Map<string, number> } | null = null;
+let lastFutwsLogAt = 0;
+
+async function futwsRingQuotes(): Promise<Map<string, number>> {
+  const now = Date.now();
+  if (futwsFileCache && now - futwsFileCache.at < 3_000) return futwsFileCache.data;
+  const out = new Map<string, number>();
+  try {
+    const raw = await fs.readFile(FUTWS_FILE, "utf8");
+    const parsed = JSON.parse(raw) as { at?: number; rows?: Array<{ s?: string; m?: number; t?: number }> };
+    if (parsed.at && now - parsed.at <= FUTWS_FILE_MAX_AGE_MS && Array.isArray(parsed.rows)) {
+      for (const r of parsed.rows) {
+        const sym = String(r.s ?? "").toUpperCase();
+        const m = Number(r.m);
+        const t = Number(r.t);
+        if (!sym.endsWith("USDT") || !(m > 0) || !(t > 0) || now - t > FUTWS_QUOTE_FRESH_MS) continue;
+        out.set(sym, m);
+      }
+    }
+  } catch {
+    /* ring file absent — plane skips honestly */
+  }
+  if (out.size > 0 && Date.now() - lastFutwsLogAt > 600_000) {
+    lastFutwsLogAt = Date.now();
+    console.log(`[multi-exchange] v14.0 BINANCE-FUTWS plane fed by the futures bookTicker ring (${out.size} mids, zero REST weight)`);
+  }
+  futwsFileCache = { at: now, data: out };
   return out;
 }
 
@@ -383,32 +297,36 @@ export async function sweepConsensus(symbols: string[]): Promise<Map<string, Con
   if (inFlight) return inFlight;
 
   inFlight = (async () => {
-    const [binance, okx, bybit, hl, gate] = await Promise.allSettled([binanceFuturesBatch(symbols), okxBatch(symbols), bybitBatch(symbols), hyperliquidAll(symbols), gateBatch(symbols)]);
-    const binanceMap = binance.status === "fulfilled" ? binance.value : new Map<string, number>();
-    const okxMap = okx.status === "fulfilled" ? okx.value : new Map<string, number>();
-    const bybitMap = bybit.status === "fulfilled" ? bybit.value : new Map<string, number>();
-    const hlMap = hl.status === "fulfilled" ? hl.value : new Map<string, number>();
-    const gateMap = gate.status === "fulfilled" ? gate.value : new Map<string, number>();
+    // v14.0 — four Binance planes (see header). Order matters only for the
+    // quotes array; robustMedian treats them symmetrically.
+    const [composite, spot, futws, gcp] = await Promise.allSettled([
+      binanceFuturesBatch(symbols),
+      spotLadderBatch(symbols, SPOT_LADDER_VISION, "BINANCE-SPOT"),
+      futwsRingQuotes(),
+      spotLadderBatch(symbols, SPOT_LADDER_GCP, "BINANCE-GCP"),
+    ]);
+    const compositeMap = composite.status === "fulfilled" ? composite.value : new Map<string, number>();
+    const spotMap = spot.status === "fulfilled" ? spot.value : new Map<string, number>();
+    const futwsMap = futws.status === "fulfilled" ? futws.value : new Map<string, number>();
+    const gcpMap = gcp.status === "fulfilled" ? gcp.value : new Map<string, number>();
     const binanceStatus = getFeedStatus();
 
     const now = Date.now();
-    if (binanceMap.size > 0) venueLastOkAt.set("BINANCE", now);
-    if (okxMap.size > 0) venueLastOkAt.set("OKX", now);
-    if (bybitMap.size > 0) venueLastOkAt.set("BYBIT", now);
-    if (hlMap.size > 0) venueLastOkAt.set("HYPERLIQUID", now);
-    if (gateMap.size > 0) venueLastOkAt.set("GATE", now);
+    if (compositeMap.size > 0) venueLastOkAt.set("BINANCE", now);
+    if (spotMap.size > 0) venueLastOkAt.set("BINANCE-SPOT", now);
+    if (futwsMap.size > 0) venueLastOkAt.set("BINANCE-FUTWS", now);
+    if (gcpMap.size > 0) venueLastOkAt.set("BINANCE-GCP", now);
 
     const out = new Map<string, Consensus>();
     for (const sym of symbols) {
       const quotes: VenueQuote[] = [
-        { venue: "BINANCE", price: binanceMap.get(sym) ?? null, latencyMs: binanceStatus.latencyMs, ok: binanceMap.has(sym) },
-        { venue: "OKX", price: okxMap.get(sym) ?? null, latencyMs: null, ok: okxMap.has(sym) },
-        { venue: "BYBIT", price: bybitMap.get(sym) ?? null, latencyMs: null, ok: bybitMap.has(sym) },
-        { venue: "HYPERLIQUID", price: hlMap.get(sym) ?? null, latencyMs: null, ok: hlMap.has(sym) },
-        { venue: "GATE", price: gateMap.get(sym) ?? null, latencyMs: null, ok: gateMap.has(sym) },
+        { venue: "BINANCE", price: compositeMap.get(sym) ?? null, latencyMs: binanceStatus.latencyMs, ok: compositeMap.has(sym) },
+        { venue: "BINANCE-SPOT", price: spotMap.get(sym) ?? null, latencyMs: null, ok: spotMap.has(sym) },
+        { venue: "BINANCE-FUTWS", price: futwsMap.get(sym) ?? null, latencyMs: null, ok: futwsMap.has(sym) },
+        { venue: "BINANCE-GCP", price: gcpMap.get(sym) ?? null, latencyMs: null, ok: gcpMap.has(sym) },
       ];
       const prices = quotes.map((q) => q.price).filter((p): p is number => typeof p === "number" && p > 0);
-      // v10.30: robust median — rejects outlier venues, refuses impossible midpoints
+      // v10.30: robust median — rejects outlier planes, refuses impossible midpoints
       const rm = robustMedian(quotes);
       const mdn = rm.median;
       const maxDevBps = mdn && prices.length >= 2 ? Math.max(...prices.map((p) => (Math.abs(p - mdn) / mdn) * 10_000)) : 0;
@@ -431,9 +349,8 @@ export function getConsensusHealth(): Array<{ venue: string; ok: boolean; latenc
   const fresh = (venue: string) => Date.now() - (venueLastOkAt.get(venue) ?? 0) <= VENUE_OK_WINDOW_MS;
   return [
     { venue: "BINANCE", ok: fresh("BINANCE"), latencyMs: getFeedStatus().latencyMs },
-    { venue: "OKX", ok: fresh("OKX"), latencyMs: null },
-    { venue: "BYBIT", ok: fresh("BYBIT"), latencyMs: null },
-    { venue: "HYPERLIQUID", ok: fresh("HYPERLIQUID"), latencyMs: null },
-    { venue: "GATE", ok: fresh("GATE"), latencyMs: null },
+    { venue: "BINANCE-SPOT", ok: fresh("BINANCE-SPOT"), latencyMs: null },
+    { venue: "BINANCE-FUTWS", ok: fresh("BINANCE-FUTWS"), latencyMs: null },
+    { venue: "BINANCE-GCP", ok: fresh("BINANCE-GCP"), latencyMs: null },
   ];
 }

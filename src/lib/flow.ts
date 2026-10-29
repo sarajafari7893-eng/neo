@@ -8,7 +8,7 @@
 
 import { gateFetch } from "./fapi-gate";
 import { liquidationPressure } from "./liquidations";
-import { bridgeOiHist, bridgeTape, bridgeKlines, bybit5mMove, bybitTickerRow, okx5mMove, type FlowSource } from "./flow-bridge";
+import { bridgeOiHist, bridgeTape, bridgeKlines, spot5mMove, fapi5mMove, futTickerRow, type FlowSource } from "./flow-bridge";
 import { getCoreRevert } from "./core-revert"; // v13.0 CORE-REVERT — operator revert mandate
 
 const TIMEOUT_MS = 6500;
@@ -57,7 +57,7 @@ export interface FlowAssessment {
   // as if the book said "neutral" — data absence is not a neutral read.
   coverage: number; // non-null count of the decision-relevant metrics
   blind: boolean; // coverage === 0
-  /** v12.2 TASK-52 — venue that actually fed this bundle (BINANCE | SPOT-MIRROR | BYBIT | MIXED) when fapi starved. */
+  /** v12.2 TASK-52 — Binance plane that actually fed this bundle (BINANCE | SPOT-MIRROR | MIXED) when fapi starved (v14.0: Binance-only). */
   source?: FlowSource | "MIXED";
 }
 
@@ -188,14 +188,8 @@ export async function fetchFlowMetrics(symbol: string): Promise<FlowMetrics | nu
         if (b && b.rows.length > 0) {
           oi = b.rows.map((r) => ({ symbol, sumOpenInterest: String(r.sumOpenInterest), sumOpenInterestValue: String(r.sumOpenInterestValue ?? 0), timestamp: r.timestamp }));
           srcNote(b.source);
-          if (b.source === "BYBIT") {
-            // bybit OI history is base-denominated only — notional from the
-            // batched tickers call (measured, not invented)
-            const t = await bybitTickerRow(symbol).catch(() => null);
-            const lastOi = Number(oi[oi.length - 1]!.sumOpenInterest);
-            const notional = t?.openInterestValue ?? (t && lastOi > 0 ? t.lastPrice * lastOi : 0);
-            if (notional > 0) oi[oi.length - 1]!.sumOpenInterestValue = String(Math.round(notional));
-          }
+          // v14.0 — OI history is fapi-only (perp-native): rows carry the real
+          // notional from Binance. No cross-venue rung exists anymore.
         }
       }
 
@@ -206,10 +200,13 @@ export async function fetchFlowMetrics(symbol: string): Promise<FlowMetrics | nu
 
       let prem = premium.status === "fulfilled" ? premium.value : null;
       if (!prem) {
-        const t = await bybitTickerRow(symbol).catch(() => null);
+        // v14.0 — premiumIndex/marketPrice fallback via the Binance composite
+        // ticker leg (fapi merged board; funding null on a spot-plane board →
+        // the guard below fails honestly when fapi is banned).
+        const t = await futTickerRow(symbol).catch(() => null);
         if (t && t.fundingRate !== null) {
           prem = { lastFundingRate: String(t.fundingRate), markPrice: String(t.markPrice ?? t.lastPrice) };
-          srcNote("BYBIT");
+          srcNote("BINANCE");
         }
       }
 
@@ -526,20 +523,21 @@ export async function scoreFlow(symbol: string, direction: "LONG" | "SHORT", pri
   let score = Math.round(Math.max(-25, Math.min(25, raw * oiWeight)));
   if (Math.abs(oiWeight - 1) >= 0.15) reasons.push(`flow weighted ×${oiWeight.toFixed(2)} by OI notional ${fmtUsdShort(m.oiValueUsd ?? 0)} — deep-book flow trusted`);
 
-  // ── v12.9 MULTI-VENUE CONSENSUS (AUDIT-NX3046-20261023, operator mandate
-  // «باید از تمام صرافی‌ها مخصوصاً BINANCE تیکت گرفته بشه») ──
-  // The bundle rode ONE venue's tape; nothing ever asked a SECOND venue
-  // whether the tape agrees. NX-3046: BYBIT-only JCT showed CVD +18.5%
-  // OPPOSING the short and OI unwinding — the bundle still rode neutral, and
-  // no other venue was consulted. Now: the primary venue's 15m-window
-  // (4×5m-bar) direction is compared against an INDEPENDENT second venue
-  // (BYBIT-tape → OKX cross-check; Binance/SPOT-MIRROR-tape → BYBIT
-  // cross-check). Sign-opposed moves diverging >1.5% clamp conviction to ±6
-  // (below the ±8 CONFIRMS/CONFLICTS line) — cross-venue conflict can never
-  // confirm a deploy. 60s per-symbol caches + in-flight dedupe keep the hot
-  // path cheap; any fetch failure fails OPEN (consensus simply does not run,
-  // no numbers invented). Single-venue coins (second rung null) are handled
-  // by the engine-side SINGLE-VENUE deploy block.
+  // ── v12.9 SECOND-PLANE CONSENSUS (AUDIT-NX3046-20261023, operator mandate
+  // «باید از تمام صرافی‌ها مخصوصاً BINANCE تیکت گرفته بشه»; v14.0 Binance-only) ──
+  // The bundle rode ONE plane's tape; nothing ever asked a SECOND plane
+  // whether the tape agrees. NX-3046: a single-plane JCT tape showed CVD
+  // +18.5% OPPOSING the short and OI unwinding — the bundle still rode
+  // neutral, and no second plane was consulted. Now: the primary plane's
+  // 15m-window (4×5m-bar) direction is compared against the INDEPENDENT
+  // Binance plane (fapi-tape → SPOT-MIRROR cross-check; SPOT-MIRROR-tape →
+  // gated fapi cross-check). Sign-opposed moves diverging >1.5% clamp
+  // conviction to ±6 (below the ±8 CONFIRMS/CONFLICTS line) — cross-plane
+  // conflict can never confirm a deploy. 60s per-symbol caches + in-flight
+  // dedupe keep the hot path cheap; any fetch failure fails OPEN (consensus
+  // simply does not run, no numbers invented). Symbols the second plane
+  // cannot price (second rung null) are handled by the engine-side
+  // SINGLE-VENUE deploy block.
   const consensusSrc = bridgeSrc ?? null;
   if (consensusSrc) {
     try {
@@ -552,12 +550,15 @@ export async function scoreFlow(symbol: string, direction: "LONG" | "SHORT", pri
       const priMove = pri?.move ?? null;
       let secondName: string | null = null;
       let secondMove: number | null = null;
-      if (consensusSrc === "BYBIT") {
-        secondName = "OKX";
-        secondMove = await cachedConsensusVal(`OKX5M|${symbol}`, 60_000, () => okx5mMove(symbol));
-      } else if (consensusSrc === "BINANCE" || consensusSrc === "SPOT-MIRROR" || consensusSrc === "MIXED") {
-        secondName = "BYBIT";
-        secondMove = await cachedConsensusVal(`BYB5M|${symbol}`, 60_000, () => bybit5mMove(symbol));
+      // v14.0 — the second-plane cross-check is Binance-only: the plane the
+      // primary did NOT ride (fapi primary → SPOT-MIRROR ladder check;
+      // SPOT-MIRROR primary → gated fapi check, honest null when banned).
+      if (consensusSrc === "BINANCE") {
+        secondName = "BINANCE-SPOT";
+        secondMove = await cachedConsensusVal(`SPOT5M|${symbol}`, 60_000, () => spot5mMove(symbol));
+      } else if (consensusSrc === "SPOT-MIRROR" || consensusSrc === "MIXED") {
+        secondName = "BINANCE-FAPI";
+        secondMove = await cachedConsensusVal(`FAPI5M|${symbol}`, 60_000, () => fapi5mMove(symbol));
       }
       if (priMove !== null && secondName && secondMove !== null) {
         const disagree = Math.sign(priMove) !== Math.sign(secondMove) && Math.abs(priMove - secondMove) > 1.5;
