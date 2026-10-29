@@ -440,6 +440,11 @@ export interface FeedStatusDTO {
   universe: { tracked: number; poolTotal: number; liquidPool: number; target: number; poolSource?: string } | null;
   pump: PumpEngineStatus | null; // v9.0 PUMP/DUMP RADAR (lib/pump-dump.ts)
   goldenLane: GoldenLaneBlockDTO | null; // Task 79 — pre-registered golden-formula paper lanes
+  // v14.0 build-sync — additive optional blocks the dashboard cards read;
+  // the pulse payload may omit them (cards render honest empty states).
+  bankroll?: BankrollBlockDTO | null;
+  provenGate?: ProvenGateBlockDTO | null;
+  flatScoreboard?: FlatScoreboardBlockDTO | null;
 }
 
 // ── Task 79 GOLDEN-LANE (server mirror: lib/golden-lane.ts) ─────────────
@@ -725,6 +730,115 @@ export interface GovernorsDTO {
   pkgBlocks: number;
   pkgLastReason: string | null;
   cohorts: Array<{ tag: string; label: string; deployed: number; closed: number; wins: number; netUsd: number; avgPct: number }>;
+}
+
+// v14.0 build-sync — BankrollCard contract (the pulse payload may omit
+// `feed.bankroll`; the card renders its honest offline state then).
+export type BankrollBlockDTO = {
+  state: "ARMED" | "DAILY-STOP" | "WEEKLY-STOP" | "K1-PAUSE" | "K2-LOCK" | "K3-RUIN" | "K4-INVALID";
+  railsEnforced: boolean;
+  kSuite: {
+    locked: boolean;
+    lockCode: string | null;
+    k1Tripped: boolean;
+    k2Locked: boolean;
+    k2Hits: number;
+    k3Locked: boolean;
+    k4Invalid: boolean;
+    engineVersion: string | null;
+  };
+  seed: { balanceUsd: number; todayNet: number | null; weekNet: number | null };
+  basis: {
+    bankrollUsd: number;
+    marginPerTradeUsd: number;
+    dailyStop: number;
+    weeklyStop: number;
+    k1Rolling: number;
+    dailyTarget: number;
+    deflatedEdgeLow: number;
+    deflatedEdgeHigh: number;
+    todayNet: number | null;
+    weekNet: number | null;
+    rolling20Net: number | null;
+    last300Net: number | null;
+    last?: string | null;
+  };
+  rails: { dailyUsedPct: number | null; weeklyUsedPct: number | null; k1UsedPct: number | null };
+  settled: { week: number };
+  target: { targetVsEdgePct: number };
+  weeklyBreachEvents: Array<{ weekIdx: number; weekNetBasis: number }>;
+};
+
+// v14.0 build-sync — ProvenGateCard + FlatScoreboardCard contracts (the pulse
+// payload may omit these blocks; the cards render their honest empty states).
+export type ProvenGateBlockDTO = {
+  enabled: boolean;
+  state: "ARMED" | "DAILY-STOP" | "WEEKLY-STOP" | "K1-PAUSE" | "K2-LOCK" | "K3-RUIN" | "K4-INVALID" | "OFF";
+  railsEnforced: boolean;
+  dailyStop: number;
+  weeklyStop: number;
+  k1RollingNet: number | null;
+  basis: { marginPerTradeUsd: number; todayNet: number | null; weekNet: number | null; rolling20Net: number | null };
+  book: { todayNet: number | null; weekNet: number | null; currentHour: number | null; hourInMask: boolean | null };
+  hours: number[];
+  tp1FloorPct: number;
+  today: { pass: boolean; bypass: boolean; blockedByRail: boolean; vetoHour: boolean; vetoTp1: boolean };
+  lastVeto: { code: string; symbol: string | null; detail: string } | null;
+  lastVetoAt: number | null;
+};
+
+export interface FlatDayBarDTO {
+  dayKey: string;
+  netPct: number;
+  flat10Usd: number;
+  grossPct: number;
+  feePct: number;
+  n: number;
+  partial?: boolean;
+  targetHit?: boolean;
+}
+
+export interface FlatScoreboardBlockDTO {
+  version: string;
+  basisUsd: number;
+  unitUsd: number;
+  unitPctOfBasis: number;
+  targetDailyUsd: number;
+  targetDailyPct: number;
+  tampered?: boolean;
+  today: {
+    n: number;
+    netPct: number;
+    flat10Usd: number;
+    grossPct: number;
+    feePct: number;
+    targetProgressPct: number | null;
+    positiveDays?: number;
+    targetDays?: number;
+    days?: number;
+  } | null;
+  yesterday: {
+    n: number;
+    netPct: number;
+    flat10Usd: number;
+    grossPct: number;
+    feePct: number;
+    targetProgressPct: number | null;
+  } | null;
+  rolling7d: { days: number; n: number; netPct: number; flat10Usd: number; positiveDays: number; targetDays: number };
+  allTime: {
+    days: number;
+    netPct: number;
+    flat10Usd: number;
+    meanDayPct: number;
+    meanDayUsd: number;
+    bestDayPct: number;
+    worstDayPct: number;
+    positiveDays: number;
+    targetDays: number;
+  };
+  feeMass: { trailing7dPct: number | null; perTradeAvgPct: number | null };
+  bars: FlatDayBarDTO[];
 }
 
 export interface GateBlockDTO {
