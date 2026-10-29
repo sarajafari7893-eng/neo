@@ -268,8 +268,8 @@ export async function dqSnapshot(symbol = "BTCUSDT"): Promise<DqReport> {
   // native WS ring (futws) itself, or two+ independent sources leaving
   // consensus at once.
   const verdict: DqReport["verdict"] =
-    ref.status !== "OK" ? "RED"
-      : (fwQ && (fwQ.verdict === "DIVERGENT" || fwQ.verdict === "DOWN")) || divergents + downs >= 2 ? "RED"
+    (fwQ && (fwQ.verdict === "DIVERGENT" || fwQ.verdict === "DOWN")) || divergents + downs >= 2 ? "RED"
+      : ref.status !== "OK" ? "AMBER" // v14.0.2 — reference gated ≠ mirror suspicion: RED is reserved for provider divergence
       : divergents + downs + stale > 0 ? "AMBER"
       : "GREEN";
 
@@ -284,7 +284,7 @@ export async function dqSnapshot(symbol = "BTCUSDT"): Promise<DqReport> {
       `binance ${ref.status} (mid=${ref.mid ?? "?"}) · ` +
       providers.map(p => `${p.provider}:${p.verdict}`).join(" · ") +
       ` → ${verdict}` +
-      (verdict === "RED" ? " — mirror/anomaly suspected, treat Binance-only prints with suspicion" : ""),
+      (verdict === "RED" ? " — mirror/anomaly suspected, treat Binance-only prints with suspicion" : verdict === "AMBER" && ref.status !== "OK" ? " — reference ladder host-gated (spot 418 backoff), providers ALIGNED — measurements suspended, not suspected" : ""),
   };
 
   cache.set(symbol, { at: Date.now(), report });
