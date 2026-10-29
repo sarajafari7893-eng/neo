@@ -688,7 +688,44 @@ export type GateNameDTO =
   | "ENTRY-LEVER" // v11.3 late-entry shield — evidence-gated deterministic levers
   | "STALE-ANCHOR" // Task 53 — anchor freshness gate at deploy
   | "DEPEG-MUTE" // Task 53 — stablecoin depeg global circuit breaker (fail-closed)
-  | "STABLE-REGIME"; // Task 53 — stablecoin regime gate (SHADOW: journals, never blocks)
+  | "STABLE-REGIME" // Task 53 — stablecoin regime gate (SHADOW: journals, never blocks)
+  // v14.0 DTO-sync — the remaining gate-journal GateName values the gauge route
+  // can surface (pre-existing drift between the DTO and gate-journal enum):
+  | "BOTTOM-FADE"
+  | "CASCADE-FREEZE"
+  | "CHASE-EXTREME"
+  | "FLOW-GATE"
+  | "FLUSH-EXHAUSTION"
+  | "LIQUIDITY-FLOOR"
+  | "PHANTOM-FEED"
+  | "QUAD-SHORT"
+  | "REARM-BRAKE"
+  | "REARM-BRAKE-BE"
+  | "REENTRY-LOCKOUT"
+  | "REENTRY-WHIPSAW"
+  | "SINGLE-VENUE"
+  | "STALE-BAR"
+  | "STALE-CHASE"
+  | "STRAT-PAUSE"
+  | "SURROGATE-BREAKOUT"
+  | "V-REVERSAL";
+
+// v14.0 build-sync — GovernorCohortsCard contract (the /api/ai/gauge payload
+// may omit `governors`; the card renders its honest empty state then).
+export interface GovernorsDTO {
+  knobs: {
+    confBandSkipLo: number;
+    confBandSkipHi: number;
+    hourBlockTehran: string | null;
+    hourTrimTehran: string | null;
+    maxLevCap: number;
+    chopRiskMult: number;
+    dlConfFloor: number;
+  };
+  pkgBlocks: number;
+  pkgLastReason: string | null;
+  cohorts: Array<{ tag: string; label: string; deployed: number; closed: number; wins: number; netUsd: number; avgPct: number }>;
+}
 
 export interface GateBlockDTO {
   at: number;

@@ -2,15 +2,15 @@
  "ver": "supervisor-cron 1.6.0",
  "pid": 1869,
  "startedAt": "2026-10-29T22:18:55.161Z",
- "updatedAt": "2026-10-29T22:26:00.956Z",
+ "updatedAt": "2026-10-29T22:36:00.949Z",
  "jobs": {
   "sweep": {
-   "lastRunAt": 1793312760935,
-   "nextRunAt": 1793312760935,
+   "lastRunAt": 1793313360935,
+   "nextRunAt": 1793313360935,
    "lastStatus": "ok",
-   "lastDurationMs": 21,
+   "lastDurationMs": 14,
    "lastError": null,
-   "runs": 210,
+   "runs": 211,
    "failures": 0
   },
   "progress": {
@@ -59,33 +59,33 @@
    "failures": 0
   },
   "keepwarm": {
-   "lastRunAt": 1793312760935,
-   "nextRunAt": 1793313060935,
+   "lastRunAt": 1793313360935,
+   "nextRunAt": 1793313660935,
    "lastStatus": "error",
    "lastDurationMs": 3,
-   "lastError": "HEARTBEAT COLD app:3000 1ms streak=1",
-   "runs": 340,
-   "failures": 97
+   "lastError": "HEARTBEAT COLD app:3000 1ms streak=3",
+   "runs": 342,
+   "failures": 99
   }
  },
  "lastSweep": {
-  "at": "2026-10-29T22:26:00.954Z",
+  "at": "2026-10-29T22:36:00.949Z",
   "verdict": "RED",
   "reason": "app :3000 down",
   "services": {
    "app": {
     "up": false,
     "status": null,
-    "ms": 0
-   },
-   "liq": {
-    "up": true,
-    "status": 200,
     "ms": 3
    },
+   "liq": {
+    "up": false,
+    "status": null,
+    "ms": 0
+   },
    "trade": {
-    "up": true,
-    "status": 200,
+    "up": false,
+    "status": null,
     "ms": 0
    },
    "armor": {
@@ -99,14 +99,14 @@
     "ms": 0
    },
    "sentinel": {
-    "up": true,
-    "status": 200,
+    "up": false,
+    "status": null,
     "ms": 1
    },
    "ws": {
-    "up": true,
-    "status": 400,
-    "ms": 1
+    "up": false,
+    "status": null,
+    "ms": 0
    },
    "bridge": {
     "up": true,
@@ -114,9 +114,9 @@
     "ms": 0
    },
    "tbt": {
-    "up": true,
-    "status": 200,
-    "ms": 1
+    "up": false,
+    "status": null,
+    "ms": 0
    }
   },
   "anomalies": [
@@ -126,21 +126,41 @@
     "msg": "app :3000 DOWN (HTTP unreachable) · healthz=err → pulse fallback"
    },
    {
-    "class": "sentinel-red",
-    "sev": "crit",
-    "msg": "sentinel :3030 verdict RED"
+    "class": "svc-down:liq",
+    "sev": "warn",
+    "msg": "liq :3010 DOWN (HTTP unreachable)"
    },
    {
-    "class": "tbt-doctrine-violation",
+    "class": "svc-down:trade",
     "sev": "warn",
-    "msg": "toobit-bridge doctrine: 1 violation(s) — last=NOTIONAL-DELTA: exp=25.00 act=8.20 (6719bps)"
+    "msg": "trade :3011 DOWN (HTTP unreachable)"
+   },
+   {
+    "class": "svc-down:sentinel",
+    "sev": "warn",
+    "msg": "sentinel :3030 DOWN (HTTP unreachable)"
+   },
+   {
+    "class": "svc-down:ws",
+    "sev": "warn",
+    "msg": "ws :3003 DOWN (HTTP unreachable)"
+   },
+   {
+    "class": "svc-down:tbt",
+    "sev": "warn",
+    "msg": "tbt :3021 DOWN (HTTP unreachable)"
+   },
+   {
+    "class": "ws-down",
+    "sev": "warn",
+    "msg": "ws :3003 DOWN ×1 sweeps (feed dead ⇒ pipeline starves)"
    }
   ],
   "data": {
-   "lastEventAgeMin": 2
+   "lastEventAgeMin": 0
   },
   "streaks": {
-   "wsDown": 0,
+   "wsDown": 1,
    "stale": 0
   }
  },
@@ -159,44 +179,23 @@
   "newN": 5
  },
  "lastKeepwarm": {
-  "at": "2026-10-29T22:26:00.936Z",
+  "at": "2026-10-29T22:36:00.936Z",
   "ok": false,
   "ms": 1,
   "bootAt": null,
   "gitSha": null,
-  "coldStreak": 1
+  "coldStreak": 3
  },
- "coldStreak": 1,
+ "coldStreak": 3,
  "alertLedger": {
   "sentinel-red": 1793312163072,
   "review-llm-unavailable": 1793271451151,
   "app-down": 1793312162734,
   "data-stale": 1793312163333
  },
- "wsDownStreak": 0,
+ "wsDownStreak": 1,
  "staleStreak": 0,
  "history": [
-  {
-   "id": "keepwarm",
-   "at": 1793303760935,
-   "status": "error",
-   "durationMs": 2,
-   "detail": "HEARTBEAT COLD app:3000 0ms streak=1"
-  },
-  {
-   "id": "sweep",
-   "at": 1793303760935,
-   "status": "ok",
-   "durationMs": 685,
-   "detail": "RED: app :3000 down"
-  },
-  {
-   "id": "backup",
-   "at": 1793303760955,
-   "status": "ok",
-   "durationMs": 35755,
-   "detail": "snapshot ok in 36s: SNAPSHOT OK — nexus-snapshot-20261029-195600.zip (44M) · 12 snapshots retained (max 12) · wal:VACUUM-COPY-CONSISTENT+CHECKPOINTED · cal:OK · enc:ENCRYPTED · off-site: DISABLED(oper"
-  },
   {
    "id": "keepwarm",
    "at": 1793304060935,
@@ -524,6 +523,27 @@
    "at": 1793312760935,
    "status": "ok",
    "durationMs": 21,
+   "detail": "RED: app :3000 down"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1793313060935,
+   "status": "error",
+   "durationMs": 3,
+   "detail": "HEARTBEAT COLD app:3000 1ms streak=2"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1793313360935,
+   "status": "error",
+   "durationMs": 3,
+   "detail": "HEARTBEAT COLD app:3000 1ms streak=3"
+  },
+  {
+   "id": "sweep",
+   "at": 1793313360935,
+   "status": "ok",
+   "durationMs": 14,
    "detail": "RED: app :3000 down"
   }
  ],

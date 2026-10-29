@@ -15,11 +15,12 @@ import { fmtPrice } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 const SOURCE_META: Record<PriceSource, { label: string; cls: string; hint: string }> = {
-  "BINANCE-WS": { label: "WS PUSH", cls: "text-neon", hint: "Binance websocket push — sub-second prices" },
-  "REST-POLL": { label: "WS·REST 2.5S", cls: "text-amber-neon", hint: "Ws frames blocked on this host — REST polling fallback (2.5s), still pushed over websocket" },
-  OFFLINE: { label: "WS OFFLINE", cls: "text-danger-neon", hint: "Price channel unreachable — pulse feed (5s) remains authoritative" },
-  CONNECTING: { label: "WS…", cls: "text-ink-3", hint: "Connecting to the price channel" },
+  "WS PUSH": { label: "WS PUSH", cls: "text-neon", hint: "Binance futures WS push — sub-second prices" },
+  "WS·SPOT": { label: "WS·SPOT", cls: "text-neon", hint: "Binance spot-arr ring fuel — live WS frames from the spot plane (v14.0)" },
+  "WS·REST 2.5S": { label: "WS·REST 2.5S", cls: "text-amber-neon", hint: "WS frames blocked on this host — REST polling fallback (2.5s), still pushed over websocket" },
+  "WS OFFLINE": { label: "WS OFFLINE", cls: "text-danger-neon", hint: "Price channel unreachable — pulse feed (5s) remains authoritative" },
 };
+const CONNECTING_META = { label: "WS…", cls: "text-ink-3", hint: "Connecting to the price channel" };
 
 // module-level previous-price memory for flash direction (not a ref — pure
 // monotonic cache, render stays side-effect free w.r.t. React state)
@@ -38,7 +39,8 @@ export function PriceTape() {
   // SSR and hydration, so the first (hydrating) render must be deterministic —
   // always paint the CONNECTING/empty shell, then switch to live state.
   const mounted = useMounted();
-  const liveSource: PriceSource = mounted ? source : "CONNECTING";
+  const liveSource: PriceSource | null = mounted ? source : null;
+  const meta = liveSource ? SOURCE_META[liveSource] : CONNECTING_META;
   const liveConnected = mounted ? connected : false;
   const liveRows = mounted ? prices : {};
 
@@ -89,11 +91,11 @@ export function PriceTape() {
         {/* channel badge */}
         <div
           className="flex shrink-0 items-center gap-1.5 border-r border-white/8 px-3 py-2"
-          title={SOURCE_META[liveSource].hint}
+          title={meta.hint}
         >
           <Activity className={cn("size-3.5", liveConnected ? "text-neon anim-pulse-dot" : "text-ink-3")} aria-hidden />
-          <span className={cn("font-terminal text-[9px] font-bold uppercase tracking-[0.16em]", SOURCE_META[liveSource].cls)}>
-            {SOURCE_META[liveSource].label}
+          <span className={cn("font-terminal text-[9px] font-bold uppercase tracking-[0.16em]", meta.cls)}>
+            {meta.label}
           </span>
         </div>
 
