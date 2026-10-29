@@ -54,7 +54,6 @@ export function PriceTape() {
         const dir = prevPrice == null || prevPrice === e.price ? 0 : e.price > prevPrice ? 1 : -1;
         return { sym, price: e.price, change24h: e.change24h, dir };
       });
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- re-sorted per tick render (map mutates in place)
   }, [mounted, liveMap, source]);
 
   // one glide duration for the whole track — long enough to read, short
