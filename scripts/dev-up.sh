@@ -11,6 +11,11 @@
 # v8.1 (OP-P0-WD-0909): two-layer watchdog contract.
 #   Layer 1 (fast heal, 15s): mini-services/p0-watchdog :3020 — owns auto-restart
 #     of app+liq+ws, Telegram escalation, state API. Honors the shared pause file.
+# v14.0 (STAB trace 1a185042c872b4f9): SERVE-MODE switch — .data/serve-mode
+#   "prod" spawns the standalone production server (OOM root-cure) with an
+#   identical probe/watchdog contract; AUTO-FRESH rebuilds the artifact
+#   (scripts/prod-build.sh) instead of wiping .next. Missing artifact →
+#   fail-safe dev fallback. See the SERVE-MODE block below.
 #   Layer 2 (slow fallback, 60s): scripts/watchdog.sh v3.0 — app heal ONLY when
 #     layer-1 is paused/dead (shared pause + 480s cooldown + breaker), RSS/mem
 #     alerts, and revives layer-1 itself if it dies (supervisor-of-supervisor).
@@ -71,7 +76,24 @@ if [ "${1:-}" != "--stop" ]; then
   fi
 fi
 
-# probe-gated restart of the Next.js dev server
+# ── v14.0 STAB (trace 1a185042c872b4f9) — SERVE-MODE: dev | prod ───────────
+# Operator commission: «باقی‌ماندهٔ ساختاری (build محصولی برای ریشه‌کنی کامل
+# OOM-cycle) کامل و مهندسی انجام بده». When .data/serve-mode contains "prod",
+# this script spawns the STANDALONE production server (bun
+# .next/standalone/server.js) instead of `next dev` — the structural OOM
+# root-cure (dev-mode Turbopack graph + hydration spikes were the kill loop;
+# prod standalone carries no compile graph). EVERYTHING else (single-flight
+# lock, probe gate, fail-streak, watchdog arming, foreground contract) stays
+# identical — every caller (boot chain, layer-1/2 watchdogs, app-supervisor
+# loop) transparently maintains the production server through the same gate.
+# Escalation in prod mode: the AUTO-FRESH path runs scripts/prod-build.sh
+# (server-dead rebuild) instead of wiping .next — a dev cache wipe must never
+# destroy the production artifact.
+SERVE_MODE="dev"
+[ -f /home/z/my-project/.data/serve-mode ] && SERVE_MODE=$(tr -d '[:space:]' < /home/z/my-project/.data/serve-mode)
+[ "$SERVE_MODE" != "prod" ] && SERVE_MODE="dev"
+
+# probe-gated restart of the Next.js server (dev or prod standalone)
 code=$(curl -s -m 5 -o /dev/null -w '%{http_code}' http://localhost:3000/api/pulse 2>/dev/null || true)
 if [ "$code" = "200" ]; then
   echo 0 > "$STREAK_FILE" 2>/dev/null   # healthy: reset the escalation counter
@@ -80,7 +102,7 @@ else
   echo "$STREAK" > "$STREAK_FILE" 2>/dev/null
   if [ "$STREAK" -ge 3 ] && [ "$FRESH" = "0" ]; then
     FRESH=1
-    echo "[dev-up] fail-streak=$STREAK → AUTO-FRESH (full .next wipe) $(date -u '+%H:%M:%SZ')"
+    echo "[dev-up] fail-streak=$STREAK → AUTO-FRESH $(date -u '+%H:%M:%SZ') (mode=$SERVE_MODE)"
   fi
   # pause the p0-watchdogs for 120s (2× measured restart time) — never race an
   # operator-driven restart (honored by BOTH layer-1 :3020 and layer-2 v3.0)
@@ -88,14 +110,16 @@ else
   # stale instance cleanup — GRACEFUL then WAIT for real exit (v8.4)
   pkill -f "next dev" 2>/dev/null
   pkill -f "next-server" 2>/dev/null
+  pkill -f "standalone/server.js" 2>/dev/null
   for i in $(seq 1 15); do
-    pgrep -f "next-server" >/dev/null 2>&1 || pgrep -f "next dev" >/dev/null 2>&1 || break
+    pgrep -f "next-server" >/dev/null 2>&1 || pgrep -f "next dev" >/dev/null 2>&1 || pgrep -f "standalone/server.js" >/dev/null 2>&1 || break
     sleep 1
   done
-  if pgrep -f "next-server" >/dev/null 2>&1 || pgrep -f "next dev" >/dev/null 2>&1; then
+  if pgrep -f "next-server" >/dev/null 2>&1 || pgrep -f "next dev" >/dev/null 2>&1 || pgrep -f "standalone/server.js" >/dev/null 2>&1; then
     echo "[dev-up] graceful stop timed out — pkill -9 fallback"
     pkill -9 -f "next-server" 2>/dev/null
     pkill -9 -f "next dev" 2>/dev/null
+    pkill -9 -f "standalone/server.js" 2>/dev/null
     sleep 2
   fi
   # wait for port 3000 to close — two next-server writers on one .next is the
@@ -105,7 +129,12 @@ else
     sleep 1
   done
   cd /home/z/my-project || exit 1
-  if [ "$FRESH" = "1" ]; then
+  if [ "$FRESH" = "1" ] && [ "$SERVE_MODE" = "prod" ]; then
+    # v14.0 prod escalation — server verifiably dead → REBUILD the artifact
+    # (never wipe .next in prod mode: that would destroy the production build)
+    echo "[dev-up] prod AUTO-FRESH → rebuild $(date -u '+%H:%M:%SZ')"
+    bash /home/z/my-project/scripts/prod-build.sh >> dev.log 2>&1 || echo "[dev-up] prod-build failed — next spawn will retry"
+  elif [ "$FRESH" = "1" ]; then
     # server verifiably dead → full cache wipe is now SAFE (the ONLY safe moment)
     BEFORE_MB=$(du -sm .next 2>/dev/null | cut -f1 || echo 0)
     rm -rf /home/z/my-project/.next 2>/dev/null
@@ -129,7 +158,7 @@ else
   # explicit --fresh intentionally skip this: those mean the LOCAL cache was
   # corrupt, and a stamp-guarded restore of the healthy PolarFS copy is
   # deliberately deferred to the next plain restart after a green streak.
-  if [ "$FRESH" != "1" ] && [ ! -d /home/z/my-project/.next/dev ]; then
+  if [ "$SERVE_MODE" = "dev" ] && [ "$FRESH" != "1" ] && [ ! -d /home/z/my-project/.next/dev ]; then
     bash /home/z/my-project/scripts/next-cache.sh restore >> /home/z/my-project/logs/next-cache.log 2>&1 || true
   fi
   # v9.0 EQ-97 MEMORY FLOOR before spawn — the two Oct-11 OOMs were cold
@@ -153,7 +182,19 @@ else
   # + turbopack native 384MiB (next.config.ts) → target plateau 1.4-1.7GB,
   # spike ≤1.8GB, avail stays >800MB → kernel never reaches the trigger.
   # 109 total OOM kills in 11 days on this box — this is the line in the sand.
-  setsid bash -c 'NODE_OPTIONS="--max-old-space-size=768" exec ./node_modules/.bin/next dev -p 3000 >> dev.log 2>&1' < /dev/null &
+  if [ "$SERVE_MODE" = "prod" ]; then
+    # v14.0 — production standalone server (no compile graph → no OOM kill loop).
+    # Failsafe: a missing artifact falls back to the dev server so the box can
+    # never be left dark by a bad build.
+    if [ -f /home/z/my-project/.next/standalone/server.js ]; then
+      setsid bash -c 'cd /home/z/my-project && NODE_ENV=production PORT=3000 HOSTNAME=0.0.0.0 exec bun .next/standalone/server.js >> dev.log 2>&1' < /dev/null &
+    else
+      echo "[dev-up] prod artifact MISSING — falling back to dev server $(date -u '+%H:%M:%SZ')"
+      setsid bash -c 'NODE_OPTIONS="--max-old-space-size=768" exec ./node_modules/.bin/next dev -p 3000 >> dev.log 2>&1' < /dev/null &
+    fi
+  else
+    setsid bash -c 'NODE_OPTIONS="--max-old-space-size=768" exec ./node_modules/.bin/next dev -p 3000 >> dev.log 2>&1' < /dev/null &
+  fi
   APP_PID=$!   # v8.5: captured for the --foreground supervisor contract (harmless in bg mode)
   for i in $(seq 1 30); do
     sleep 2
@@ -172,7 +213,7 @@ echo "app:$code"
 # after any restart HANGS. Background-warm the root once the port answers:
 # up to 4 tries x 20s apart, 90s timeout each, fully non-blocking for this
 # script. Page stays compiled in the dev server until the next restart.
-(
+if [ "$SERVE_MODE" = "dev" ]; then (
   # v12.11 boot-spike cut (OOM loop 2026-10-23, 4 kernel kills): the `/` cold
   # compile lands 150-400MB on top of the engine's first cycles. Entering it
   # with RSS already near the kernel line (~2.2-2.4GB) loses the OOM race —
@@ -195,8 +236,9 @@ echo "app:$code"
     fi
   done
 ) >> dev.log 2>&1 &
+fi
 
-# ── v9.0 (EQ-97) SEQUENTIAL BOOT-WARMER — cold-start OOM immunization ──────
+# ── v9.0 (EQ-97) SEQUENTIAL BOOT-WARMER — cold-start OOM immunization (dev only) ──────
 # Incident replay (2026-10-11, twice): cold turbopack compile of burst routes
 # + a reviewer chrome session → next-server RSS 2.13GB → OOM kill → heal
 # treadmill. Fix: on a COLD start (fresh wipe / missing .next / fail-streak
@@ -207,6 +249,7 @@ COLD=0
 [ "$FRESH" = "1" ] && COLD=1
 [ -d /home/z/my-project/.next ] || COLD=1
 [ "${STREAK:-0}" -ge 2 ] && COLD=1
+[ "$SERVE_MODE" = "dev" ] || COLD=0
 if [ "$code" = "200" ] && [ "$COLD" = "1" ]; then
 (
   mem() { awk '/MemAvailable/{printf "%d", $2/1024}' /proc/meminfo 2>/dev/null || echo 0; }
@@ -331,7 +374,7 @@ if [ "$FOREGROUND" = "1" ]; then
     # Healthy-at-attach: probe was 200, no spawn happened. Hold by polling so
     # the supervisor does NOT busy-loop re-running this script every second.
     echo "[dev-up] foreground: app already healthy — attach-hold (poll)"
-    while pgrep -f "next dev" >/dev/null 2>&1 || pgrep -f "next-server" >/dev/null 2>&1; do
+    while pgrep -f "next dev" >/dev/null 2>&1 || pgrep -f "next-server" >/dev/null 2>&1 || pgrep -f "standalone/server.js" >/dev/null 2>&1; do
       sleep 30
     done
     echo "[dev-up] app gone — releasing to supervisor respawn"

@@ -31,7 +31,8 @@
 
 import { db } from "@/lib/db";
 import { getGateSettings, gateClamps, type GateSettings } from "@/lib/gate-settings";
-import { getFeedStatus, getFeedBanUntil } from "@/lib/market-feed";
+import { getFeedStatus } from "@/lib/market-feed";
+import { fapiBanRemainingMs } from "@/lib/fapi-gate"; // v14.0 — the real ban source (getFeedBanUntil never existed)
 import { getTriggerBusSummary } from "@/lib/triggers";
 import { rawCalStatus } from "@/lib/raw-cal";
 import { sendDirect } from "@/lib/notify";
@@ -205,7 +206,8 @@ export async function gatherOpsKpis(): Promise<OpsKpis> {
 
   const srState = lastNight ? (JSON.parse(lastNight.value) as { lastRunAt?: string | null }) : null;
   const paceStall = pace?.stalls?.issueStallMin ?? null;
-  const banUntil = getFeedBanUntil();
+  const banRemainMs = fapiBanRemainingMs();
+  const banUntil = banRemainMs > 0 ? Date.now() + banRemainMs : 0;
 
   return {
     wrOverall: stats?.winRate ?? null,

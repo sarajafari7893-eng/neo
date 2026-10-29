@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getShadowModulesSnapshot, runModuleNow, setMode, MODULES, type ModuleId, type ModuleMode } from "@/lib/shadow-modules";
+import { getShadowModulesSnapshot, runModuleNow, putMode, MODULES, type ModuleId, type ModuleMode } from "@/lib/shadow-modules";
 
 export const dynamic = "force-dynamic";
 
@@ -38,7 +38,7 @@ export async function POST(req: Request) {
       if (mode !== "SHADOW" && mode !== "ENGAGED") {
         return NextResponse.json({ ok: false, error: "mode must be SHADOW or ENGAGED" }, { status: 400 });
       }
-      await setMode(id, mode);
+      await putMode(mode as ModuleMode);
       const snapshot = await getShadowModulesSnapshot();
       return NextResponse.json({ ok: true, snapshot });
     }
