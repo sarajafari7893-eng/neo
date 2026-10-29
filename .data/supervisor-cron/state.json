@@ -2,15 +2,15 @@
  "ver": "supervisor-cron 1.6.0",
  "pid": 1869,
  "startedAt": "2026-10-28T22:55:30.935Z",
- "updatedAt": "2026-10-29T13:46:01.843Z",
+ "updatedAt": "2026-10-29T13:56:26.983Z",
  "jobs": {
   "sweep": {
-   "lastRunAt": 1793281560935,
-   "nextRunAt": 1793282160935,
+   "lastRunAt": 1793282160936,
+   "nextRunAt": 1793282760935,
    "lastStatus": "ok",
-   "lastDurationMs": 740,
+   "lastDurationMs": 563,
    "lastError": null,
-   "runs": 158,
+   "runs": 159,
    "failures": 0
   },
   "progress": {
@@ -41,12 +41,12 @@
    "failures": 0
   },
   "backup": {
-   "lastRunAt": 1793271360948,
+   "lastRunAt": 1793282160949,
    "nextRunAt": 1793282160948,
    "lastStatus": "ok",
-   "lastDurationMs": 25590,
+   "lastDurationMs": 26034,
    "lastError": null,
-   "runs": 8,
+   "runs": 9,
    "failures": 0
   },
   "digest": {
@@ -59,24 +59,24 @@
    "failures": 0
   },
   "keepwarm": {
-   "lastRunAt": 1793281560935,
-   "nextRunAt": 1793281560935,
+   "lastRunAt": 1793282160936,
+   "nextRunAt": 1793282460935,
    "lastStatus": "error",
-   "lastDurationMs": 908,
-   "lastError": "HEARTBEAT COLD app:3000 906ms streak=2",
-   "runs": 236,
-   "failures": 33
+   "lastDurationMs": 734,
+   "lastError": "HEARTBEAT COLD app:3000 726ms streak=1",
+   "runs": 238,
+   "failures": 34
   }
  },
  "lastSweep": {
-  "at": "2026-10-29T13:46:01.674Z",
+  "at": "2026-10-29T13:56:01.499Z",
   "verdict": "AMBER",
   "reason": "sentinel :3030 verdict AMBER · toobit-bridge doctrine: 3 violation(s) — last=MIRROR-LAG: card=SL but intent still OPEN 3455s — pollCards transition should have fired",
   "services": {
    "app": {
     "up": true,
     "status": 200,
-    "ms": 713
+    "ms": 535
    },
    "liq": {
     "up": true,
@@ -111,7 +111,7 @@
    "bridge": {
     "up": true,
     "status": 200,
-    "ms": 2
+    "ms": 1
    },
    "tbt": {
     "up": true,
@@ -154,14 +154,14 @@
   "newN": 2
  },
  "lastKeepwarm": {
-  "at": "2026-10-29T13:46:01.842Z",
+  "at": "2026-10-29T13:56:01.669Z",
   "ok": false,
-  "ms": 906,
+  "ms": 726,
   "bootAt": null,
   "gitSha": null,
-  "coldStreak": 2
+  "coldStreak": 1
  },
- "coldStreak": 2,
+ "coldStreak": 1,
  "alertLedger": {
   "sentinel-red": 1793279161394,
   "review-llm-unavailable": 1793271451151,
@@ -170,34 +170,6 @@
  "wsDownStreak": 0,
  "staleStreak": 0,
  "history": [
-  {
-   "id": "keepwarm",
-   "at": 1793271960935,
-   "status": "ok",
-   "durationMs": 271,
-   "detail": "HEARTBEAT OK 271ms boot=11:05:56Z sha=35e59db"
-  },
-  {
-   "id": "keepwarm",
-   "at": 1793272260935,
-   "status": "ok",
-   "durationMs": 53,
-   "detail": "HEARTBEAT OK 53ms boot=11:10:38Z sha=cdc2c47"
-  },
-  {
-   "id": "keepwarm",
-   "at": 1793272560938,
-   "status": "ok",
-   "durationMs": 53,
-   "detail": "HEARTBEAT OK 53ms boot=11:15:36Z sha=cdc2c47"
-  },
-  {
-   "id": "sweep",
-   "at": 1793272560938,
-   "status": "ok",
-   "durationMs": 66,
-   "detail": "AMBER: sentinel :3030 verdict AMBER · toobit-bridge doctrine: 3 violation(s) — last=MIRROR-LAG: card=SL but intent still OPEN 3"
-  },
   {
    "id": "keepwarm",
    "at": 1793272860936,
@@ -519,6 +491,34 @@
    "status": "error",
    "durationMs": 908,
    "detail": "HEARTBEAT COLD app:3000 906ms streak=2"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1793281860935,
+   "status": "ok",
+   "durationMs": 29,
+   "detail": "HEARTBEAT OK 29ms boot=13:50:43Z sha=1dfdc2c"
+  },
+  {
+   "id": "sweep",
+   "at": 1793282160936,
+   "status": "ok",
+   "durationMs": 563,
+   "detail": "AMBER: sentinel :3030 verdict AMBER · toobit-bridge doctrine: 3 violation(s) — last=MIRROR-LAG: card=SL but intent still OPEN 3"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1793282160936,
+   "status": "error",
+   "durationMs": 734,
+   "detail": "HEARTBEAT COLD app:3000 726ms streak=1"
+  },
+  {
+   "id": "backup",
+   "at": 1793282160949,
+   "status": "ok",
+   "durationMs": 26034,
+   "detail": "snapshot ok in 26s: SNAPSHOT OK — nexus-snapshot-20261029-135600.zip (44M) · 12 snapshots retained (max 12) · wal:VACUUM-COPY-CONSISTENT+CHECKPOINTED · cal:OK · enc:ENCRYPTED · off-site: DISABLED(oper"
   }
  ],
  "watchRuns": [
