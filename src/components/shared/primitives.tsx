@@ -74,14 +74,18 @@ export function NeonBadge({
   tone = "neon",
   className,
   glow = false,
+  title,
 }: {
   children: ReactNode;
   tone?: keyof typeof badgeTones;
   className?: string;
   glow?: boolean;
+  /** v14.0 — optional native tooltip (audit trails ride the badge). */
+  title?: string;
 }) {
   return (
     <span
+      title={title}
       className={cn(
         "inline-flex items-center gap-1 rounded-md border px-2 py-0.5 font-terminal text-[10px] font-semibold uppercase tracking-[0.14em] whitespace-nowrap",
         badgeTones[tone],
