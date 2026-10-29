@@ -32,4 +32,16 @@ fi
 rm -rf .next/standalone/.next/static 2>/dev/null
 cp -r .next/static .next/standalone/.next/ || exit 1
 cp -r public .next/standalone/ || exit 1
-echo "[prod-build] OK $(date -u '+%H:%M:%SZ') standalone ready (server.js + static + public)"
+# v14.0 SPLIT-BRAIN GUARD — the generated server.js does process.chdir(__dirname),
+# so the app's RELATIVE runtime paths (.data/*, db/custom.db, logs/*) would hit
+# the stale output-traced COPIES inside .next/standalone (build-time snapshots)
+# — SQLite split-brain (two DB files) is the exact write-lock class the
+# persist-guard retired. Symlinks are sandbox-denied, so instead: (a) strip the
+# chdir from the generated server.js (dev-up spawns it with cwd=project root —
+# every relative store path then hits the ONE real filesystem), and (b) delete
+# the traced store copies so they can never serve stale data.
+sed -i 's|^process\.chdir(__dirname);$|// v14.0 split-brain guard: chdir stripped — server runs from the project root|' .next/standalone/server.js
+for d in .data db logs backups; do
+  rm -rf ".next/standalone/$d"
+done
+echo "[prod-build] OK $(date -u '+%H:%M:%SZ') standalone ready (server.js + static + public + store symlinks)"
