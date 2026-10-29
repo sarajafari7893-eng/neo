@@ -34,28 +34,28 @@ interface TapeRow {
 }
 
 export function PriceTape() {
-  const { prices, source, connected } = usePriceStream();
+  // v14.0 build-sync: the hook exposes the in-place `rows` Map (components
+  // read it during render; the tick state re-renders on every snapshot).
+  const { rows: liveMap, source } = usePriceStream();
   // Hydration safety: the module-singleton socket can receive frames BETWEEN
   // SSR and hydration, so the first (hydrating) render must be deterministic —
   // always paint the CONNECTING/empty shell, then switch to live state.
   const mounted = useMounted();
   const liveSource: PriceSource | null = mounted ? source : null;
   const meta = liveSource ? SOURCE_META[liveSource] : CONNECTING_META;
-  const liveConnected = mounted ? connected : false;
-  const liveRows = mounted ? prices : {};
 
-  const rows = useMemo<TapeRow[]>(
-    () =>
-      Object.entries(liveRows)
-        .sort(([a], [b]) => a.localeCompare(b))
-        .map(([sym, e]) => {
-          const prevPrice = prevPrices.get(sym);
-          prevPrices.set(sym, e.price);
-          const dir = prevPrice == null || prevPrice === e.price ? 0 : e.price > prevPrice ? 1 : -1;
-          return { sym, price: e.price, change24h: e.change24h, dir };
-        }),
-    [liveRows]
-  );
+  const rows = useMemo<TapeRow[]>(() => {
+    if (!mounted) return [];
+    return [...liveMap.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([sym, e]) => {
+        const prevPrice = prevPrices.get(sym);
+        prevPrices.set(sym, e.price);
+        const dir = prevPrice == null || prevPrice === e.price ? 0 : e.price > prevPrice ? 1 : -1;
+        return { sym, price: e.price, change24h: e.change24h, dir };
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- re-sorted per tick render (map mutates in place)
+  }, [mounted, liveMap, source]);
 
   // one glide duration for the whole track — long enough to read, short
   // enough to feel alive (the duplicated half makes the loop seamless)
@@ -93,7 +93,7 @@ export function PriceTape() {
           className="flex shrink-0 items-center gap-1.5 border-r border-white/8 px-3 py-2"
           title={meta.hint}
         >
-          <Activity className={cn("size-3.5", liveConnected ? "text-neon anim-pulse-dot" : "text-ink-3")} aria-hidden />
+          <Activity className={cn("size-3.5", liveSource && liveSource !== "WS OFFLINE" ? "text-neon anim-pulse-dot" : "text-ink-3")} aria-hidden />
           <span className={cn("font-terminal text-[9px] font-bold uppercase tracking-[0.16em]", meta.cls)}>
             {meta.label}
           </span>
@@ -104,7 +104,7 @@ export function PriceTape() {
           {rows.length === 0 ? (
             <div className="px-3 py-1.5">
               <span className="font-terminal text-[10px] tracking-[0.14em] text-ink-3">
-                {liveConnected ? "SYNCING PRICE CHANNEL…" : "PRICE CHANNEL CONNECTING…"}
+                {liveSource ? "SYNCING PRICE CHANNEL…" : "PRICE CHANNEL CONNECTING…"}
               </span>
             </div>
           ) : (
