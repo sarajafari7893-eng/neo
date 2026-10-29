@@ -32702,3 +32702,39 @@ Stage Summary:
 - اتصال بایننس فیوچرز: از «فقط REST تک‌هاست با 418 متناوب + WS سرکوب‌شده» به «حلقهٔ WS زندهٔ ۴۴ سیمبل با push ثانیه‌ای best bid/ask + overlay perp-native در موتور» — پایداری اتصال فیوچرز دیگر به نوسان استخر IP گره نیست
 - ناپایداری داشبورد: سه لایه دفاعی بسته شد — supervisor loop (≤15s) → single-flight dev-up → p0-watchdog — و حلقهٔ فیوچرز/اسپات مستقل از حیات اپ، بنر ناپایداری را حتی در چرخهٔ OOM صادقانه نگه می‌دارد
 - باقی‌ماندهٔ ساختاری: build محصولی برای ریشه‌کنی کامل OOM-cycle همچنان روی میز (قید محیطی؛ نیازمند تصمیم اپراتور)
+
+---
+
+## 2026-10-29 — v14.0 BINANCE-ONLY + پل اجرا v1.5.0 + build محصولی (traces 1a185042c872b4f9 + 1a1899d2237473d9)
+
+**فرمان اپراتور:** «ردپای OKX/Bybit در کجا وجود دارد و با بایننس جایگزین شود. LATENCY پایدار شود. باقی‌ماندهٔ ساختاری (build محصولی برای ریشه‌کنی کامل OOM-cycle) کامل و مهندسی انجام بده» + «ماژول EXEC BRIDGE را با بالانس ۳$ ثابت فعال کن، ژورنال‌نویسی تمام وقایع برای گزارش و نمودار دکترین مهندسی و کامل انجام شود».
+
+### ① ممیزی و جایگزینی ردپاها — v14.0 BINANCE-ONLY
+- ممیزی تمام‌عیار (پروب‌پژوه Explore): ردپاها در ۲۵+ فایل شناسایی شد — اجماع قیمت، نردبان flow، taxonomy، اوراکل DQ، WS لین‌های price-ws/liq-service، برچسب‌های UI، اسکریپت‌های تشخیصی.
+- **multi-exchange.ts v14.0**: اجماع ۵-صحنهٔ بین‌صرافی (OKX/Bybit/Hyperliquid/GATE) → **اجماع ۴ پلن بایننس**: BINANCE (کامپوزیت rung-0 اسپوت-WS → fapi گیت‌شده → SPOT-MIRROR) · BINANCE-SPOT (نردبان vision-primary) · **BINANCE-FUTWS (حلقهٔ bookTicker فیوچرز — صفر وزن REST)** · BINANCE-GCP (مسیر مستقل gcp-pinned). دفاع phantom-print (robustMedian) روی دادهٔ خالص بایننس حفظ شد.
+- **flow-bridge v14.0**: تمام رانگ‌های بیرونی حذف؛ نردبان‌ها fapi→SPOT-MIRROR (دو-رانگی صادقانه)؛ `futTickerMap/Row` جدید (ticker/24hr + premiumIndex گیت‌شده، fallback اسپوت)، `spot5mMove/fapi5mMove` برای اجماع دومرحله‌ای (بجای second-venue بیرونی).
+- **bybit-feed.ts حذف** → **binance-mirror.ts** (mirrorKlines با taker-buy واقعی field-9، mirrorTickers، funding/OI گیت‌شده، mirrorHealth).
+- **futures-taxonomy**: crossExchange بیرونی → **crossCheck بایننس** (fundingSettled از تاریخچه + oiChk از openInterest)؛ ستون‌های Prisma `fundingByb/oiByb/fundingOkx/oiOkx` → `fundingSettled/oiChk` (db push ✓)؛ قانون خانوادهٔ E → CROSS_FUNDING_WIDE (predicted−settled).
+- **dq-oracles v2.0**: اوراکل P1 → **حلقهٔ WS فیوچرز بایننس** (مستقل از مرجع REST از نظر transport و process)؛ رتیون صادقانه: RED فقط برای واگرایی اوراکل، AMBER برای گیت‌شدن مرجع.
+- **price-ws**: لین WS بیرونی حذف؛ نردبان سوخت: futures WS > bookTicker ring > spot-arr ring > REST (فقط بایننس). **liq-service v3.0**: تک-صحنه بایننس با **حلقهٔ per-symbol forceOrder (۵۴ سیمبل)** — پاسخ مهندسی به سرکوب استریم market-wide از این egress (الگوی اثبات‌شدهٔ ring).
+- UI/labels: Footer «BINANCE MULTI-PLANE»، FuturesRadar خانوادهٔ E «Cross-plane»، pulse exchanges → ۴ پلن، PriceSource «WS·SPOT»، FlowMatrix «SPOT-MIRROR».
+- FLAT-10 (engine.ts) **بایت‌به‌بایت دست‌نخورده** — ارجاعات متنی آن فقط کامنت است.
+
+### ② پل اجرا v1.5.0 — فعال‌سازی با بالانس ثابت ۳$ + ژورنال کامل
+- فعال‌سازی یک‌بارمصرف (cfgRev=3): `execEnabled:true`، مارجین ثابت ۳$، لنگر حساب paper `paperBalanceUsdt=3` — LIVE همچنان دو-گیت (تأیید صریح + موجودی مثبت).
+- **حسابداری PnL واقعی paper** (جدید): هر bank/close روی قیمت taker زندهٔ کتاب واقعی قیمت‌گذاری و در intent + حساب لنگر-ثابت (equity = 3$ + Σ realized، منحنی ۴۰۰ نقطه‌ای، برد/باخت) ثبت می‌شود — قبلاً fill های paper هیچ حسابداری PnL نداشتند.
+- **ژورنال تمام وقایع**: شمارندهٔ per-kind از بوت (evCount) + `GET /journal` (خلاصهٔ حساب، منحنی equity، شمارنده‌ها، دم audit.jsonl با tail-read مقاوم، برد PnL intents بسته‌شده، درصدی‌های تأخیر) + پروکسی `/api/*/journal` + کارت داشبورد (نمودار equity recharts، فید رویدادها، شمارنده‌ها).
+- راستی‌آزمایی زنده: test-cycle → open روی کتاب واقعی (fill 78941) → close → EXEC-PNL-PAPER +0.0003$ → PAPER-EQUITY → منحنی ✓؛ کارت در تب TERMINAL رندر: BALANCE 3$، equity 3.0003$، 1W/0L 100%، رویدادهای زنده ✓.
+
+### ③ build محصولی — ریشه‌کنی ساختاری OOM
+- زنجیرهٔ ابزار: `scripts/prod-build.sh` (build فقط با سرور مرده + هدوم 1536MB) + **dev-up serve-mode** (`.data/serve-mode=prod` → spawn standalone با همان قرارداد probe/watchdog؛ AUTO-FRESH در prod → rebuild نه wipe؛ fallback ایمن به dev اگر آرتیفکت غایب).
+- بدهی تایپ هرگز-کامپایل‌نشده پاک شد (۳۶ خطای tsc — DTO های drift شامل GateName/Bankroll/ProvenGate/FlatScoreboard/Governors، dead-route fixes، retire aftermath.ts بی‌مصرف، گیت‌های governor در GateSettings)؛ tsconfig: scripts/tests خارج.
+- **گارد split-brain**: server.js استندالون `process.chdir(__dirname)` داشت → مسیرهای نسبی به کپی‌های traced می‌خوردند (خطر دو-نوشتهٔ SQLite) → chdir strip در build + حذف کپی‌ها (symlink در sandbox ممنوع بود).
+- **نشت fd قفل single-flight**: fd-8 قفل به فرزندان armed به ارث می‌رفت و قفل را برای همیشه پین می‌کرد → `exec 8>&-` پس از گیت spawn.
+- **سنجش نهایی**: RSS سرور **۲۰۶۵MB → ۲۷۷-۳۴۶MB** (٪۸۵-)؛ حافظهٔ آزاد ۵۴۷MB → ~۲٫۲-۳٫۱GB؛ pulse 135-550ms (dev: 668-1095ms)؛ صفحهٔ اصلی **۴٫۸ms** (dev cold: 11s)؛signals/flows 12-14ms؛ **۴ پلن اجماع 4/4 LIVE**؛ Sentinel GREEN (6/6 سرویس)؛ بدون FEED DISRUPTED؛ بدون ردپای بیرونی در DOM.
+
+### ④ ثبات محیطی — سه بازیابی پلتفرم زنده پشت سر هم
+- سه recycle/restore سندباکس در طول اجرا رخ داد (پرش‌های ~22h/چنددقیقه‌ای)؛ workspace هر بار به snapshot بازمی‌گشت. پادزهر مهندسی: **push فوری پس از هر دسته‌ویرایش** با مکانیزم extraheader توکن (الگوی armor) — همهٔ کارها از origin/main بازیابی و تا commit `85857446` پوش شد؛ هیچ کاری از دست نرفت.
+
+### وضعیت نهایی
+داشبورد روی **سرور محصولی** با ۴ پلن بایننس زنده، پل اجرای فعال با ۳$ ثابت + ژورنال+نمودار، Sentinel GREEN، latency پایدار — همه روی commit `85857446`+ پوش‌شده. lint = 17 خطای پایه (صفر جدید).
