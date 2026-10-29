@@ -2,15 +2,15 @@
  "ver": "supervisor-cron 1.6.0",
  "pid": 8489,
  "startedAt": "2026-10-29T23:18:14.774Z",
- "updatedAt": "2026-10-29T23:41:00.964Z",
+ "updatedAt": "2026-10-29T23:46:00.978Z",
  "jobs": {
   "sweep": {
-   "lastRunAt": 1793316960936,
-   "nextRunAt": 1793317560935,
+   "lastRunAt": 1793317560935,
+   "nextRunAt": 1793318160935,
    "lastStatus": "ok",
-   "lastDurationMs": 34,
+   "lastDurationMs": 42,
    "lastError": null,
-   "runs": 214,
+   "runs": 215,
    "failures": 0
   },
   "progress": {
@@ -59,24 +59,24 @@
    "failures": 0
   },
   "keepwarm": {
-   "lastRunAt": 1793317260935,
-   "nextRunAt": 1793317260935,
+   "lastRunAt": 1793317560936,
+   "nextRunAt": 1793317560935,
    "lastStatus": "ok",
-   "lastDurationMs": 29,
+   "lastDurationMs": 42,
    "lastError": null,
-   "runs": 350,
+   "runs": 351,
    "failures": 102
   }
  },
  "lastSweep": {
-  "at": "2026-10-29T23:36:00.970Z",
+  "at": "2026-10-29T23:46:00.977Z",
   "verdict": "AMBER",
   "reason": "toobit-bridge doctrine: 1 violation(s) — last=NOTIONAL-DELTA: exp=25.00 act=8.20 (6719bps)",
   "services": {
    "app": {
     "up": true,
     "status": 200,
-    "ms": 21
+    "ms": 26
    },
    "liq": {
     "up": true,
@@ -96,12 +96,12 @@
    "watchdog": {
     "up": true,
     "status": 200,
-    "ms": 0
+    "ms": 1
    },
    "sentinel": {
     "up": true,
     "status": 200,
-    "ms": 1
+    "ms": 0
    },
    "ws": {
     "up": true,
@@ -111,12 +111,12 @@
    "bridge": {
     "up": true,
     "status": 200,
-    "ms": 0
+    "ms": 1
    },
    "tbt": {
     "up": true,
     "status": 200,
-    "ms": 1
+    "ms": 0
    }
   },
   "anomalies": [
@@ -149,11 +149,11 @@
   "newN": 3
  },
  "lastKeepwarm": {
-  "at": "2026-10-29T23:41:00.964Z",
+  "at": "2026-10-29T23:46:00.978Z",
   "ok": true,
-  "ms": 28,
+  "ms": 42,
   "bootAt": "2026-10-29T23:36:46.175Z",
-  "gitSha": "c7ad088",
+  "gitSha": "ef7c1b8",
   "coldStreak": 0
  },
  "coldStreak": 0,
@@ -166,20 +166,6 @@
  "wsDownStreak": 0,
  "staleStreak": 0,
  "history": [
-  {
-   "id": "keepwarm",
-   "at": 1793307360935,
-   "status": "error",
-   "durationMs": 2,
-   "detail": "HEARTBEAT COLD app:3000 0ms streak=2"
-  },
-  {
-   "id": "sweep",
-   "at": 1793307360935,
-   "status": "ok",
-   "durationMs": 15,
-   "detail": "RED: app :3000 down"
-  },
   {
    "id": "digest",
    "at": 1793307462941,
@@ -515,6 +501,20 @@
    "status": "ok",
    "durationMs": 29,
    "detail": "HEARTBEAT OK 28ms boot=23:36:46Z sha=c7ad088"
+  },
+  {
+   "id": "sweep",
+   "at": 1793317560935,
+   "status": "ok",
+   "durationMs": 42,
+   "detail": "AMBER: toobit-bridge doctrine: 1 violation(s) — last=NOTIONAL-DELTA: exp=25.00 act=8.20 (6719bps)"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1793317560936,
+   "status": "ok",
+   "durationMs": 42,
+   "detail": "HEARTBEAT OK 42ms boot=23:36:46Z sha=ef7c1b8"
   }
  ],
  "watchRuns": [
