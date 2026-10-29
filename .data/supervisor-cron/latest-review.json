@@ -1,20 +1,25 @@
 {
- "at": "2026-10-26T10:52:50.224Z",
- "tehran": "26/10/2026, 14:22:50",
+ "at": "2026-10-29T10:57:31.149Z",
+ "tehran": "29/10/2026, 14:27:31",
  "status": "llm_unavailable",
- "err": "Error: API request failed with status 401: {\"error\":\"missing X-Token header\"}",
+ "err": "Error: API request failed with status 429: {\"error\":\"Too many requests, please try again later\"}",
  "review": null,
  "telemetrySnapshot": {
-  "generatedAt": "2026-10-26T10:52:50.188Z",
+  "generatedAt": "2026-10-29T10:56:01.063Z",
   "liveExecution": "DISABLED (paper/research-only; SUPPRESSED engine path — honesty contract)",
   "strategyValidationStatus": "PROMOTE gate = FAIL (insufficient OOS n; re-validation protocol in STRATEGY-VALIDATION-PROTOCOL.md) — recommend only evidence-respecting actions",
   "sentinel": {
-   "verdict": "AMBER",
+   "verdict": "RED",
    "anomalies": [
     {
+     "sev": "crit",
+     "area": "app",
+     "msg": "service down / probe failed"
+    },
+    {
      "sev": "warn",
-     "area": "memory",
-     "msg": "MemAvailable 270MB < 350MB warn floor"
+     "area": "watchdog",
+     "msg": "layer-1 non-ok services: {\"app\":\"degraded\",\"liq\":\"ok\",\"ws\":\"ok\",\"bridge\":\"ok\",\"trade\":\"ok\",\"sentinel\":\"ok\",\"armor\":\"ok\",\"cron\":\"ok\",\"stable\":\"ok\",\"kw\":\"ok\",\"mem\":\"ok\",\"warm\":\"ok\",\"tbt\":\"ok\",\"cards\":\"ok\"}"
     },
     {
      "sev": "warn",
@@ -23,31 +28,29 @@
     }
    ],
    "mem": {
-    "availableMb": 270
+    "availableMb": 2276
    },
    "disk": {
-    "rootFreeGb": 5.04,
-    "tmpFreeGb": 5.04
+    "rootFreeGb": 5.35,
+    "tmpFreeGb": 5.35
    },
    "backup": {
     "ok": true,
     "dir": "/tmp/my-project/backups",
     "encCount": 12,
     "zipCount": 12,
-    "newestEncMs": 1793001187822.3574,
-    "newestAnyMs": 1793001187822.3574,
-    "encAgeMs": 10767981.642578125
+    "newestEncMs": 1793260582172.343,
+    "newestAnyMs": 1793260582172.343,
+    "encAgeMs": 10777655.656982422
    },
    "rawcal": {
-    "armed": true,
-    "issued": 682,
-    "issuedTotal": 2100,
-    "target": 3157,
+    "armed": null,
+    "error": "api unreachable",
     "heartbeatAgeH": 0,
-    "heartbeatAt": "2026-10-26T1051Z ARMED issued=682/2093 target=3157"
+    "heartbeatAt": "2026-10-29T1055Z ARMED issued=703/2114 target=3187"
    }
   },
-  "deepSweepQuick": "# NEXUS-SENTINEL DEEP SWEEP — 2026-10-26T10:52:49Z\n\n\n## 1 · LIVE VERDICT — AMBER\n- verdict: AMBER · scan: 2026-10-26T10:52:36.101Z\n  · app       UP  http=200 22ms\n  · ws        UP  http=400 2ms\n  · bridge    UP  http=200 2ms\n  · liq       UP  http=200 2ms\n  · trade     UP  http=200 2ms\n  · watchdog  UP  http=200 2ms\n- mem: 270 MB avail · disk root: 5.04 GB · /tmp: 5.04 GB\n  - [warn] memory: MemAvailable 270MB < 350MB warn floor\n  - [warn] dev.log: 228 error lines in recent log window\n",
+  "deepSweepQuick": "# NEXUS-SENTINEL DEEP SWEEP — 2026-10-29T10:56:00Z\n\n\n## 1 · LIVE VERDICT — RED\n- verdict: RED · scan: 2026-10-29T10:55:59.840Z\n  · app       DOWN http=None 4ms\n  · ws        UP  http=400 3ms\n  · bridge    UP  http=200 3ms\n  · liq       UP  http=200 3ms\n  · trade     UP  http=200 3ms\n  · watchdog  UP  http=200 3ms\n- mem: 2276 MB avail · disk root: 5.35 GB · /tmp: 5.35 GB\n  - [crit] app: service down / probe failed\n  - [warn] watchdog: layer-1 non-ok services: {\"app\":\"degraded\",\"liq\":\"ok\",\"ws\":\"ok\",\"bridge\":\"ok\",\"trade\":\"ok\",\"sentinel\":\"ok\",\"armor\":\"ok\",\"cron\":\"ok\",\"stable\":\"ok\",\"kw\":\"ok\",\"mem\":\"ok\",\"warm\":\"ok\",\"tbt\":\"ok\",\"cards\":\"ok\"}\n  - [warn] dev.log: 228 error lines in recent log window\n",
   "pulseStats": {},
   "rawcal": {
    "error": "unavailable"
@@ -58,7 +61,7 @@
     "n": 30,
     "target": 30,
     "fillPct": 100,
-    "winRatePct": 40,
+    "winRatePct": 33.3,
     "starved": false
    },
    {
@@ -66,7 +69,7 @@
     "n": 30,
     "target": 30,
     "fillPct": 100,
-    "winRatePct": 50,
+    "winRatePct": 60,
     "starved": false
    },
    {
@@ -74,7 +77,7 @@
     "n": 30,
     "target": 30,
     "fillPct": 100,
-    "winRatePct": 96.7,
+    "winRatePct": 60,
     "starved": false
    },
    {
@@ -87,21 +90,21 @@
    }
   ],
   "shadowVetoStats": {
-   "total": 8433,
-   "passSide": 4876,
-   "rejectSide": 3557,
-   "vetoCount": 5530,
-   "tradeCount": 2903,
-   "modelSharePct": 41.8,
+   "total": 8816,
+   "passSide": 5090,
+   "rejectSide": 3726,
+   "vetoCount": 5883,
+   "tradeCount": 2933,
+   "modelSharePct": 40.8,
    "modelGroundedPct": 100,
-   "avgConfidence": 67,
-   "gateAgreement": 2201,
-   "paperOpen": 9,
-   "paperSettled": 1351,
+   "avgConfidence": 66.7,
+   "gateAgreement": 2351,
+   "paperOpen": 10,
+   "paperSettled": 1369,
    "recent24h": {
-    "n": 422,
-    "modelSharePct": 32.7,
-    "lastModelAgeH": 10.6,
+    "n": 199,
+    "modelSharePct": 32.2,
+    "lastModelAgeH": 7.5,
     "lastVerdictAgeH": 0
    }
   },
@@ -117,24 +120,29 @@
    "watch": 2,
    "lastFrameAt": null,
    "spotConnected": true,
-   "spotFrames": 817970,
-   "spotLastFrameAt": 1793011969239,
+   "spotFrames": 672475,
+   "spotLastFrameAt": 1793271360965,
    "spotStreams": 2,
    "spotReconnects": 0,
-   "restBannedUntil": null,
-   "restProbeConsecutiveFails": 0,
+   "restBannedUntil": 1793276559361,
+   "restProbeConsecutiveFails": 2,
    "symbols": 2,
-   "trades": 817970,
-   "restPolls": 0,
-   "restErrors": 0,
+   "trades": 688251,
+   "restPolls": 30,
+   "restErrors": 6,
    "reconnects": 0,
-   "uptimeMs": 42914324
+   "uptimeMs": 42908177
   },
   "lastSweepAnomalies": [
    {
-    "class": "sentinel-amber",
-    "sev": "warn",
-    "msg": "sentinel :3030 verdict AMBER"
+    "class": "app-down",
+    "sev": "crit",
+    "msg": "app :3000 DOWN (HTTP unreachable) · healthz=err → pulse fallback"
+   },
+   {
+    "class": "sentinel-red",
+    "sev": "crit",
+    "msg": "sentinel :3030 verdict RED"
    },
    {
     "class": "tbt-doctrine-violation",
@@ -142,7 +150,7 @@
     "msg": "toobit-bridge doctrine: 3 violation(s) — last=MIRROR-LAG: card=SL but intent still OPEN 3455s — pollCards transition should have fired"
    }
   ],
-  "lastReviewAt": "2026-10-25T22:52:51.281Z"
+  "lastReviewAt": "2026-10-28T22:56:01.134Z"
  },
- "deepSweepChars": 489
+ "deepSweepChars": 699
 }
