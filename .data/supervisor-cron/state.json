@@ -2,15 +2,15 @@
  "ver": "supervisor-cron 1.6.0",
  "pid": 1869,
  "startedAt": "2026-10-28T22:55:30.935Z",
- "updatedAt": "2026-10-29T01:56:24.782Z",
+ "updatedAt": "2026-10-29T02:06:01.057Z",
  "jobs": {
   "sweep": {
-   "lastRunAt": 1793238960937,
-   "nextRunAt": 1793239560935,
+   "lastRunAt": 1793239560935,
+   "nextRunAt": 1793240160935,
    "lastStatus": "ok",
-   "lastDurationMs": 697,
+   "lastDurationMs": 121,
    "lastError": null,
-   "runs": 87,
+   "runs": 88,
    "failures": 0
   },
   "progress": {
@@ -42,7 +42,7 @@
   },
   "backup": {
    "lastRunAt": 1793238960948,
-   "nextRunAt": 1793238960948,
+   "nextRunAt": 1793249760948,
    "lastStatus": "ok",
    "lastDurationMs": 23834,
    "lastError": null,
@@ -59,24 +59,24 @@
    "failures": 0
   },
   "keepwarm": {
-   "lastRunAt": 1793238960937,
-   "nextRunAt": 1793239260935,
-   "lastStatus": "error",
-   "lastDurationMs": 301,
-   "lastError": "HEARTBEAT COLD app:3000 296ms streak=1",
-   "runs": 94,
+   "lastRunAt": 1793239560935,
+   "nextRunAt": 1793239560935,
+   "lastStatus": "ok",
+   "lastDurationMs": 122,
+   "lastError": null,
+   "runs": 96,
    "failures": 18
   }
  },
  "lastSweep": {
-  "at": "2026-10-29T01:56:00.997Z",
-  "verdict": "RED",
-  "reason": "sentinel verdict RED",
+  "at": "2026-10-29T02:06:01.055Z",
+  "verdict": "AMBER",
+  "reason": "sentinel :3030 verdict AMBER · toobit-bridge doctrine: 3 violation(s) — last=MIRROR-LAG: card=SL but intent still OPEN 3455s — pollCards transition should have fired",
   "services": {
    "app": {
     "up": true,
     "status": 200,
-    "ms": 43
+    "ms": 103
    },
    "liq": {
     "up": true,
@@ -96,12 +96,12 @@
    "watchdog": {
     "up": true,
     "status": 200,
-    "ms": 1
+    "ms": 0
    },
    "sentinel": {
     "up": true,
     "status": 200,
-    "ms": 0
+    "ms": 1
    },
    "ws": {
     "up": true,
@@ -121,9 +121,9 @@
   },
   "anomalies": [
    {
-    "class": "sentinel-red",
-    "sev": "crit",
-    "msg": "sentinel :3030 verdict RED"
+    "class": "sentinel-amber",
+    "sev": "warn",
+    "msg": "sentinel :3030 verdict AMBER"
    },
    {
     "class": "tbt-doctrine-violation",
@@ -154,14 +154,14 @@
   "newN": 1
  },
  "lastKeepwarm": {
-  "at": "2026-10-29T01:56:01.237Z",
-  "ok": false,
-  "ms": 296,
-  "bootAt": null,
-  "gitSha": null,
-  "coldStreak": 1
+  "at": "2026-10-29T02:06:01.057Z",
+  "ok": true,
+  "ms": 121,
+  "bootAt": "2026-10-29T02:05:05.440Z",
+  "gitSha": "d93686a",
+  "coldStreak": 0
  },
- "coldStreak": 1,
+ "coldStreak": 0,
  "alertLedger": {
   "sentinel-red": 1793238961633,
   "review-llm-unavailable": 1793228161135,
@@ -170,27 +170,6 @@
  "wsDownStreak": 0,
  "staleStreak": 0,
  "history": [
-  {
-   "id": "keepwarm",
-   "at": 1793229660936,
-   "status": "ok",
-   "durationMs": 2726,
-   "detail": "HEARTBEAT OK 2726ms boot=23:20:57Z sha=b372b4d"
-  },
-  {
-   "id": "keepwarm",
-   "at": 1793229960936,
-   "status": "error",
-   "durationMs": 2,
-   "detail": "HEARTBEAT COLD app:3000 0ms streak=1"
-  },
-  {
-   "id": "sweep",
-   "at": 1793229960936,
-   "status": "ok",
-   "durationMs": 126,
-   "detail": "RED: app :3000 down"
-  },
   {
    "id": "keepwarm",
    "at": 1793230260936,
@@ -519,6 +498,27 @@
    "status": "ok",
    "durationMs": 23834,
    "detail": "snapshot ok in 24s: SNAPSHOT OK — nexus-snapshot-20261029-015600.zip (43M) · 12 snapshots retained (max 12) · wal:VACUUM-COPY-CONSISTENT+CHECKPOINTED · cal:OK · enc:ENCRYPTED · off-site: DISABLED(oper"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1793239260936,
+   "status": "ok",
+   "durationMs": 22,
+   "detail": "HEARTBEAT OK 22ms boot=02:00:36Z sha=d93686a"
+  },
+  {
+   "id": "sweep",
+   "at": 1793239560935,
+   "status": "ok",
+   "durationMs": 121,
+   "detail": "AMBER: sentinel :3030 verdict AMBER · toobit-bridge doctrine: 3 violation(s) — last=MIRROR-LAG: card=SL but intent still OPEN 3"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1793239560935,
+   "status": "ok",
+   "durationMs": 122,
+   "detail": "HEARTBEAT OK 121ms boot=02:05:05Z sha=d93686a"
   }
  ],
  "watchRuns": [
