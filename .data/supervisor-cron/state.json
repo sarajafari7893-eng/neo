@@ -2,15 +2,15 @@
  "ver": "supervisor-cron 1.6.0",
  "pid": 1869,
  "startedAt": "2026-10-28T22:55:30.935Z",
- "updatedAt": "2026-10-29T10:36:01.785Z",
+ "updatedAt": "2026-10-29T10:46:01.454Z",
  "jobs": {
   "sweep": {
-   "lastRunAt": 1793270160936,
+   "lastRunAt": 1793270760935,
    "nextRunAt": 1793270760935,
    "lastStatus": "ok",
-   "lastDurationMs": 837,
+   "lastDurationMs": 519,
    "lastError": null,
-   "runs": 139,
+   "runs": 140,
    "failures": 0
   },
   "progress": {
@@ -59,59 +59,59 @@
    "failures": 0
   },
   "keepwarm": {
-   "lastRunAt": 1793270160938,
-   "nextRunAt": 1793270160935,
+   "lastRunAt": 1793270760935,
+   "nextRunAt": 1793271060935,
    "lastStatus": "ok",
-   "lastDurationMs": 847,
+   "lastDurationMs": 229,
    "lastError": null,
-   "runs": 198,
+   "runs": 200,
    "failures": 20
   }
  },
  "lastSweep": {
-  "at": "2026-10-29T10:36:01.772Z",
-  "verdict": "AMBER",
-  "reason": "sentinel :3030 verdict AMBER · toobit-bridge doctrine: 3 violation(s) — last=MIRROR-LAG: card=SL but intent still OPEN 3455s — pollCards transition should have fired",
+  "at": "2026-10-29T10:46:01.160Z",
+  "verdict": "RED",
+  "reason": "sentinel verdict RED",
   "services": {
    "app": {
     "up": true,
     "status": 200,
-    "ms": 709
+    "ms": 201
    },
    "liq": {
     "up": true,
     "status": 200,
-    "ms": 5
+    "ms": 1
    },
    "trade": {
     "up": true,
     "status": 200,
-    "ms": 4
+    "ms": 0
    },
    "armor": {
     "up": true,
     "status": 200,
-    "ms": 3
+    "ms": 1
    },
    "watchdog": {
     "up": true,
     "status": 200,
-    "ms": 3
+    "ms": 1
    },
    "sentinel": {
     "up": true,
     "status": 200,
-    "ms": 4
+    "ms": 1
    },
    "ws": {
     "up": true,
     "status": 400,
-    "ms": 7
+    "ms": 1
    },
    "bridge": {
     "up": true,
     "status": 200,
-    "ms": 2
+    "ms": 0
    },
    "tbt": {
     "up": true,
@@ -121,9 +121,9 @@
   },
   "anomalies": [
    {
-    "class": "sentinel-amber",
-    "sev": "warn",
-    "msg": "sentinel :3030 verdict AMBER"
+    "class": "sentinel-red",
+    "sev": "crit",
+    "msg": "sentinel :3030 verdict RED"
    },
    {
     "class": "tbt-doctrine-violation",
@@ -154,43 +154,22 @@
   "newN": 1
  },
  "lastKeepwarm": {
-  "at": "2026-10-29T10:36:01.785Z",
+  "at": "2026-10-29T10:46:01.164Z",
   "ok": true,
-  "ms": 847,
-  "bootAt": "2026-10-29T10:35:24.892Z",
-  "gitSha": "ad3a5de",
+  "ms": 229,
+  "bootAt": "2026-10-29T10:45:18.466Z",
+  "gitSha": "99aabd1",
   "coldStreak": 0
  },
  "coldStreak": 0,
  "alertLedger": {
-  "sentinel-red": 1793267762733,
+  "sentinel-red": 1793270761454,
   "review-llm-unavailable": 1793228161135,
   "app-down": 1793262961650
  },
  "wsDownStreak": 0,
  "staleStreak": 0,
  "history": [
-  {
-   "id": "backup",
-   "at": 1793260560948,
-   "status": "ok",
-   "durationMs": 27535,
-   "detail": "snapshot ok in 28s: SNAPSHOT OK — nexus-snapshot-20261029-075600.zip (44M) · 12 snapshots retained (max 12) · wal:VACUUM-COPY-CONSISTENT+CHECKPOINTED · cal:OK · enc:ENCRYPTED · off-site: DISABLED(oper"
-  },
-  {
-   "id": "keepwarm",
-   "at": 1793260860935,
-   "status": "ok",
-   "durationMs": 28,
-   "detail": "HEARTBEAT OK 28ms boot=07:58:53Z sha=bad0f8e"
-  },
-  {
-   "id": "sweep",
-   "at": 1793261160935,
-   "status": "ok",
-   "durationMs": 134,
-   "detail": "AMBER: sentinel :3030 verdict AMBER · toobit-bridge doctrine: 3 violation(s) — last=MIRROR-LAG: card=SL but intent still OPEN 3"
-  },
   {
    "id": "keepwarm",
    "at": 1793261160935,
@@ -519,6 +498,27 @@
    "status": "ok",
    "durationMs": 847,
    "detail": "HEARTBEAT OK 847ms boot=10:35:24Z sha=ad3a5de"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1793270460936,
+   "status": "ok",
+   "durationMs": 97,
+   "detail": "HEARTBEAT OK 97ms boot=10:40:18Z sha=99aabd1"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1793270760935,
+   "status": "ok",
+   "durationMs": 229,
+   "detail": "HEARTBEAT OK 229ms boot=10:45:18Z sha=99aabd1"
+  },
+  {
+   "id": "sweep",
+   "at": 1793270760935,
+   "status": "ok",
+   "durationMs": 519,
+   "detail": "RED: sentinel verdict RED"
   }
  ],
  "watchRuns": [
