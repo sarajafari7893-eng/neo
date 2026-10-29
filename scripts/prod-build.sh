@@ -40,8 +40,8 @@ cp -r public .next/standalone/ || exit 1
 # chdir from the generated server.js (dev-up spawns it with cwd=project root —
 # every relative store path then hits the ONE real filesystem), and (b) delete
 # the traced store copies so they can never serve stale data.
-sed -i 's|^process\.chdir(__dirname);$|// v14.0 split-brain guard: chdir stripped — server runs from the project root|' .next/standalone/server.js
+sed -i 's|^process\.chdir(__dirname);$|// v14.0 split-brain guard: chdir stripped — server runs from the project root|; s|^process\.chdir(__dirname)$|// v14.0 split-brain guard: chdir stripped — server runs from the project root|' .next/standalone/server.js
 for d in .data db logs backups; do
   rm -rf ".next/standalone/$d"
 done
-echo "[prod-build] OK $(date -u '+%H:%M:%SZ') standalone ready (server.js + static + public + store symlinks)"
+echo "[prod-build] OK $(date -u '+%H:%M:%SZ') standalone ready (server.js chdir-stripped + static + public)"
