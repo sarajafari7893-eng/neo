@@ -782,7 +782,7 @@ export type ProvenGateBlockDTO = {
   book: { todayNet: number | null; weekNet: number | null; currentHour: number | null; hourInMask: boolean | null };
   hours: number[];
   tp1FloorPct: number;
-  today: { pass: boolean; bypass: boolean; blockedByRail: boolean; vetoHour: boolean; vetoTp1: boolean };
+  today: { pass: boolean; bypass: boolean; blockedByRail: number; vetoHour: boolean; vetoTp1: boolean };
   lastVeto: { code: string; symbol: string | null; detail: string } | null;
   lastVetoAt: number | null;
 };
