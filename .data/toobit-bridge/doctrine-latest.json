@@ -1,17 +1,23 @@
 {
-  "at": 1793247242270,
-  "ver": "toobit-bridge 1.3.0",
+  "at": 1793247623232,
+  "ver": "toobit-bridge 1.4.5",
   "gates": {
     "marginUsdt": 5,
     "maxEntryDriftBps": 80,
     "maxEntryAgeMs": 90000,
-    "maxConcurrent": 3
+    "maxConcurrent": 0
   },
   "counters": {
-    "opens": 2,
+    "opens": 52,
     "skipBy": {
-      "STALE-CARD": 1
-    }
+      "STALE-CARD": 2,
+      "SYMBOL-ABSENT-ON-TOOBIT": 2,
+      "MAX-CONCURRENT": 19,
+      "ENTRY-DRIFT": 5,
+      "ENTRY-DELAY": 1,
+      "MIN-FLOOR": 2
+    },
+    "orphans": 0
   },
   "violations": [
     {
@@ -19,6 +25,18 @@
       "serial": 0,
       "kind": "NOTIONAL-DELTA",
       "detail": "exp=25.00 act=8.20 (6719bps)"
+    },
+    {
+      "at": 1792762189955,
+      "serial": 3041,
+      "kind": "MIRROR-LAG",
+      "detail": "card=TP1 but intent still OPEN 2722s — pollCards transition should have fired"
+    },
+    {
+      "at": 1792934117232,
+      "serial": 3143,
+      "kind": "MIRROR-LAG",
+      "detail": "card=SL but intent still OPEN 3455s — pollCards transition should have fired"
     }
   ],
   "openIntents": []
