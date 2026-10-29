@@ -329,7 +329,7 @@ export async function fetchKlines(symbol: string, interval: string, limit: numbe
   }
   try {
     const perp = await gateFetch<(string | number)[][]>(`/fapi/v1/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`, { priority: "critical" });
-    if (perp.length) return mapKlines(perp);
+    if (perp && perp.length) return mapKlines(perp);
   } catch {
     /* honest failure below */
   }
@@ -346,7 +346,7 @@ export async function fetchKlines(symbol: string, interval: string, limit: numbe
 export async function fetchFuturesKlines(symbol: string, interval: string, limit: number): Promise<Candle[]> {
   try {
     const raw = await gateFetch<(string | number)[][]>(`/fapi/v1/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`, { priority: "critical" });
-    if (raw.length) return mapKlines(raw);
+    if (raw && raw.length) return mapKlines(raw);
   } catch {
     /* spot rung below */
   }

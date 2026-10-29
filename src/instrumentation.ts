@@ -16,7 +16,7 @@ export async function register(): Promise<void> {
   try {
     let undiciSwallowed = 0;
     let lastUndiciLogAt = 0;
-    process.on("uncaughtException", (err: unknown) => {
+    (process as unknown as { on: (evt: string, fn: (err: unknown) => void) => void }).on("uncaughtException", (err: unknown) => {
       const isUndiciAssert =
         err instanceof Error && err.name === "AssertionError" && /undici/.test(err.stack ?? "");
       if (!isUndiciAssert) return; // not ours — existing handlers own it

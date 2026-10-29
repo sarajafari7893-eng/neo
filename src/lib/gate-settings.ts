@@ -12,6 +12,10 @@
 import { db } from "@/lib/db";
 
 export interface GateSettings {
+  // v14.0 — governor knob projections (oversight lane); the normalizer
+  // defaults them so every persisted payload predating them stays sound.
+  dlConfFloor: number;
+  maxLevCap: number;
   minScore: number; // 20–60, default 35 — BASE threshold; the EFFECTIVE threshold = minScore + regime thrAdj per candidate
   flowShortlist: number; // 1–6, default 3
   flowVetoScore: number; // 4–25, default 8 (veto when flow.score ≤ −T)
@@ -165,6 +169,8 @@ export interface GateSettings {
 // floor is a clamp, not policy — the evidence gate + hysteresis remain the
 // real anti-noise protection.
 const CLAMPS: Record<keyof GateSettings, [number, number, number]> = {
+  dlConfFloor: [0, 1, 0],
+  maxLevCap: [1, 50, 20],
   minScore: [12, 60, 35],
   minScorePinned: [0, 1, 0],
   flowShortlist: [1, 6, 3],
@@ -212,6 +218,8 @@ const CACHE_TTL = 15_000;
 
 function clampAll(raw: Partial<GateSettings>): GateSettings {
   return {
+    dlConfFloor: Math.min(CLAMPS.dlConfFloor[1], Math.max(CLAMPS.dlConfFloor[0], raw.dlConfFloor ?? CLAMPS.dlConfFloor[2])),
+    maxLevCap: Math.min(CLAMPS.maxLevCap[1], Math.max(CLAMPS.maxLevCap[0], Math.round(raw.maxLevCap ?? CLAMPS.maxLevCap[2]))),
     minScore: Math.min(CLAMPS.minScore[1], Math.max(CLAMPS.minScore[0], raw.minScore ?? CLAMPS.minScore[2])),
     minScorePinned: Math.min(CLAMPS.minScorePinned[1], Math.max(CLAMPS.minScorePinned[0], Math.round(raw.minScorePinned ?? CLAMPS.minScorePinned[2]))),
     flowShortlist: Math.min(CLAMPS.flowShortlist[1], Math.max(CLAMPS.flowShortlist[0], raw.flowShortlist ?? CLAMPS.flowShortlist[2])),

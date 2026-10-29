@@ -531,7 +531,7 @@ export function relaySignalEvent(type: string, symbol: string | null, message: s
       }
       if (card.text.length > 1000) card = { ...card, text: card.text.slice(0, 1000) };
     }
-    let r: { ok: boolean; error?: string };
+    let r: { ok: boolean; error?: string } | null = null;
     // v10.20 ANIMATED OUTCOME CARDS — TP1/TP2/TP3 first try the 12-frame
     // glow-pulse MP4 (budget-guarded); any miss degrades to the static photo.
     let animated = false;
@@ -569,13 +569,13 @@ export function relaySignalEvent(type: string, symbol: string | null, message: s
     } else if (!card.photo && !animated) {
       r = await apiCall<unknown>("sendMessage", { chat_id: chat, text: card.text.slice(0, 3800), parse_mode: "HTML", disable_web_page_preview: true });
     }
-    if (r.ok) {
+    if (r && r.ok) {
       sentCount++;
       lastSentAt = Date.now();
     } else {
       failCount++;
-      pushErr(`${type}: ${r.error}`);
-      console.error(`[NOTIFY] telegram relay send failed (${type}): ${r.error}`);
+      pushErr(`${type}: ${r?.error ?? "?"}`);
+      console.error(`[NOTIFY] telegram relay send failed (${type}): ${r?.error ?? "?"}`);
     }
   })();
 }
@@ -692,7 +692,7 @@ export async function sendSampleCards(): Promise<{ ok: boolean; error?: string; 
     try {
       const text = `🧪 <b>SAMPLE — CARD FORMAT PROOF</b>\n\n${composeSignalText(type, sig, msg)}`;
       const banner = BANNER_STATUS[type];
-      let r: { ok: boolean; error?: string };
+      let r: { ok: boolean; error?: string } | null = null;
       const serial = `NX-${String(sig.serial).padStart(4, "0")}`;
       const pnl = sig.pnlPercent ?? 0;
       const photo = banner
@@ -788,7 +788,7 @@ export function ensureAutoDiscover(): void {
           return;
         }
         const r = await discoverChat();
-        if (r.ok) {
+        if (r && r.ok) {
           clearInterval(timer);
           autoDiscoverTimer = null;
           const proof = await sendDirect(

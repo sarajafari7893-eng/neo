@@ -156,8 +156,8 @@ async function futwsMirror(symbol: string): Promise<Parsed> {
     const now = Date.now();
     if (!futwsCache || now - futwsCache.at > 3_000) {
       const map = new Map<string, { m: number; t: number }>();
-      const { readFile } = await import("fs");
-      const raw = JSON.parse(await readFile(FUTWS_FILE, "utf8")) as { at?: number; rows?: Array<{ s?: string; m?: number; t?: number }> };
+      const { readFileSync } = await import("node:fs");
+      const raw = JSON.parse(readFileSync(FUTWS_FILE, "utf8")) as { at?: number; rows?: Array<{ s?: string; m?: number; t?: number }> };
       if (raw.at && now - raw.at <= FUTWS_FILE_MAX_AGE_MS && Array.isArray(raw.rows)) {
         for (const r of raw.rows) {
           const s = String(r.s ?? "").toUpperCase();

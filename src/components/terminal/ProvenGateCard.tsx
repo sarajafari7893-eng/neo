@@ -104,7 +104,7 @@ export default function ProvenGateCard() {
                 {railsOff && <span className="text-violet-300/70"> · ادوایزری</span>}
               </span>
               <span>
-                rolling-20 <b className={(data.basis.rolling20Net ?? 0) <= data.k1RollingNet ? "text-rose-300" : "text-zinc-300"}>{usd(data.basis.rolling20Net)}</b> / K1 {usd(data.k1RollingNet, 0)}
+                rolling-20 <b className={(data.basis.rolling20Net ?? 0) <= (data.k1RollingNet ?? 0) ? "text-rose-300" : "text-zinc-300"}>{usd(data.basis.rolling20Net)}</b> / K1 {usd(data.k1RollingNet, 0)}
               </span>
             </div>
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-zinc-600">

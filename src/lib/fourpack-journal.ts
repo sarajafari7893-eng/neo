@@ -21,7 +21,7 @@
 import { appendFile, mkdir, open, readFile, rename, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-export type FourPackModule = "r1-risk-governor" | "r2-time-governor" | "r5-ui-canary" | "r6-senior-review" | "mode";
+export type FourPackModule = "r1-risk-governor" | "r2-time-governor" | "r5-ui-canary" | "r6-senior-review" | "ops-supervisor" | "mode"; // v14.0 — ops-supervisor lane journaled
 export type FourPackKind = "cycle" | "flip" | "proposal" | "apply" | "mode" | "audit" | "page";
 
 export interface FourPackEvent {
@@ -55,7 +55,7 @@ let refreshing: Promise<void> | null = null;
 let lastRefreshAt = 0;
 const REFRESH_MIN_INTERVAL_MS = 10_000;
 const REFRESH_MAX_BITE = 256 * 1024;
-const MODULES: FourPackModule[] = ["r1-risk-governor", "r2-time-governor", "r5-ui-canary", "r6-senior-review", "mode"];
+const MODULES: FourPackModule[] = ["r1-risk-governor", "r2-time-governor", "r5-ui-canary", "r6-senior-review", "ops-supervisor", "mode"];
 
 async function hydrate(): Promise<void> {
   if (hydrating) return hydrating;

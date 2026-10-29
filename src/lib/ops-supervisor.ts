@@ -179,7 +179,7 @@ export async function gatherOpsKpis(): Promise<OpsKpis> {
     db.signal.count({ where: { createdAt: { gte: dayStart }, tags: { contains: "RAW-CAL" } } }),
     db.advisorProposal.count({ where: { status: "PENDING" } }),
     db.engineSetting.findUnique({ where: { key: "seniorreview.state" } }).catch(() => null),
-    import("@/lib/shadow-veto").then((m) => m.realArmsFilled().catch(() => null)),
+    Promise.resolve(null) as Promise<number | null>, // v14.0 — the legacy realArmsFilled probe never existed in shadow-veto; veto telemetry rides shadow-veto-latest.json
     import("@/lib/rawcal-telemetry").then((m) => m.computeRawcalPace().catch(() => null)),
   ]);
 
@@ -223,11 +223,11 @@ export async function gatherOpsKpis(): Promise<OpsKpis> {
     rawcalArmed: rawcal.armed,
     rawcalIssuedTotal: rawcal.issuedTotal,
     rawcalBook: `${rawcal.settledN}/${rawcal.target} settled · open ${rawcal.openRaw}/${rawcal.maxOpen}`,
-    rawcalArmsDone: armsFilled,
+    rawcalArmsDone: typeof armsFilled === "number" ? armsFilled > 0 : null, // v14.0 — the probe returns a count; the state field is boolean
     issueStallMin: paceStall,
     banActive: banUntil > Date.now(),
     banResumeAt: banUntil ? new Date(banUntil).toISOString() : null,
-    restHealthy: feed.restHealthy,
+    restHealthy: feed.source === "LIVE" || feed.source === "STALE", // v14.0 — retired cross-venue field; mapped to the Binance feed liveness
     busCounts: bus.counts ?? {},
     busCyclesCompleted: (bus as unknown as { cyclesCompleted?: number }).cyclesCompleted ?? 0,
     sentinel,

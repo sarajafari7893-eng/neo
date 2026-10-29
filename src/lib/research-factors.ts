@@ -675,9 +675,9 @@ export async function assessResearchStack(input: ResearchInput): Promise<Researc
   // ── P2 top_trader_spread — smart vs retail positioning ──
   if (on("top_trader_spread")) {
     const top = await topTraderPositionRatio(symbol);
-    if (top !== null && metrics.crowdLongShort > 0) {
-      const retailLong = metrics.crowdLongShort >= 1.6;
-      const retailShort = metrics.crowdLongShort <= 0.7;
+    if (top !== null && (metrics.crowdLongShort ?? 0) > 0) {
+      const retailLong = (metrics.crowdLongShort ?? 1) >= 1.6;
+      const retailShort = (metrics.crowdLongShort ?? 1) <= 0.7;
       const smartBull = top >= 1.15;
       const smartBear = top <= 0.85;
       const divergence = (retailLong && smartBear) || (retailShort && smartBull);
@@ -688,15 +688,15 @@ export async function assessResearchStack(input: ResearchInput): Promise<Researc
           id: "top_trader_spread",
           label: "SMART/RETAIL",
           vote: along(smartBullish ? 2 : -2),
-          value: `top ${top.toFixed(2)} vs retail ${metrics.crowdLongShort.toFixed(2)}`,
-          detail: `positioning split — top traders ${top.toFixed(2)} L/S vs retail accounts ${metrics.crowdLongShort.toFixed(2)} — following the institutional side`,
+          value: `top ${top.toFixed(2)} vs retail ${(metrics.crowdLongShort ?? 1).toFixed(2)}`,
+          detail: `positioning split — top traders ${top.toFixed(2)} L/S vs retail accounts ${(metrics.crowdLongShort ?? 1).toFixed(2)} — following the institutional side`,
         });
       } else {
         votes.push({
           id: "top_trader_spread",
           label: "SMART/RETAIL",
           vote: 0,
-          value: `top ${top.toFixed(2)} vs retail ${metrics.crowdLongShort.toFixed(2)}`,
+          value: `top ${top.toFixed(2)} vs retail ${(metrics.crowdLongShort ?? 1).toFixed(2)}`,
           detail: "top-trader and retail positioning aligned — no split signal",
         });
       }

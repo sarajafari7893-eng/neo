@@ -167,7 +167,7 @@ async function binanceFuturesBatch(symbols: string[]): Promise<Map<string, numbe
     // BINANCE venue null — the spot pool (separate ban budget) keeps the
     // reference venue priced (spot ≈ perp within bps on shared tickers);
     // futures-only tickers stay null (honest).
-    const mirrored = await binanceSpotMirrorBatch();
+    const mirrored = await spotLadderBatch(symbols, SPOT_LADDER_VISION, "BINANCE-SPOT");
     if (mirrored.size > 0) {
       binanceFutCache = { at: Date.now(), data: mirrored };
       // v12.11 — fill ONLY the ring's misses: a 15s-old spot REST quote must

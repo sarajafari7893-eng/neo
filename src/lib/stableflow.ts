@@ -187,7 +187,7 @@ export async function maybePersistStableFlow(force = false): Promise<{ ok: boole
       const wmMs = wm?.ts ? new Date(wm.ts).getTime() : 0;
       if (board.at <= wmMs) return { ok: true, detail: "board already persisted" };
 
-      const rows: Parameters<typeof db.stableFlowEvent.createMany>[0]["data"] = [];
+      const rows: NonNullable<Parameters<typeof db.stableFlowEvent.createMany>[0]>["data"] = [];
       const pct = (v: number | null) => (v === null ? null : Math.round(v * 1000) / 1000);
       // exact USD delta from a % move: Δ = mcap × (1 − 1/(1+pct/100))
       const usdFromPct = (mcap: number | null, p: number | null): number | undefined =>
