@@ -205,6 +205,17 @@ else
   # climbing so the NEXT spawn escalates to AUTO-FRESH.
   if [ "$code" = "200" ]; then echo 0 > "$STREAK_FILE" 2>/dev/null; else echo "$STREAK" > "$STREAK_FILE" 2>/dev/null; fi
 fi
+
+# ── v14.0 (trace 1a185042c872b4f9) — LOCK-FD LEAK FIX ────────────────────────
+# Lesson measured live 23:13-23:15Z: the single-flight lock (fd 8) was held
+# FOREVER by spawned children — every service armed below (watchdog-up,
+# mem-guard-up, warm-loop, card-sentinel...) inherited fd 8 and pinned the
+# lock after this script exited → every later dev-up run exited on
+# "another instance holds the single-flight lock" → the app could never be
+# restarted again (the v8.3 fix closed fd 9, but the script's OWN lock is
+# fd 8). Release the lock once the restart gate has fully served its purpose
+# (spawn + pulse wait done) — the arming section below never races spawns.
+exec 8>&- 2>/dev/null || true
 echo "app:$code"
 
 # ── (3) dashboard SELF-WARM (operator-approved 2026-09-15 «تایید می کنم صفحه خودکار گرم بماند») ──
