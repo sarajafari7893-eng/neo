@@ -72,6 +72,9 @@ import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSyn
 //     SL hit on a $47 account (−22% in one day) — risk was unbounded.
 //   • walletUsdt captured from futures/balance (balance ≠ availableBalance).
 //   • doctrine notional audit is risk-cap aware; /config accepts maxRiskPct 0.1..10.
+//   • REVERTED by v1.6.0 GATE-OPEN (trace 1a18e595e5bb03ed) — the wallet-% cap
+//     was the «منتق لایو»: it sized live entries down to dust (NX-3214 skip)
+//     and closed the entry gates. Protection is now the fixed $2 margin itself.
 // v1.4.5 PHANTOM-PNL FIX (trace 1a174e9c2aa28295): never-executed intents must
 // never inherit the symbol's fill history; books self-heal at boot.
 // v1.5.1 EXECUTION+CALC AUDIT FIXES (operator order trace 1a18a0e79bbf5ec5 —
@@ -143,7 +146,23 @@ import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSyn
 //      / RECON-GHOST-PNL); if the ghost is a RESIDUAL of one of our LIVE intents
 //      recon-closed on the same symbol+side within 12h, the PnL is re-attributed
 //      to that intent (RECON-RESIDUAL-RECLAIM) so /status livePnl speaks truth.
-const VER = "toobit-bridge 1.5.4";
+// v1.6.0 GATE-OPEN / LIVE-INDIFFERENT (operator mandate trace 1a18e595e5bb03ed —
+//   «سیستم با لایو شدن با محدودیت‌های مخفی عمل می‌کند؛ این منتق را حذف کن؛ از
+//   گارد خارج و با منطق اصلی کارت‌های سیگنال عمل کند؛ برای محافظت از حساب
+//   مارجین ثابت ۲$ باشد — مانند 29/10 گیت‌های ورودی باز شود»):
+//   ① RISK-CAP REVERTED — the v1.4.4 equity-% budget (notional × SLdist ≤ 2%
+//      wallet) sized live entries DOWN to dust and silently closed the entry
+//      gates (NX-3214 «risk-cap dust» skip + 2 more). The wallet-% guard was
+//      exactly the «منتق لایو» the operator ordered removed. Sizing truth
+//      returns to the 29/10 mandate: notional = fixed margin × card leverage,
+//      PAPER == LIVE (mode-indifferent — mandateNotional()).
+//   ② FIXED-$2 MARGIN — marginUsdt 3→2 (cfgRev 6 one-time migration). Account
+//      protection is the bounded SIZE itself (2$ margin per trade), the
+//      operator's chosen replacement for the wallet-% budget.
+//   ③ RISK-CAP-DUST skip block removed; ENTRY-DELAY/DRIFT/STALE/BALANCE-CAP/
+//      MIN-FLOOR gates unchanged (pre-29/10 doctrine). maxRiskPct config field
+//      stays for client compatibility but is INERT — nothing reads it.
+const VER = "toobit-bridge 1.6.0";
 // v1.4.3 (operator order trace 1a172ca1af260c0d — «مارجین 5$/$0.5 به‌جای 10$، چرا هیچ سیگنالی در سود بسته نشده، وضعیت NX-3139 در لایو متفاوت است — اقدامات حیاتی فوری»):
 //   Forensics proved FOUR independent root causes, all fixed here:
 //   ① CONTRACT-MULTIPLIER SIZING BUG (the $0.5 margin) — exchangeInfo carries
@@ -274,7 +293,7 @@ interface BridgeConfig {
   notionalUsdt: number;   // LEGACY (pre-1.1.0 sizing) — kept only for old persisted state; UI must read marginUsdt × cardLev instead
   marginUsdt: number;     // FIXED per-signal entry MARGIN (v1.1.0 operator mandate trace 1a15bc29d2bb2c29) — notional = marginUsdt × cardLev
   paperBalanceUsdt: number; // v1.5.0 — FIXED paper account balance anchor ($3 mandate trace 1a1899d2237473d9)
-  maxRiskPct: number;     // v1.4.4 — max % of WALLET equity risked per trade (notional × stopDistance); sizing scales DOWN to fit
+  maxRiskPct: number;     // INERT since v1.6.0 (RISK-CAP reverted, trace 1a18e595e5bb03ed) — kept for persisted-state/client compat
   maxConcurrent: number;  // max simultaneous open intents — 0 = UNLIMITED (v1.4.1 operator mandate)
   cfgRev?: number;        // config migration revision (2 = cap lifted to unlimited)
   tp1Frac: number;        // fraction of ORIGINAL qty banked at TP1
@@ -287,9 +306,9 @@ interface BridgeConfig {
 }
 const DEFAULT_CFG: BridgeConfig = {
   notionalUsdt: 15,
-  marginUsdt: 3,          // v1.5.0 — $3 fixed margin (operator mandate trace 1a1899d2237473d9 «بالانس ۳$ ثابت»)
+  marginUsdt: 2,          // v1.6.0 — $2 fixed margin (operator mandate trace 1a18e595e5bb03ed «برای محافظت از حساب مارجین ثابت 2$ باشد»؛ پیش‌تر v1.5.0: $3)
   paperBalanceUsdt: 3,    // v1.5.0 — fixed $3 paper anchor
-  maxRiskPct: 2,          // v1.4.4 — 2% of wallet equity per trade (trace 1a17357988d00515)
+  maxRiskPct: 2,          // INERT since v1.6.0 — legacy default, sizing never reads it
   maxConcurrent: 0,       // v1.4.1 — 0 = UNLIMITED simultaneous open intents (operator mandate)
   tp1Frac: 0.4,
   tp2Frac: 0.3,
@@ -448,6 +467,16 @@ function loadState(): void {
         S.cfg.cfgRev = 3;
         if (changed) audit("CFG-ACTIVATE", { trace: "1a1899d2237473d9", marginUsdt: 3, paperBalanceUsdt: 3, execEnabled: true, note: "fixed-$3 activation mandate" });
         else log("info", "cfgRev<3 on load — mandate values already applied (pre-flush boot race), quiet migration");
+      }
+      // v1.6.0 migration (cfgRev 6) — operator GATE-OPEN mandate (trace
+      // 1a18e595e5bb03ed): fixed margin 2$ (was 3$) + the v1.4.4 equity-%
+      // RISK-CAP removed from the sizing truth. One-time; later /config
+      // writes persist normally.
+      if ((S.cfg.cfgRev ?? 0) < 6) {
+        const changed6 = S.cfg.marginUsdt !== 2;
+        S.cfg.marginUsdt = 2;
+        S.cfg.cfgRev = 6;
+        if (changed6) audit("CFG-GATE-OPEN", { trace: "1a18e595e5bb03ed", marginUsdt: 2, riskCap: "removed", note: "fixed-$2 margin — sizing PAPER==LIVE, entry gates open" });
       }
       // v1.5.0 — paper account load: cfg anchor is the source of truth; equity
       // always re-derives from (anchor + realized) so a /config anchor change
@@ -760,19 +789,14 @@ async function drainQ(): Promise<void> {
   } finally { qBusy = false; }
 }
 
-// v1.4.4 RISK-CAP — shared sizing truth for doOpen + doctrineScan: notional is
-// the v1.1.0 mandate ceiling (margin × cardLev), scaled DOWN when
-// notional × stopDistance would exceed maxRiskPct% of WALLET equity
-// (trace 1a17357988d00515 «حساب لایو داره از بین میره»). Never scaled up.
-function riskCappedNotional(lev: number, slDistPct: number, liveMode: boolean): { base: number; eff: number; capped: boolean } {
-  const base = S.cfg.marginUsdt * lev;
-  if (!liveMode) return { base, eff: base, capped: false };
-  const equity = walletUsdt ?? balanceUsdt ?? 0;
-  const maxRiskUsdt = equity * (S.cfg.maxRiskPct / 100);
-  if (maxRiskUsdt > 0 && base * slDistPct > maxRiskUsdt) {
-    return { base, eff: Math.floor((maxRiskUsdt / slDistPct) * 100) / 100, capped: true };
-  }
-  return { base, eff: base, capped: false };
+// v1.6.0 sizing truth — shared by doOpen + doctrineScan: notional is the
+// v1.1.0 mandate (fixed margin × cardLev). The v1.4.4 equity-% RISK-CAP is
+// REMOVED (operator mandate trace 1a18e595e5bb03ed — «از گارد خارج و با منطق
+// اصلی کارت‌های سیگنال عمل کند؛ برای محافظت از حساب مارجین ثابت ۲$ باشد»):
+// protection is the bounded margin itself; PAPER and LIVE size identically
+// (mode-indifferent — the bridge no longer treats a live account specially).
+function mandateNotional(lev: number): number {
+  return S.cfg.marginUsdt * lev;
 }
 
 async function doOpen(it: Intent): Promise<void> {
@@ -792,21 +816,14 @@ async function doOpen(it: Intent): Promise<void> {
   const mult = instr.mult > 0 ? instr.mult : 1;
   it.contractMult = mult;
   it.sizingRev = 4;
-  // v1.4.4 RISK-CAP — equity-aware sizing (trace 1a17357988d00515
-  // «حساب لایو داره از بین میره»): the card's stop distance defines the real
-  // money at risk = notional × slDistPct; on a small LIVE account a ~5% stop
-  // on a $100 notional burns ~14% of equity in ONE SL hit. The per-trade risk
-  // budget is capped at maxRiskPct% of wallet equity by scaling notional DOWN.
-  const slDistPct = it.stopLoss > 0 && it.cardEntry > 0
-    ? Math.abs(it.cardEntry - it.stopLoss) / it.cardEntry
-    : 0.05; // no usable stop on the card → conservative 5% assumption
-  const cap = riskCappedNotional(it.leverage, slDistPct, liveMode);
-  const notional = cap.eff;
+  // v1.6.0 LIVE-INDIFFERENT SIZING (operator mandate trace 1a18e595e5bb03ed —
+  // «از گارد خارج و با منطق اصلی کارت‌های سیگنال عمل کند؛ مارجین ثابت ۲$»):
+  // notional = fixed margin × THE CARD'S leverage — the card math is the
+  // doctrine. The v1.4.4 wallet-% RISK-CAP (which dust-skipped NX-3214 and
+  // closed the entry gates) is gone; account protection is the bounded
+  // margin itself, identical in PAPER and LIVE.
+  const notional = mandateNotional(it.leverage);
   const effMargin = notional / it.leverage;
-  if (cap.capped) {
-    it.events.push({ at: Date.now(), ev: "RISK-CAP", note: `notional ${cap.base.toFixed(2)}→${notional.toFixed(2)}$ (SLdist=${(slDistPct * 100).toFixed(2)}% × wallet ${(walletUsdt ?? balanceUsdt ?? 0).toFixed(2)}$ × cap ${S.cfg.maxRiskPct}%)` });
-    audit("EXEC-RISK-CAP", { serial: it.serial, baseNotional: Number(cap.base.toFixed(4)), cappedNotional: Number(notional.toFixed(4)), slDistPct: Number((slDistPct * 100).toFixed(3)), equity: Number((walletUsdt ?? balanceUsdt ?? 0).toFixed(4)), maxRiskPct: S.cfg.maxRiskPct });
-  }
   it.expectedNotional = Number(notional.toFixed(6));
   let qty = notional / (refPrice * mult);
 
@@ -846,14 +863,8 @@ async function doOpen(it: Intent): Promise<void> {
       audit("EXEC-SKIP", { serial: it.serial, why: `balance-cap: margin ${effMargin.toFixed(2)} USDT exceeds available ${avail.toFixed(2)} USDT` });
       return;
     }
-    // v1.4.4 — a risk-capped margin below $1 is exchange dust; skip honestly.
-    if (cap.capped && effMargin < 1) {
-      it.status = "SKIP";
-      it.events.push({ at: Date.now(), ev: "RISK-CAP-DUST", note: `margin ${effMargin.toFixed(2)}$ < $1 after risk cap` });
-      countSkip("RISK-CAP");
-      audit("EXEC-SKIP", { serial: it.serial, why: `risk-cap dust: margin ${effMargin.toFixed(2)} USDT below $1 floor` });
-      return;
-    }
+    // v1.6.0 — the RISK-CAP-DUST skip is gone with the guard: fixed-$2 margin
+    // always clears the $1 exchange floor, so entry gates stay open.
   }
   // $5-fixed mandate: a symbol whose exchange floor (minNotional / minQty×price)
   // cannot fit inside the mandated margin notional is SKIPPED honestly —
@@ -913,7 +924,7 @@ async function doOpen(it: Intent): Promise<void> {
   it.protected = it.mode === "LIVE" ? true : true; // LIVE: attached TP/SL in same order + recon re-check; PAPER: sim active
   S.doctrine.opens++;
   const ndelta = it.expectedNotional && it.actualNotional ? Math.abs(it.actualNotional - it.expectedNotional) / it.expectedNotional * 10_000 : 0;
-  audit("EXEC-OPEN-DOCTRINE", { serial: it.serial, lev: it.leverage, levSrc: it.levSrc ?? "card", margin: Number(effMargin.toFixed(4)), riskCapped: cap.capped, contractMult: mult, expectedNotional: it.expectedNotional, actualNotional: it.actualNotional, notionalDeltaBps: Number(ndelta.toFixed(1)), entryAgeMs: it.entryAgeMs, entryDriftBps: it.entryDriftBps });
+  audit("EXEC-OPEN-DOCTRINE", { serial: it.serial, lev: it.leverage, levSrc: it.levSrc ?? "card", margin: Number(effMargin.toFixed(4)), riskCapped: false, contractMult: mult, expectedNotional: it.expectedNotional, actualNotional: it.actualNotional, notionalDeltaBps: Number(ndelta.toFixed(1)), entryAgeMs: it.entryAgeMs, entryDriftBps: it.entryDriftBps }); // v1.6.0 — riskCapped kept for audit-schema continuity, always false
   if (ndelta > 2000) doctrineViolation(it.serial, "NOTIONAL-DELTA", `exp=${it.expectedNotional} act=${it.actualNotional} (${ndelta.toFixed(0)}bps) — step-rounding or minQty floor`);
   it.lat = {
     detectMs: it.lat.detectMs ?? null,
@@ -1505,9 +1516,8 @@ async function doctrineScan(): Promise<void> {
         if (c && c.leverage >= 1 && c.leverage !== it.leverage) {
           doctrineViolation(it.serial, "LEV-MISMATCH", `card=${c.leverage} intent=${it.leverage} — card ledger is authoritative; next entries use ${c.leverage}`);
         }
-        // ② notional math on the live position (margin × اهرم کارت — v1.4.4 risk-cap aware)
-        const slDist = it.stopLoss > 0 && it.cardEntry > 0 ? Math.abs(it.cardEntry - it.stopLoss) / it.cardEntry : 0.05;
-        const exp = riskCappedNotional(it.leverage, slDist, it.mode === "LIVE").eff;
+        // ② notional math on the live position (margin × اهرم کارت — v1.6.0 mode-indifferent)
+        const exp = mandateNotional(it.leverage);
         it.expectedNotional = Number(exp.toFixed(6));
         if (it.qtyOrig > 0 && it.fillPrice) {
           const mult = instruments.get(it.tbSymbol)?.mult ?? it.contractMult ?? 1; // v1.4.3 — real notional
@@ -1646,7 +1656,7 @@ Bun.serve({
           S.paper.anchorUsdt = c.paperBalanceUsdt;
           S.paper.equityUsdt = Number((c.paperBalanceUsdt + S.paper.realizedUsdt).toFixed(6));
         }
-        if (typeof body.maxRiskPct === "number" && body.maxRiskPct >= 0.1 && body.maxRiskPct <= 10) c.maxRiskPct = body.maxRiskPct; // v1.4.4 — % of wallet equity risked per trade (entry→SL)
+        if (typeof body.maxRiskPct === "number" && body.maxRiskPct >= 0.1 && body.maxRiskPct <= 10) c.maxRiskPct = body.maxRiskPct; // INERT since v1.6.0 — accepted for client compat, sizing never reads it
         if (typeof body.notionalUsdt === "number" && body.notionalUsdt >= 5 && body.notionalUsdt <= 500) c.notionalUsdt = body.notionalUsdt;
         if (typeof body.maxConcurrent === "number" && body.maxConcurrent >= 0 && body.maxConcurrent <= 50) c.maxConcurrent = Math.floor(body.maxConcurrent); // 0 = UNLIMITED (v1.4.1)
         if (typeof body.tp1Frac === "number" && body.tp1Frac > 0 && body.tp1Frac < 1) c.tp1Frac = body.tp1Frac;

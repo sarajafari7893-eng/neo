@@ -127,11 +127,13 @@ export default function ToobitBridgeCard() {
   const levMax = levs.length ? Math.max(...levs) : null;
   const driftSkips = (d?.skipBy?.["ENTRY-DRIFT"] ?? 0) + (d?.skipBy?.["ENTRY-DELAY"] ?? 0);
   const staleSkips = d?.skipBy?.["STALE-CARD"] ?? 0; // v1.5.1 — downtime births
-  // v1.5.5 SKIP-VISIBILITY (trace 1a18db2beba9b781 — «چرا سیگنال 3214 در لایو فعال نشده؟»):
-  // RISK-CAP dust skips were journaled (EXEC-SKIP) but INVISIBLE in the dashboard —
-  // the operator saw an ACTIVE card with no live intent and no explanation. The
-  // guard itself is doctrine (v1.4.4 «حساب لایو داره از بین میره») and stays;
-  // only the silence is fixed: surface the counter + the last skip's exact reason.
+  // v1.6.0 GATE-OPEN (trace 1a18e595e5bb03ed — «از گارد خارج و با منطق اصلی
+  // کارتهای سیگنال عمل کند؛ برای محافظت از حساب مارجین ثابت 2$ باشد»):
+  // the v1.4.4 equity-% RISK-CAP is REMOVED from the bridge sizing — account
+  // protection is the fixed margin itself (2$), identical in PAPER and LIVE.
+  // The old dust-skip counter is ledger history only; the chip below shows the
+  // live fixed-margin doctrine, and EXEC-SKIP visibility (v1.5.5) stays for
+  // the remaining honest gates (ENTRY-DELAY/DRIFT/MIN-FLOOR/BALANCE-CAP).
   const riskSkips = d?.skipBy?.["RISK-CAP"] ?? 0;
   const lastSkip = (jn?.recent ?? []).find((e) => e.ev === "EXEC-SKIP");
   const keysOk = data?.keysInstalled !== false;
@@ -216,12 +218,18 @@ export default function ToobitBridgeCard() {
             {staleSkips} downtime
           </span>
         )}
-        {riskSkips > 0 && (
+        <span
+          className="rounded border border-neon/40 bg-neon/10 px-1.5 py-0.5 font-mono text-neon"
+          title={`دکترین v1.6.0 GATE-OPEN (فرمان اپراتور trace 1a18e595e5bb03ed): مارجین ثابت ${margin}$ — نوتوینال = ${margin}$ × اهرم همان کارت · PAPER و LIVE یکسان سایز می‌شوند · گارد RISK-CAP v1.4.4 (کپ ۲٪ کیف که کارت‌ها را گرد-و-خاک رد می‌کرد) حذف شد — محافظت حساب = اندازهٔ ثابت، گیت‌های ورودی باز${riskSkips > 0 ? ` · سابقهٔ گارد قدیم در لجر: ${riskSkips} ریسک-کپ` : ""}`}
+        >
+          مارجین ثابت {margin}$
+        </span>
+        {lastSkip && (
           <span
             className="rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 font-mono text-amber-500"
-            title={lastSkip?.why ? `آخرین رد: NX-${lastSkip.serial ?? "?"} — ${lastSkip.why} · گارد RISK-CAP (v1.4.4): نوتوینال × فاصلهٔ SL ≤ ۲٪ کیف صرافی؛ مارجینِ پس از کپ زیر کف ۱$ = معاملهٔ گرد-و-خاک و رد می‌شود — با equity 28$ فقط کارت‌های با SL-dist ≤~4.7% (در lev12) اجرا می‌شوند` : "گارد RISK-CAP (v1.4.4): نوتوینال × فاصلهٔ SL ≤ ۲٪ کیف صرافی؛ مارجینِ پس از کپ زیر کف ۱$ رد می‌شود"}
+            title={`آخرین رد گیت: NX-${lastSkip.serial ?? "?"} — ${lastSkip.why ?? ""}`}
           >
-            {riskSkips} ریسک-کپ
+            آخرین رد: NX-{lastSkip.serial ?? "?"}
           </span>
         )}
         {(d?.violationsN ?? 0) > 0 ? (
