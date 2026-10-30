@@ -266,8 +266,11 @@ function connectBybit(): void {
 // SELL → LONG wrecked → "SELL"; posSide=short & side=buy → "BUY".
 const OKX_REST = "https://www.okx.com/api/v5/public/liquidation-orders";
 const OKX_INSTS_URL = "https://www.okx.com/api/v5/public/instruments?instType=SWAP";
+const OKX_TICKERS_URL = "https://www.okx.com/api/v5/market/tickers?instType=SWAP";
 const OKX_POLL_MS = 12_000;
-const OKX_CONCURRENCY = 8;
+const OKX_CONCURRENCY = 4;
+const OKX_WORKER_GAP_MS = 180; // per-worker inter-request gap — the endpoint is rate-limited (measured 50011/51014 on an unthrottled 53-burst); 4 workers × (fetch+180ms) ≈ ≤20req/2s
+const OKX_MAX_SYMBOLS = 120; // 54 curated majors + top-volume OKX USDT swaps — market-wide coverage shrinks false "quiet-tape" stalls (2min STALL_MS honest semantics)
 interface OkxTarget { instId: string; binanceSym: string; ctVal: number }
 let okxTargets: OkxTarget[] = [];
 const okxLastTs = new Map<string, number>(); // instId → newest ts already ingested
@@ -297,7 +300,30 @@ async function okxBuildTargets(): Promise<void> {
       if (!inst) continue; // not on OKX — honest skip
       okxTargets.push({ instId, binanceSym: sym, ctVal: Number(inst.ctVal) || 0 });
     }
-    console.log(`[liq-service] okx lane-4 targets ready — ${okxTargets.length}/${FORCE_SYMBOLS.length} symbols mapped (ctVal ×${okxTargets.length ? "ok" : "MISS"})`);
+    // v3.2.2 coverage extension — the 54 curated majors alone go quiet for
+    // minutes at a time (measured: OKX filled-liq window flat 22:19→22:35 with
+    // BTC newest 16min old) and trip the honest 2min STALL_MS. Extend with the
+    // top-volume OKX USDT swaps (same symbol style; skip existing) so the ring
+    // approximates the market-wide !forceOrder@arr fidelity the feed was born with.
+    try {
+      const tk = await okxFetchJson(OKX_TICKERS_URL);
+      const tickers: Array<{ instId?: string; volCcy24h?: string }> = Array.isArray(tk?.data) ? tk.data : [];
+      const have = new Set(okxTargets.map((t) => t.instId));
+      const ranked = tickers
+        .filter((t) => t.instId?.endsWith("-USDT-SWAP") && !have.has(t.instId) && Number(t.volCcy24h ?? 0) > 0)
+        .sort((a, b) => Number(b.volCcy24h ?? 0) - Number(a.volCcy24h ?? 0));
+      for (const t of ranked) {
+        if (okxTargets.length >= OKX_MAX_SYMBOLS) break;
+        const instId = t.instId!;
+        const inst = byInst.get(instId);
+        if (!inst) continue;
+        const base = instId.replace("-USDT-SWAP", "");
+        okxTargets.push({ instId, binanceSym: `${base}USDT`, ctVal: Number(inst.ctVal) || 0 });
+      }
+    } catch {
+      /* tickers extension is best-effort — the 54 majors still stand */
+    }
+    console.log(`[liq-service] okx lane-4 targets ready — ${okxTargets.length} symbols (${FORCE_SYMBOLS.length} curated + ${okxTargets.length - FORCE_SYMBOLS.length >= 0 ? okxTargets.length - FORCE_SYMBOLS.length : 0} volume-extended)`);
   } catch (err) {
     console.error("[liq-service] okx instruments load failed — retry 30s", err);
     setTimeout(okxBuildTargets, 30_000);
@@ -331,8 +357,14 @@ function okxIngestPoll(instId: string, binanceSym: string, ctVal: number, rows: 
     added++;
   }
   if (newest > last) okxLastTs.set(instId, newest);
+  if (instId === "BTC-USDT-SWAP" && Date.now() - lastOkxDbgAt > 60_000) {
+    lastOkxDbgAt = Date.now();
+    const fresh = rows.filter((x) => Number(x.ts ?? 0) > last).length;
+    console.log(`[okx-dbg] BTC rows=${rows.length} fresh(>cursor)=${fresh} cursor=${new Date(last).toISOString()} newestRow=${rows.length ? new Date(Number(rows[0]?.ts ?? 0)).toISOString() : "-"}`);
+  }
   return added;
 }
+let lastOkxDbgAt = 0;
 
 async function okxPollOnce(target: OkxTarget): Promise<boolean> {
   try {
