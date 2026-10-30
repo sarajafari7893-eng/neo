@@ -99,7 +99,19 @@ import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSyn
 //      for strictly ± PnL.
 //   ⑤ CFG-ACTIVATE quiet-if-unchanged — the migration audited 5× in a boot
 //      storm; now audits only when a value actually changes.
-const VER = "toobit-bridge 1.5.1";
+// v1.5.2 EXECUTION AUDIT CONT. (operator order trace 1a18a3d78b89dfbd — «کامل
+//   و مهندسی ممیزی — باگ اجرا وجود نداشته باشد» + fresh API keys installed):
+//   ① KEYS RESTORED — the wiped .env was THE no-live-position root cause
+//      (mode PAPER while liveApproved=true; boot log proved it). Fresh keys
+//      installed (gitignored mini-services/*/.env, mode 600) → armed LIVE,
+//      balance $33.007, reconciliation (راستی‌آزمایی) alive again.
+//   ② TRACK-ALL FIX — pre-1.5.2 only the LAST 40 open intents were lifecycle-
+//      tracked (.slice(-TRACK_LIMIT)); with UNLIMITED concurrency (v1.4.1)
+//      intent #41+ lost ALL TP1/TP2/TP3/SL/EXPIRED mirroring to the exchange
+//      (the «سیگنالی صادر نشده» class). Every open intent is now tracked;
+//      IN-clause chunked at 400 (SQLite placeholder safety) in pollCards
+//      AND doctrineScan.
+const VER = "toobit-bridge 1.5.2";
 // v1.4.3 (operator order trace 1a172ca1af260c0d — «مارجین 5$/$0.5 به‌جای 10$، چرا هیچ سیگنالی در سود بسته نشده، وضعیت NX-3139 در لایو متفاوت است — اقدامات حیاتی فوری»):
 //   Forensics proved FOUR independent root causes, all fixed here:
 //   ① CONTRACT-MULTIPLIER SIZING BUG (the $0.5 margin) — exchangeInfo carries
@@ -186,8 +198,8 @@ const BASE = "https://api.toobit.com";
 const POLL_MS = 1500;
 const RECON_MS = 15_000; // v1.1.0 (operator mandate): راستی‌آزمایی حساب با کمترین اختلاف زمانی — 30s → 15s
 const STALE_SKIP_MS = 10 * 60_000; // a card older than this at first sight is never executed
-const TRACK_LIMIT = 40;
 const METRICS_WINDOW = 50;
+const IN_CHUNK = 400; // v1.5.2 — SQLite IN-clause chunk size (placeholder limit safety)
 
 interface BridgeConfig {
   notionalUsdt: number;   // LEGACY (pre-1.1.0 sizing) — kept only for old persisted state; UI must read marginUsdt × cardLev instead
@@ -1069,12 +1081,19 @@ async function pollCards(): Promise<void> {
     }
 
     // ② tracked cards → status transitions
+    // v1.5.2 TRACK-ALL FIX (trace 1a18a0e79bbf5ec5 — باگ اجرایی): pre-1.5.2 only
+    // the LAST 40 open intents were tracked (.slice(-TRACK_LIMIT)); with the
+    // UNLIMITED-CONCURRENCY mandate (v1.4.1, maxConcurrent=0) intent #41+ lost
+    // ALL lifecycle mirroring — its TP1/TP2/TP3/SL/EXPIRED never reached the
+    // exchange (سیگنالی صادر نشده class). Now EVERY open intent is tracked;
+    // the IN-clause is chunked so SQLite placeholder limits cannot bite.
     const liveIds = Object.keys(S.intents).filter((id) => {
       const st = S.intents[id]?.status;
       return st === "OPENING" || st === "OPEN";
-    }).slice(-TRACK_LIMIT);
+    });
     if (liveIds.length > 0) {
-      const rows = fetchCardsByIds(liveIds);
+      const rows: CardRow[] = [];
+      for (let i = 0; i < liveIds.length; i += IN_CHUNK) rows.push(...fetchCardsByIds(liveIds.slice(i, i + IN_CHUNK)));
       const byId = new Map(rows.map((r) => [r.id, r]));
       for (const id of liveIds) {
         const it = S.intents[id]!;
@@ -1340,7 +1359,9 @@ async function doctrineScan(): Promise<void> {
     }
     const openIntents = Object.values(S.intents).filter((i) => i.status === "OPEN" || i.status === "OPENING");
     if (openIntents.length > 0) {
-      const rows = fetchCardsByIds(openIntents.map((i) => i.cardId));
+      const allIds = openIntents.map((i) => i.cardId);
+      const rows: CardRow[] = [];
+      for (let i = 0; i < allIds.length; i += IN_CHUNK) rows.push(...fetchCardsByIds(allIds.slice(i, i + IN_CHUNK))); // v1.5.2 chunked
       const byId = new Map(rows.map((r) => [r.id, r]));
       for (const it of openIntents) {
         const c = byId.get(it.cardId);
