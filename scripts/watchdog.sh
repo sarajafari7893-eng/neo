@@ -313,17 +313,45 @@ one_cycle() {
   # The rollback left a live-but-deaf ws proc (files swapped under it). Manual
   # spawns die with their session; owned spawns persist. Graceful degradation
   # in the app stays, but a healable ws beats a permanent REST-poll demotion.
+  # v14.1 RING-FRESHNESS probe (operator drought trace 1a18c926cd7742fd):
+  #   port-up ≠ rings-up. On 10-30 a deaf proc answered :3003 with HTTP 200 for
+  #   ~5h (10:14→15:00 Tehran) while BOTH quote rings were dead — futws froze
+  #   at 43 rows (10:14) and the dashboard FUTWS plane starved on "WARMING".
+  #   The probe below now ALSO reads the ring's product file: futws-quotes.json
+  #   is pushed every 3s, so mtime >120s = deaf rings REGARDLESS of the port.
+  #   Kill is by listening port (the proc's cmdline is just "bun index.ts" —
+  #   `pkill -f price-ws` never matched anything; the old kill was a no-op and
+  #   the respawn lost the port race silently). 180s post-spawn grace keeps the
+  #   staggered ring warm-up out of the staleness verdict.
   local wcode; wcode=$(probe http://localhost:3003/ 5)
-  if [ "$wcode" != "200" ] && [ "$wcode" != "400" ]; then
-    local wlast; wlast=$(getk last_ws_spawn)
+  local wring_stale=0
+  local wfile="$PROJECT/.data/futws-quotes.json"
+  if [ -f "$wfile" ]; then
+    local wmt; wmt=$(stat -c %Y "$wfile" 2>/dev/null || echo 0)
+    [ $(( $(date +%s) - ${wmt:-0} )) -gt 120 ] && wring_stale=1
+  else
+    wring_stale=1
+  fi
+  local wlast; wlast=$(getk last_ws_spawn)
+  local wport_down=0
+  { [ "$wcode" != "200" ] && [ "$wcode" != "400" ]; } && wport_down=1
+  # ring-staleness only counts once a fresh spawn had its warm-up window
+  { [ "$wring_stale" = "1" ] && [ $(( now - ${wlast:-0} )) -ge 180 ]; } && wport_down=1
+  if [ "$wport_down" = "1" ]; then
     if [ $(( now - ${wlast:-0} )) -ge 300 ]; then
       # v10.16 audit: cross-layer ledger (same contract as bridge heal)
       local wl2; wl2=$(cat "$PROJECT/.data/p0-watchdog/heal-ws" 2>/dev/null || echo 0); wl2="${wl2%%:*}"
       if [ $(( now - ${wl2:-0} )) -lt 300 ]; then
         say "HEAL SKIP: price-ws healed <300s ago by layer-1 (cross-layer ledger)"
       else
-        say "PRICE-WS DEAF (http:$wcode, proc alive?) — kill + respawn (owned by watchdog)"
-        pkill -f "price-ws" 2>/dev/null
+        if [ "$wring_stale" = "1" ] && [ "$wcode" = "200" -o "$wcode" = "400" ]; then
+          say "PRICE-WS RING-STALE (port:$wcode ok but futws file >120s — deaf rings, product is the file) — kill + respawn (owned by watchdog)"
+        else
+          say "PRICE-WS DEAF (http:$wcode, proc alive?) — kill + respawn (owned by watchdog)"
+        fi
+        # kill by LISTENING PORT — cmdline is "bun index.ts", name-matches never hit it
+        ss -tlnp 2>/dev/null | grep -E ':3003\b' | grep -o 'pid=[0-9]*' | cut -d= -f2 | sort -u | xargs -r kill 2>/dev/null
+        sleep 1
         ( cd "$PROJECT/mini-services/price-ws" && setsid bash -c 'exec bun index.ts' </dev/null 9>&- >> /tmp/ws-wd.out 2>&1 & )
         setk last_ws_spawn "$now"
         echo "$now:$$" > "$PROJECT/.data/p0-watchdog/heal-ws" 2>/dev/null
