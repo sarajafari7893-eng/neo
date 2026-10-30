@@ -2,15 +2,15 @@
  "ver": "supervisor-cron 1.6.0",
  "pid": 2503,
  "startedAt": "2026-10-30T18:01:13.747Z",
- "updatedAt": "2026-10-30T20:46:01.084Z",
+ "updatedAt": "2026-10-30T20:56:01.729Z",
  "jobs": {
   "sweep": {
-   "lastRunAt": 1793393160935,
+   "lastRunAt": 1793393760935,
    "nextRunAt": 1793393760935,
    "lastStatus": "ok",
-   "lastDurationMs": 147,
+   "lastDurationMs": 794,
    "lastError": null,
-   "runs": 340,
+   "runs": 341,
    "failures": 0
   },
   "progress": {
@@ -59,29 +59,29 @@
    "failures": 0
   },
   "keepwarm": {
-   "lastRunAt": 1793393160935,
-   "nextRunAt": 1793393160935,
-   "lastStatus": "ok",
-   "lastDurationMs": 149,
-   "lastError": null,
-   "runs": 600,
-   "failures": 111
+   "lastRunAt": 1793393760935,
+   "nextRunAt": 1793394060935,
+   "lastStatus": "error",
+   "lastDurationMs": 4,
+   "lastError": "HEARTBEAT COLD app:3000 2ms streak=1",
+   "runs": 602,
+   "failures": 112
   }
  },
  "lastSweep": {
-  "at": "2026-10-30T20:46:01.082Z",
-  "verdict": "AMBER",
-  "reason": "sentinel :3030 verdict AMBER · toobit-bridge doctrine: 5 violation(s) — last=MIRROR-LAG: card=EXPIRED but intent still OPEN 8719s — pollCards transition should have fired",
+  "at": "2026-10-30T20:56:01.086Z",
+  "verdict": "RED",
+  "reason": "app :3000 down",
   "services": {
    "app": {
-    "up": true,
-    "status": 200,
-    "ms": 119
+    "up": false,
+    "status": null,
+    "ms": 1
    },
    "liq": {
     "up": true,
     "status": 200,
-    "ms": 1
+    "ms": 3
    },
    "trade": {
     "up": true,
@@ -91,35 +91,40 @@
    "armor": {
     "up": true,
     "status": 200,
-    "ms": 0
+    "ms": 5
    },
    "watchdog": {
     "up": true,
     "status": 200,
-    "ms": 2
+    "ms": 1
    },
    "sentinel": {
     "up": true,
     "status": 200,
-    "ms": 0
+    "ms": 1
    },
    "ws": {
     "up": true,
     "status": 400,
-    "ms": 1
+    "ms": 2
    },
    "bridge": {
     "up": true,
     "status": 200,
-    "ms": 1
+    "ms": 0
    },
    "tbt": {
     "up": true,
     "status": 200,
-    "ms": 0
+    "ms": 1
    }
   },
   "anomalies": [
+   {
+    "class": "app-down",
+    "sev": "crit",
+    "msg": "app :3000 DOWN (HTTP unreachable) · healthz=err → pulse fallback"
+   },
    {
     "class": "sentinel-amber",
     "sev": "warn",
@@ -154,45 +159,24 @@
   "newN": 0
  },
  "lastKeepwarm": {
-  "at": "2026-10-30T20:46:01.084Z",
-  "ok": true,
-  "ms": 149,
-  "bootAt": "2026-10-30T20:45:11.566Z",
-  "gitSha": "9560c97",
-  "coldStreak": 0
+  "at": "2026-10-30T20:56:00.938Z",
+  "ok": false,
+  "ms": 2,
+  "bootAt": null,
+  "gitSha": null,
+  "coldStreak": 1
  },
- "coldStreak": 0,
+ "coldStreak": 1,
  "alertLedger": {
   "sentinel-red": 1793392561224,
   "review-llm-unavailable": 1793358042357,
-  "app-down": 1793380562931,
+  "app-down": 1793393761728,
   "data-stale": 1793312163333,
   "tbt-doctrine-violation": 1793392561466
  },
  "wsDownStreak": 0,
  "staleStreak": 0,
  "history": [
-  {
-   "id": "keepwarm",
-   "at": 1793383860935,
-   "status": "ok",
-   "durationMs": 23,
-   "detail": "HEARTBEAT OK 23ms boot=18:01:31Z sha=ba6327c"
-  },
-  {
-   "id": "keepwarm",
-   "at": 1793384160935,
-   "status": "ok",
-   "durationMs": 26,
-   "detail": "HEARTBEAT OK 26ms boot=18:13:40Z sha=ba6327c"
-  },
-  {
-   "id": "sweep",
-   "at": 1793384160935,
-   "status": "ok",
-   "durationMs": 45,
-   "detail": "AMBER: sentinel :3030 verdict AMBER · toobit-bridge doctrine: 5 violation(s) — last=MIRROR-LAG: card=EXPIRED but intent still O"
-  },
   {
    "id": "keepwarm",
    "at": 1793384460935,
@@ -521,6 +505,27 @@
    "status": "ok",
    "durationMs": 149,
    "detail": "HEARTBEAT OK 149ms boot=20:45:11Z sha=9560c97"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1793393460936,
+   "status": "ok",
+   "durationMs": 95,
+   "detail": "HEARTBEAT OK 95ms boot=20:49:41Z sha=39a26e4"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1793393760935,
+   "status": "error",
+   "durationMs": 4,
+   "detail": "HEARTBEAT COLD app:3000 2ms streak=1"
+  },
+  {
+   "id": "sweep",
+   "at": 1793393760935,
+   "status": "ok",
+   "durationMs": 794,
+   "detail": "RED: app :3000 down"
   }
  ],
  "watchRuns": [
