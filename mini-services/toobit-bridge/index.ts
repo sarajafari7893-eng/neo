@@ -1326,6 +1326,18 @@ async function doctrineScan(): Promise<void> {
   doctrineBusy = true;
   try {
     const now = Date.now();
+    // v1.5.1 — the violations list is CURRENT doctrine health (the dashboard
+    // badge reads it), not history: audit.jsonl keeps the full trail forever.
+    // A 9-day-old NOTIONAL-DELTA from the pre-multiplier era was rendering as
+    // «1 تخلف دکترین» on today's clean doctrine — prune anything older than 7d.
+    if (S.doctrine.violations.length > 0) {
+      const cut = now - 7 * 24 * 3_600_000;
+      const kept = S.doctrine.violations.filter((v) => v.at >= cut);
+      if (kept.length !== S.doctrine.violations.length) {
+        audit("DOCTRINE-PRUNE", { pruned: S.doctrine.violations.length - kept.length, kept: kept.length, note: "stale violations (>7d) pruned from the live badge; full trail remains in audit.jsonl" });
+        S.doctrine.violations = kept;
+      }
+    }
     const openIntents = Object.values(S.intents).filter((i) => i.status === "OPEN" || i.status === "OPENING");
     if (openIntents.length > 0) {
       const rows = fetchCardsByIds(openIntents.map((i) => i.cardId));
