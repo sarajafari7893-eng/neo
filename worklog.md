@@ -32950,3 +32950,31 @@ Stage Summary:
 - حادثهٔ چهارم پاک‌شدن کلید توسط restore پلتفرم در ابتدای همین مأموریت کشف شد (`keysInstalled:false`، mode PAPER) — کلیدها مجدداً نصب شدند (mode 600) و بریج روی کد جدید بوت: **ver 1.6.0 / LIVE / keysInstalled ✅ / wallet 28.0877$ / marginUsdt 2 / cfgRev 6 / رویداد CFG-GATE-OPEN در ژورنال**.
 - گیت‌های ورودی باز: drift≤80bps، age≤90s، concurrency نامحدود، dust-skip منقرض؛ صفر پوزیشن باز هنگام سواپ (پنجرهٔ امن)؛ نمونهٔ تک (PID 24239، :3021، respawn خودکار واچ‌داگ با کد جدید).
 - پروکسی اپ: `/api/toobit-bridge` و `/journal` هر دو 1.6.0/LIVE/مارجین ۲$ را می‌خوانند. lint=17 پایه (صفر جدید). حساب PAPER دست‌نخورده: 4W/0L، equity 8.777$.
+
+## 2026-10-30 — LIQ-REVIVE v3.2.1 + SPOT-RING بوت + ریشه‌یابی عددی خشکسالی سیگنال (trace 1a18eba43d494571)
+
+**فرمان اپراتور:** «چرا سیستم همچنان قادر به ردیابی و تولید سیگنال نیست؟ آیا اتصال بایننس فیوچرز پایدار است؟ liq feed بدون دیتاست — آیا می‌توان از دیتای TOOBIT استفاده کرد؟»
+
+### ① ماتریس اثبات egress — چرا liq خشک بود (همه با پروب زنده 30 اکتبر)
+- **بایننس forceOrder (همه لِین‌ها)**: سوکت باز + ACK subscribe می‌رسد ولی **صفر فریم دیتا** (پروب ۴۵s روی `!forceOrder@arr` و `btcusdt@forceOrder` = صفر، درحالی‌که bookTicker/aggTrade همان هاست جریان دارند). رینگ ۵۴-سوکتی ۳.۶ ساعت با events=0 — از نظر آماری غیرممکن روی پِیپ سالم. نتیجه: egress سندباکس **فقط کانال‌های liquidation را ساکت می‌کند** (از ~۱۰-۲۸).
+- **Bybit allLiquidation**: ACK موفق ولی صفر فریم در ۱۲۰s؛ کانال کنترل `publicTrade.BTCUSDT` در همان سوکت ۴۰۸ فریم داد — فیلتر قطعی مختص liquidation، نه قطعی کلی. (پروب اولیهٔ «۱۲۷۳ فریم» معیوب بود: ping-per-message حلقهٔ pong ساخته بود — پروب تمیز جایگزین شد.)
+- **TOOBIT — پاسخ صریح به اپراتور: خیر**. فرمت رسمی WS (`{event:"sub",topic,symbol,params}` روی `stream.toobit.com/quote/ws/v1`) زنده راستی‌آزمایی شد — stream ترید BTC-SWAP-USDT جریان دارد ولی topicهای `liquidation`/`forceOrder` هر دو «Invalid topic». کتابخانهٔ رسمی کامل (JKorf/Toobit.Net) فقط trade/kline/ticker/orderbook/orders/positions دارد؛ دموی رسمی REST هم هیچ endpoint لیکوییدیشن بازار ندارد. تنها دیتای لیکوییدیشن تووبیت، forceOrders حساب خودی است (خصوصی — برای recon بریج استفاده می‌شود، برای فید بازار بی‌ارزش). ۱۰۳۸ قرارداد پرپ و پوش REST سالم است ولی **دیتای liq ندارد**.
+
+### ② فیکس v3.2.1 — لِین ④: پولر REST بهینه (OKX) + پارک لِین‌های مرده
+- **OKX REST `liquidation-orders` تنها منبع جاری**: پروب موفق (`uly=BTC-USDT&state=filled` → فیل‌های واقعی bkPx/posSide/sz). پیاده‌سازی در liq-service: ۵۳ نماد از لیست ۵۴تایی مپ شد (SYM-USDT-SWAP؛ ۱ نماد روی OKX نیست — skip صادقانه)، سایکل ۱۲s با همروندی محدود ۸ (خارج از لیمیت OKX)، تبدیل قرارداد `sz × ctVal` (BTC=0.01، ETH=0.1، …)، گیت کرسر ts-per-instId + دی‌دوپ کامپوزیت + **گیت تازگی ۳۰ دقیقه** (endpoint تا ۱۰۰ فیل تاریخچه برمی‌گرداند — بوت دیگر با تاریخچه کهنه seed نمی‌شود)، نگاشت سمت یکسان با کنوانسیون بایننس (posSide=long & side=sell ⇒ SELL = لانگ نابود).
+- نتیجهٔ زنده: **۳۷۵۶+ رویداد واقعی** در رینگ، stalled=false، bySymbol ۱۰m واقعی (DOGE ۱۱k$، AAVE، ORDI…). پروکسی اپ `online:true`؛ ردیف UI **«LIQ FEED | CONNECTED 18»** با مرورگر راستی‌آزمایی شد.
+- **پارک لِین‌های مرده**: رینگ ۵۴-سوکتی بایننس + میرور Bybit پشت `LIQ_MUTED_LANES=1` پارک شدند (۵۵ سوکت صفر-بازده حذف — RAM این باکس ۴GB است و OOM-killer در churn، liq را یک‌بار کشت). کد باقی است؛ اگر egress عوض شود با یک env مسلح می‌شوند. لِین-1 (arr تک‌سوکت) و heartbeat طبق قبل مسلح‌اند.
+- **نگاشتSymbols باگ اولیه**: `BTCUSDT-USDT-SWAP` → فیکس به strip پسوند USDT؛ پارامتر endpoint هم `instId` نمی‌پذیرد (کد 50015) — فقط `uly`/`instFamily`.
+- **معماری هیل تک‌مرجع ماند**: P2.8 پیشنهادی برای watchdog.sh بعد از کشف اینکه **سرویس p0-watchdog :3020 خودش healer مجاز liq است** (v1.2.0+، probe /health + healCmd، cooldown 120s) حذف و به کامنت توضیحی تبدیل شد — زنده هم اثبات شد: همین سرویس liq کشته‌شدهٔ OOM را بی‌فرمان respawn کرد. دو هیلر = دوبوت EADDRINUSE.
+
+### ③ فیکس دوم — رگرسیون spot-ring در price-ws v13.5.2
+- v13.5.1 تابع `connectSpotWs()` را تعریف می‌کرد ولی **هرگز صدا نمی‌زد** — پلین اسپات در این build مرده به دنیا آمده بود (spotws-quotes.json منجمد در آخرین نوشتار پروسهٔ قبلی؛ ونوی BINANCE-SPOT و push spot-prints گرسنه). فیکس: بوت ring در بوت‌سکشن؛ `pushSpotPrints` (هر ۳s، از قبل زمان‌بندی‌شده) مالکیت فایل را پس گرفت → spotws دوباره ۴۷۴ ردیف تازه (age 0s). futws هم ۴۳ نماد age 0s.
+
+### ④ پاسخ دو پرسش دیگر اپراتور (اثبات عددی، بدون تغییر کد موتور)
+- **«اتصال بایننس پایدار است؟»** بله برای دیتا: futws ۴۳ نماد تازه (age ≤3s)، spotws ۴۷۴ ردیف تازه، heartbeat aggTrade زنده. **REST fapi هم از بن درآمده** (exchangeInfo 200 با ۹۴۲ نماد شامل PARTIUSDT؛ کندل 1m تازه) — پلین SPOT-MIRROR می‌تواند بعداً به دیتای فیوچرزی واقعی برگردد (تصمیم جدا، این مأموریت انجام نشد). تنها مسیر مرده، forceOrder WS است (بند ①).
+- **«چرا سیگنال تولید نمی‌شود؟»** موتور زنده است: ۱۱,۴۸۰ رویداد ENGINE در ۵ ساعت، L1-sweep فعال (ETH/SOL/BTC/ZEC ثبت در باس سوخت). خشکسالی = **گیت Memory دکتترین v13.2 CORE-REVERT** (داخل engine.ts — FLAT-10): وتوی کامبوهای انتظار-منفی. اعداد ۵ ساعت: TAOUSDT ×۳۴۵ (exp −4.6% n=20)، INJUSDT ×۳۰۵ (−7.0% n=13)، SUIUSDT ×۲۸۵ (−5.1% n=18)، SOLUSDT ×۲۲۲ (−4.9% n=12)، FETUSDT ×۱۶۷ (−4.8% n=17) — جمع ۵ نماد ≈ ۱۳۲۶ وتو. کتاب EPOCH-2 در دورهٔ باخت این کامبوها را منفی کرده؛ گیت تا بهبود پنجرهٔ rolling (یا cooldown ضد-بن‌بست G5) رد می‌کند. ۱ سیگنال در ۶ ساعت (#3214 PARTIUSDT → SL). این «خرابی» نیست؛ «فیلتر ضعف با دیتای موجود» دقیقاً طبق فرمان قبلی اپراتور است. اگر اپراتور بخواهد آستانهٔ Memory شل شود، این تصمیم صریح می‌خواهد (تغییر engine.ts ممنوع؛ مسیر EngineSetting/DB-knob بررسی می‌شود).
+
+### ⑤ دامنهٔ تغییر و راستی‌آزمایی
+- فایل‌ها: `mini-services/liq-service/index.ts` (v3.2.1)، `mini-services/price-ws/index.ts` (v13.5.2)، `scripts/watchdog.sh` (کامنت معماری — بدون هیل جدید). **FLAT-10 (engine.ts) بایت‌به‌بایت دست‌نخورده.**
+- راستی‌آزمایی زنده: :3010/liquidations (okx ۱۴ رویداد تازه، stalled=false) → :3000/api/liquidations online:true → pulse.feed.liq {online,connected,stalled:false,buffered} → **UI مرورگری: «LIQ FEED | CONNECTED 18»**. spotws/futws هر دو age 0s. lint=۱۷ پایه (صفر جدید).
+- محدودیت محیط ثبت‌شده: next-server در همین پنجره دو بار recycle شد (یک‌بار با 2.5GB RSS توسط OOM) — heal-chain هر بار ≤60s برگرداند؛ الگوی مزمن، جدا از این فیکس‌ها.
