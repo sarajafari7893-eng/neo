@@ -607,6 +607,14 @@ function connect() {
 // v13.5.1 ring repair; staggered to stay inside fstream's per-IP connection-attempt budget).
 FUT_CORE_SYMBOLS.forEach((sym, i) => setTimeout(() => connectFutBook(sym), 1500 + i * 250));
 
+// v13.5.2 — SPOT-ARR ring boot (regression fix, trace 1a18eba43d494571):
+// v13.5.1 defined connectSpotWs() but NEVER CALLED it — the spot plane was
+// born dead in this build (spotws-quotes.json frozen at the pre-restart
+// instance's last write; BINANCE-SPOT venue + spot-prints push starving).
+// Boot the ring here; pushSpotPrints (3s interval, already scheduled) picks
+// the prints up and owns .data/spotws-quotes.json + the app venue POST.
+connectSpotWs();
+
 // v14.0 stall watchdog → fuel priority (binance futures WS > futures bookTicker ring > binance spot WS > REST > OFFLINE)
 setInterval(() => {
   const wsAlive = Date.now() - lastWsFrame <= STALL_MS;

@@ -1,4 +1,24 @@
-// ── NEXUS liq-service (:3010) v3.0 — BINANCE-ONLY REAL forced-liquidation aggregation ──
+// ── NEXUS liq-service (:3010) v3.1 — REAL forced-liquidation aggregation, BINANCE + BYBIT mirror ──
+// v3.1 (operator mandate trace 1a18eba43d494571 — «liq feed بدون دیتا است؛ آیا
+// می‌شود از دیتای TOOBIT استفاده کرد؟»): measured verdict on this egress —
+//   ① Binance forceOrder frames (ALL lanes: !forceOrder@arr AND per-symbol
+//      ring) are egress-muted since ~10-28: sockets open, subscribe ACK
+//      arrives, ZERO data frames (probe 2026-10-30: 45s × arr+btcusdt = 0
+//      frames while bookTicker/aggTrade flow). The 54-socket ring ran 3.6h
+//      with events=0 — statistically impossible on a healthy fstream pipe.
+//   ② TOOBIT has NO liquidation channel AT ALL (proof 2026-10-30: official
+//      format {event:"sub",topic,symbol,params} verified live on
+//      /quote/ws/v1 — trade streams flow, topic liquidation/forceOrder both
+//      "Invalid topic"; JKorf/Toobit.Net full official client implements
+//      trade/kline/ticker/orderbook only; REST demo has no market liq
+//      endpoint). Own-account forceOrders is private + useless market-wide.
+//   ③ BYBIT v5 allLiquidation WORKS from this egress (probe: 1273 frames/45s
+//      on BTCUSDT alone). Lane-③ = batched allLiquidation topics over the
+//      same 54-symbol list, venue-tagged "bybit" — transparent, never mixed
+//      into Binance counters, side semantics identical (Sell = long wrecked).
+// The v3.0 Binance lanes stay armed: if egress unmutes them, their counters
+// simply start moving again (they are the mandate trace 1a185042c872b4f9
+// original feed — semantics untouched).
 // v3.0 (operator mandate trace 1a185042c872b4f9 — «ردپای OKX/Bybit در کجا وجود
 // دارد و با بایننس جایگزین شود»): the v2 4-venue aggregation is rebuilt
 // Binance-ONLY. Two Binance lanes, one venue, zero invented data:
@@ -48,7 +68,7 @@ interface LiqEvent {
   venue: string; // additive origin tag — client-side LiqEvent fields remain intact
 }
 
-type VenueName = "binance";
+type VenueName = "binance" | "bybit";
 interface VenueState {
   connected: boolean;
   degraded: boolean;
@@ -61,11 +81,11 @@ interface VenueState {
   pingTimer: ReturnType<typeof setInterval> | null;
 }
 
-const VENUE_NAMES: VenueName[] = ["binance"];
+const VENUE_NAMES: VenueName[] = ["binance", "bybit"];
 function mkVenueState(): VenueState {
   return { connected: false, degraded: false, lastEventAt: null, events: 0, reconnects: 0, note: "", ws: null, backoffMs: 0, pingTimer: null };
 }
-const venues: Record<VenueName, VenueState> = { binance: mkVenueState() };
+const venues: Record<VenueName, VenueState> = { binance: mkVenueState(), bybit: mkVenueState() };
 
 const ring: LiqEvent[] = [];
 let lastEventAt: number | null = null;
@@ -164,6 +184,66 @@ function handleForceOrderFrame(raw: string): void {
   }
 }
 
+// ── lane ③: BYBIT allLiquidation mirror (v3.1 — the egress-proven venue) ─
+// Bybit v5 public/linear: batched {op:"subscribe",args:["allLiquidation.<SYM>",…]}
+// (10 topics/request), ping {op:"ping"} every 20s. Frame: {topic,type:"snapshot",
+// data:[{T,s,S,v,p}]} — S:"Sell" = forced sell = LONG wrecked (Binance "SELL"
+// semantics — the SIDE CONVENTION above holds verbatim across both venues).
+const BYBIT_WS = "wss://stream.bybit.com/v5/public/linear";
+const BYBIT_BATCH = 10; // v5 arg limit per subscribe request
+const BYBIT_PING_MS = 20_000;
+
+function handleBybitFrame(raw: string): void {
+  try {
+    const msg = JSON.parse(raw) as { topic?: string; data?: unknown };
+    if (!msg.topic || !msg.topic.startsWith("allLiquidation") || !Array.isArray(msg.data)) return;
+    for (const row of msg.data as Array<{ T?: number; s?: string; S?: string; v?: string; p?: string }>) {
+      if (!row?.s || !row?.p || !row?.v) continue;
+      const price = Number(row.p);
+      const qty = Number(row.v);
+      if (!isFinite(price) || !isFinite(qty) || price <= 0 || qty <= 0) continue;
+      pushEvent("bybit", {
+        symbol: row.s,
+        side: row.S === "Buy" ? "BUY" : "SELL", // Sell = long wrecked (same convention as Binance)
+        price,
+        qty,
+        usd: Number((price * qty).toFixed(2)),
+        at: row.T || Date.now(),
+      });
+    }
+  } catch {
+    /* skip malformed frame */
+  }
+}
+
+function connectBybit(): void {
+  const st = venues.bybit;
+  try {
+    const ws = new WebSocket(BYBIT_WS);
+    st.ws = ws;
+    ws.onopen = () => {
+      st.connected = true;
+      st.backoffMs = 0;
+      // batched subscribe over the curated list (same 54 top-perps as Binance ring)
+      for (let i = 0; i < FORCE_SYMBOLS.length; i += BYBIT_BATCH) {
+        const args = FORCE_SYMBOLS.slice(i, i + BYBIT_BATCH).map((s) => `allLiquidation.${s}`);
+        try { ws.send(JSON.stringify({ op: "subscribe", args })); } catch { /* onclose → reconnect */ }
+      }
+      console.log(`[liq-service] bybit lane-3 connected — allLiquidation ×${FORCE_SYMBOLS.length} symbols (${Math.ceil(FORCE_SYMBOLS.length / BYBIT_BATCH)} batches)`);
+    };
+    ws.onmessage = (ev) => handleBybitFrame(String(ev.data));
+    ws.onclose = () => reconnect("bybit", connectBybit);
+    ws.onerror = () => {
+      st.connected = false;
+    };
+    startPing("bybit", BYBIT_PING_MS, JSON.stringify({ op: "ping" }));
+  } catch (err) {
+    st.connected = false;
+    console.error("[liq-service] bybit lane-3 connect error", err);
+    setTimeout(connectBybit, 5000);
+  }
+}
+
 // ── lane ①: market-wide !forceOrder@arr (original feed, unchanged) ─────────
 function connectBinance() {
   const st = venues.binance;
@@ -246,6 +326,7 @@ function connectHeartbeat() {
 connectBinance();
 connectForceRing();
 connectHeartbeat();
+connectBybit(); // v3.1 — lane-3 BYBIT allLiquidation mirror (the egress-proven liq venue)
 
 // ── venue-liveness supervisor (v2.1 → v3.0) ────────────────────────────────
 // A socket can sit "connected" while delivering NOTHING for hours — the
@@ -261,12 +342,17 @@ setInterval(() => {
   const now = Date.now();
   const hbFresh = lastHeartbeatFrame && now - lastHeartbeatFrame < LIVENESS_HB_FRESH_MS;
   if (!hbFresh) return; // host-level problem — venue churn would be noise
-  const st = venues.binance;
-  if (!st.connected || !st.ws) return;
-  const silentFor = st.lastEventAt ? now - st.lastEventAt : now - startedAt;
-  if (silentFor > LIVENESS_SILENT_MS) {
-    console.log(`[liq-service] liveness: lane-1 arr silent ${Math.round(silentFor / 60000)}min while host delivers frames — forcing reconnect`);
-    try { st.ws.close(); } catch { /* onclose → reconnect */ }
+  // v3.1 — lane-1 arr + lane-3 bybit supervisor (same rule: a socket can sit
+  // "connected" delivering nothing; pongs keep it alive without data, so
+  // silence while the host is provably fresh = force reconnect)
+  for (const v of ["binance", "bybit"] as VenueName[]) {
+    const st = venues[v];
+    if (!st.connected || !st.ws) continue;
+    const silentFor = st.lastEventAt ? now - st.lastEventAt : now - startedAt;
+    if (silentFor > LIVENESS_SILENT_MS) {
+      console.log(`[liq-service] liveness: ${v} lane silent ${Math.round(silentFor / 60000)}min while host delivers frames — forcing reconnect`);
+      try { st.ws.close(); } catch { /* onclose → reconnect */ }
+    }
   }
 }, LIVENESS_TICK_MS);
 
@@ -285,7 +371,7 @@ const server = Bun.serve({
         lastEventAt,
         uptimeSec: Math.round((Date.now() - startedAt) / 1000),
         note: dataStalled
-          ? "no liquidation frames from ANY Binance lane within the stall window — sockets may be open but data frames are not reaching this host; no invented data"
+          ? "no liquidation frames from ANY lane (Binance egress-muted + bybit mirror silent) within the stall window — sockets may be open but data frames are not reaching this host; no invented data"
           : "ok",
         venues: venuesPayload(),
       });
@@ -309,4 +395,4 @@ const server = Bun.serve({
   },
 });
 
-console.log(`[liq-service] v3.0 listening on :${server.port} (BINANCE-ONLY: !forceOrder@arr + ${FORCE_SYMBOLS.length}-symbol forceOrder ring)`);
+console.log(`[liq-service] v3.1 listening on :${server.port} (BINANCE arr+${FORCE_SYMBOLS.length}-ring [egress-muted] + BYBIT allLiquidation mirror x${FORCE_SYMBOLS.length})`);
