@@ -21,6 +21,12 @@ import { cn } from "@/lib/utils";
  * margin $3 (paperBalanceUsdt anchor $3, equity = 3$ + Σ realized), paper
  * fills book REAL book PnL, and the card renders the full-event journal:
  * equity curve (recharts), since-boot event counters, and the raw trail.
+ * v1.5.1 (trace 1a18a0e79bbf5ec5 — «باگ اجرایی و محاسباتی»): ① the remaining-
+ * after-سیو-سود notional now multiplies contractMultiplier (qty is in CONTRACTS
+ * — pre-1.5.1 a ×0.01 symbol showed the remaining notional 100× too big);
+ * ② a بی‌کلید badge when keysInstalled=false — the honest cause of «no live
+ * position» (keys wiped by a sandbox recycle → LIVE+recon dead, PAPER only);
+ * ③ the downtime STALE-CARD skip counter is visible on the doctrine strip.
  * Feed: /api/toobit-bridge (5s) + /api/toobit-bridge/journal (8s).
  */
 
@@ -33,6 +39,7 @@ interface IntentDTO {
   closeReason: string | null;
   leverage?: number; levSrc?: string;
   expectedNotional?: number | null; actualNotional?: number | null;
+  contractMult?: number; // v1.5.1 — real notional = qty × price × mult (contracts!)
   entryDriftBps?: number | null; entryAgeMs?: number | null;
   protected?: boolean; cardStatus?: string;
   lat: { detectMs: number | null; execMs: number | null; totalMs: number | null; slipBps: number | null };
@@ -50,6 +57,7 @@ interface BridgeStatus {
   ok: boolean; bridge?: string; ver?: string;
   mode?: "LIVE" | "PAPER";
   liveApproved?: boolean;
+  keysInstalled?: boolean; // v1.5.1 — false = کلید صرافی گم‌شده، LIVE و راستی‌آزمایی حساب مرده
   balanceUsdt?: number | null;
   cfg?: { marginUsdt: number; maxConcurrent: number; tp1Frac: number; tp2Frac: number; leverage: number; execEnabled: boolean; paperBalanceUsdt?: number };
   openIntents?: IntentDTO[];
@@ -117,6 +125,8 @@ export default function ToobitBridgeCard() {
   const levMin = levs.length ? Math.min(...levs) : null;
   const levMax = levs.length ? Math.max(...levs) : null;
   const driftSkips = (d?.skipBy?.["ENTRY-DRIFT"] ?? 0) + (d?.skipBy?.["ENTRY-DELAY"] ?? 0);
+  const staleSkips = d?.skipBy?.["STALE-CARD"] ?? 0; // v1.5.1 — downtime births
+  const keysOk = data?.keysInstalled !== false;
   const lp = data?.livePnl;
   const netUsdt = lp ? lp.realizedClosedUsdt + lp.openUnrealizedUsdt : null;
   // v1.5.0 — fixed-$3 paper account (بالانس ثابت) + journal
@@ -134,6 +144,15 @@ export default function ToobitBridgeCard() {
           <h3 className="text-sm font-semibold tracking-wide truncate">TOOBIT EXEC BRIDGE</h3>
           <NeonBadge tone={live ? "magenta" : "neon"} glow={live}>{mode}</NeonBadge>
           {data?.cfg?.execEnabled ? null : <NeonBadge tone="amber">PAUSED</NeonBadge>}
+          {!keysOk && (
+            <NeonBadge
+              tone="amber"
+              glow={false}
+              title="کلیدهای API صرافی یافت نشد (فایل .env پس از recycle سندباکس پاک شده) — اجرای LIVE و راستی‌آزمایی حساب غیرفعال است؛ فقط PAPER کار می‌کند. بازگردانی کلید → پوشهٔ سرویس، فایل .env"
+            >
+              بی‌کلید
+            </NeonBadge>
+          )}
         </div>
         <Radio className="h-4 w-4 text-muted-foreground shrink-0" aria-hidden />
       </div>
@@ -182,6 +201,11 @@ export default function ToobitBridgeCard() {
         {driftSkips > 0 && (
           <span className="rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 font-mono text-amber-500" title="ورودهای ردشده توسط گیت‌های drift/delay">
             {driftSkips} گیت-رد
+          </span>
+        )}
+        {staleSkips > 0 && (
+          <span className="rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 font-mono text-amber-500" title="کارت‌هایی که هنگام downtime پل متولد شدند و پنجرهٔ ورودشان (۹۰s) هنگام بازگشت پل گذشته بود — doctrine: تعقیب دیرهنگام ممنوع؛ در ژورنال با SKIP:STALE-CARD ثبت شده‌اند">
+            {staleSkips} downtime
           </span>
         )}
         {(d?.violationsN ?? 0) > 0 ? (
@@ -302,9 +326,9 @@ export default function ToobitBridgeCard() {
                 <span className="font-medium truncate">{it.symbol}</span>
                 <span className="text-muted-foreground">#{it.serial}</span>
                 <span className="font-mono text-muted-foreground" title={`اهرم = اهرم کارت سیگنال (${it.levSrc ?? "card"})`}>×{it.leverage ?? "—"}</span>
-                <span className="ml-auto font-mono" title={`نوتوینال ورود ${it.expectedNotional ? it.expectedNotional.toFixed(2) : "—"}$ (مارجین ثابت ${margin}$ × ${it.leverage ?? "?"}) · باقی‌مانده پس از سیو سود`}>
+                <span className="ml-auto font-mono" title={`نوتوینال ورود ${it.expectedNotional ? it.expectedNotional.toFixed(2) : "—"}$ (مارجین ثابت ${margin}$ × ${it.leverage ?? "?"}) · باقی‌مانده پس از سیو سود (×ضریب قرارداد ${it.contractMult ?? 1})`}>
                   ${it.expectedNotional ? it.expectedNotional.toFixed(0) : "—"}
-                  {it.qtyRemaining !== it.qtyOrig && it.qtyOrig > 0 ? <span className="text-muted-foreground"> → {((it.qtyRemaining * (it.fillPrice ?? it.cardEntry)) || 0).toFixed(0)}</span> : null}
+                  {it.qtyRemaining !== it.qtyOrig && it.qtyOrig > 0 ? <span className="text-muted-foreground"> → {((it.qtyRemaining * (it.fillPrice ?? it.cardEntry) * (it.contractMult ?? 1)) || 0).toFixed(0)}</span> : null}
                 </span>
                 <span className="font-mono text-muted-foreground">{ms(it.lat.totalMs)}</span>
               </div>

@@ -63,7 +63,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import { Database } from "bun:sqlite";
 import { createHmac } from "node:crypto";
-import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
 
 // v1.4.4 RISK-CAP (trace 1a17357988d00515 «حساب لایو داره از بین میره»):
 //   • notional = margin×cardLev is now a CEILING — scaled DOWN so that
@@ -74,7 +74,32 @@ import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSyn
 //   • doctrine notional audit is risk-cap aware; /config accepts maxRiskPct 0.1..10.
 // v1.4.5 PHANTOM-PNL FIX (trace 1a174e9c2aa28295): never-executed intents must
 // never inherit the symbol's fill history; books self-heal at boot.
-const VER = "toobit-bridge 1.5.0";
+// v1.5.1 EXECUTION+CALC AUDIT FIXES (operator order trace 1a18a0e79bbf5ec5 —
+// «باگ اجرایی و محاسباتی — پوزیشن انجام نشده، سیگنالی صادر نشده — ممیزی و
+// راستی‌آزمایی دستورات کارت سیگنال و پیگیری»):
+//   ① SINGLETON LOCK TOCTOU CLOSED — audit.jsonl proved TWO instances passed the
+//      v1.4.0 lock INSIDE ONE SECOND (2× BOOT+CFG-ACTIVATE at 21:49:33) → two
+//      writers flip-flopped state.json. exists→read→write was racy; now an
+//      atomic O_EXCL create: exactly one winner, the loser reads a live pid and
+//      refuses (stale pid → unlink + one retry).
+//   ② KEYS-GONE HONESTY — the sandbox recycles wiped mini-services/.env:
+//      hasKeys:false → isLiveMode() is permanently false → LIVE + reconcile
+//      (راستی‌آزمایی حساب) dead while liveApproved stayed true. Now /health and
+//      /status expose keysInstalled, boot warns loudly, the dashboard shows a
+//      بی‌کلید badge — the «no live position» cause is visible, not silent.
+//   ③ UNMIRRORED-CARD پیگیری — cards whose whole lifecycle (SL/TP3/EXPIRED…)
+//      completed while the bridge was down NEVER got an intent and were
+//      invisible in the journal (serials 3190-3194 proved it). orphanSweep now
+//      journals every terminal card without an intent (24h window) as
+//      UNMIRRORED-CARD — the report shows the hole, the hole has an owner.
+//   ④ PAPER ACCOUNT TRUTH — TEST-CYCLE (serial 0) contaminated the fixed-$3
+//      account (1W/0L 100% from a synthetic fill) and flat $0 closes counted as
+//      LOSSES. Test hooks no longer book into the account; counters are
+//      recomputed from the intent ledger once (cfgRev 4 heal); wins/losses only
+//      for strictly ± PnL.
+//   ⑤ CFG-ACTIVATE quiet-if-unchanged — the migration audited 5× in a boot
+//      storm; now audits only when a value actually changes.
+const VER = "toobit-bridge 1.5.1";
 // v1.4.3 (operator order trace 1a172ca1af260c0d — «مارجین 5$/$0.5 به‌جای 10$، چرا هیچ سیگنالی در سود بسته نشده، وضعیت NX-3139 در لایو متفاوت است — اقدامات حیاتی فوری»):
 //   Forensics proved FOUR independent root causes, all fixed here:
 //   ① CONTRACT-MULTIPLIER SIZING BUG (the $0.5 margin) — exchangeInfo carries
@@ -152,6 +177,10 @@ try {
   API_KEY = /^TOOBIT_API_KEY=(.*)$/m.exec(env)?.[1]?.trim() ?? "";
   API_SECRET = /^TOOBIT_API_SECRET=(.*)$/m.exec(env)?.[1]?.trim() ?? "";
 } catch { /* keys absent → PAPER with no exchange account calls */ }
+// v1.5.1 — keys-gone honesty (trace 1a18a0e79bbf5ec5): the sandbox recycles
+// wiped the key file; liveApproved stays true while isLiveMode() is permanently
+// false → LIVE + reconciliation (راستی‌آزمایی حساب) dead SILENTLY. Expose it.
+const hasExecKeys = (): boolean => API_KEY.length > 0 && API_SECRET.length > 0;
 
 const BASE = "https://api.toobit.com";
 const POLL_MS = 1500;
@@ -327,12 +356,16 @@ function loadState(): void {
       // v1.5.0 migration (cfgRev 3) — operator ACTIVATION mandate (trace
       // 1a1899d2237473d9): fixed $3 margin + fixed $3 paper anchor + exec ON.
       // One-time; later /config writes persist normally. LIVE stays double-gated.
+      // v1.5.1 — audit only when a value ACTUALLY changes (the boot storm
+      // audited CFG-ACTIVATE 5× in 4min; same-second boots must stay quiet).
       if ((S.cfg.cfgRev ?? 0) < 3) {
+        const changed = S.cfg.marginUsdt !== 3 || S.cfg.paperBalanceUsdt !== 3 || S.cfg.execEnabled !== true;
         S.cfg.marginUsdt = 3;
         S.cfg.paperBalanceUsdt = 3;
         S.cfg.execEnabled = true;
         S.cfg.cfgRev = 3;
-        audit("CFG-ACTIVATE", { trace: "1a1899d2237473d9", marginUsdt: 3, paperBalanceUsdt: 3, execEnabled: true, note: "fixed-$3 activation mandate" });
+        if (changed) audit("CFG-ACTIVATE", { trace: "1a1899d2237473d9", marginUsdt: 3, paperBalanceUsdt: 3, execEnabled: true, note: "fixed-$3 activation mandate" });
+        else log("info", "cfgRev<3 on load — mandate values already applied (pre-flush boot race), quiet migration");
       }
       // v1.5.0 — paper account load: cfg anchor is the source of truth; equity
       // always re-derives from (anchor + realized) so a /config anchor change
@@ -342,6 +375,37 @@ function loadState(): void {
         : newPaperAccount(S.cfg.paperBalanceUsdt);
       S.paper.equityUsdt = Number((S.paper.anchorUsdt + S.paper.realizedUsdt).toFixed(6));
       S.paper.anchorUsdt = S.cfg.paperBalanceUsdt;
+      // v1.5.1 migration (cfgRev 5) — PAPER ACCOUNT TRUTH heal (re-run of the
+      // cfgRev 4 heal with corrected counting): the account counters are
+      // RECOMPUTED from the intent ledger (the single source of truth).
+      // Pre-1.5.1 the TEST-CYCLE hook (serial 0) booked synthetic PnL into
+      // closedN/wins (the «1W/0L 100%» artifact) and flat $0 closes were
+      // counted as LOSSES. closedN counts PNL-ACCOUNTED closes only.
+      // Realized = Σ realizedPnlUsdt of non-test intents (banks book into the
+      // intent first, then the account — same total).
+      if ((S.cfg.cfgRev ?? 0) < 5) {
+        const before = { realized: S.paper.realizedUsdt, closedN: S.paper.closedN, wins: S.paper.wins, losses: S.paper.losses };
+        let realized = 0, n = 0, w = 0, l = 0;
+        for (const it of Object.values(S.intents)) {
+          if (!(it.serial > 0) || it.mode !== "PAPER") continue; // serial 0 = TEST-CYCLE hook
+          realized += it.realizedPnlUsdt ?? 0;
+          if (it.status === "CLOSED" && typeof it.realizedPnlUsdt === "number") {
+            // v1.5.1 — closedN counts PNL-ACCOUNTED closes only (matches the
+            // /journal closed-board filter): the 31 pre-accounting closes
+            // (realizedPnlUsdt=null) would otherwise display as «0W/0L · 0%»
+            // — a misleading read of «31 closes, zero wins».
+            n++;
+            const p = it.realizedPnlUsdt;
+            if (p > 0) w++; else if (p < 0) l++; // flat 0.00 is neither win nor loss (v1.5.1)
+          }
+        }
+        S.paper.realizedUsdt = Number(realized.toFixed(6));
+        S.paper.closedN = n; S.paper.wins = w; S.paper.losses = l;
+        S.paper.equityUsdt = Number((S.paper.anchorUsdt + S.paper.realizedUsdt).toFixed(6));
+        S.cfg.cfgRev = 5;
+        audit("PAPER-ACCOUNT-HEAL", { before, after: { realized: S.paper.realizedUsdt, closedN: n, wins: w, losses: l }, note: "counters recomputed from intent ledger; test-hook and flat-close contamination removed" });
+        persistState();
+      }
       // v1.2.0 hardening: pre-v1.2.0 persisted intents have no leverage field —
       // backfill so notional math (margin × leverage) can never see undefined.
       // v1.3.0 hardening: backfill doctrine fields on legacy intents too.
@@ -500,20 +564,35 @@ async function tbTicker(tbSymbol: string): Promise<{ last: number; bid: number; 
 const EXEC_DISABLED_FILE = `${DATA}/DISABLED`;
 const killFile = (): boolean => existsSync(EXEC_DISABLED_FILE);
 
-// ── v1.4.0 SINGLETON LOCK (trace 1a1704d407f00dad) ───────────────────────────
+// ── v1.4.0 SINGLETON LOCK (trace 1a1704d407f00dad) · v1.5.1 O_EXCL ───────────
 const PID_FILE = `${DATA}/bridge.pid`;
+// v1.5.1 — the v1.4.0 exists→read→write sequence was a TOCTOU race: audit.jsonl
+// proved two instances booting INSIDE the same second (2× CFG-ACTIVATE at
+// 21:49:33) → two writers flip-flopping state.json (the v1.4.0 ghost pattern,
+// resurrected). openSync 'wx' is atomic at the syscall level: exactly one
+// creator wins; the loser reads the winner's live pid and refuses. A pid whose
+// process is gone is a stale lock → unlink + one retry.
 function acquireSingletonLock(): boolean {
   try {
     if (!existsSync(DATA)) mkdirSync(DATA, { recursive: true });
-    if (existsSync(PID_FILE)) {
-      const old = Number(readFileSync(PID_FILE, "utf8").trim());
-      if (Number.isFinite(old) && old > 0 && old !== process.pid) {
-        try { process.kill(old, 0); log("crit", "another bridge instance is alive — refusing to boot", { pid: old }); return false; }
-        catch { /* pid gone — stale lock, take over */ }
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const fh = openSync(PID_FILE, "wx"); // atomic exclusive create
+        writeSync(fh, String(process.pid));
+        closeSync(fh);
+        return true;
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException)?.code !== "EEXIST") throw e;
+        const old = Number(readFileSync(PID_FILE, "utf8").trim());
+        if (Number.isFinite(old) && old > 0 && old !== process.pid) {
+          try { process.kill(old, 0); log("crit", "another bridge instance is alive — refusing to boot", { pid: old }); return false; }
+          catch { /* pid gone — stale lock, unlink and retry once */ }
+        }
+        try { rmSync(PID_FILE); } catch { /* already removed by the owner */ }
       }
     }
-    writeFileSync(PID_FILE, String(process.pid));
-    return true;
+    log("crit", "singleton lock unresolved after retry — refusing to boot", { pid: process.pid });
+    return false;
   } catch (e) { log("crit", "singleton lock failed", { err: String(e) }); return false; }
 }
 function releaseSingletonLock(): void {
@@ -887,9 +966,16 @@ async function doClose(it: Intent, reason: string): Promise<void> {
     const pnl = exit !== null && entry > 0 ? (exit - entry) * it.qtyRemaining * sign * mult : 0;
     it.realizedPnlUsdt = Number(((it.realizedPnlUsdt ?? 0) + pnl).toFixed(6));
     audit("EXEC-PNL-PAPER", { serial: it.serial, reason, exit: exit ?? null, closePnl: Number(pnl.toFixed(6)), totalPnl: it.realizedPnlUsdt });
-    if (pnl !== 0) paperBook(it, pnl, `close:${reason}`);
-    S.paper.closedN++;
-    if ((it.realizedPnlUsdt ?? 0) > 0) S.paper.wins++; else S.paper.losses++;
+    // v1.5.1 — TEST-CYCLE (serial 0) is a verification hook, NOT a trade: its
+    // synthetic fill must not contaminate the fixed-$3 account (pre-1.5.1 the
+    // account carried «1W/0L 100%» from a single test fill). The hook still
+    // records its own realizedPnlUsdt on the intent for the audit trail.
+    if (it.serial > 0) {
+      if (pnl !== 0) paperBook(it, pnl, `close:${reason}`);
+      if (typeof it.realizedPnlUsdt === "number") S.paper.closedN++; // v1.5.1 — accounted closes only
+      const tot = it.realizedPnlUsdt ?? 0;
+      if (tot > 0) S.paper.wins++; else if (tot < 0) S.paper.losses++; // flat 0.00 = neither (v1.5.1)
+    }
   }
   it.qtyRemaining = 0;
   it.status = "CLOSED";
@@ -1059,18 +1145,35 @@ async function pollCards(): Promise<void> {
 // the trade the card described).
 const orphanSeen = new Set<string>();
 let orphanSweepBusy = false;
+// v1.5.1 — terminal card statuses for the UNMIRRORED-CARD sweep (پیگیری):
+// cards whose whole lifecycle completed while the bridge was down never got an
+// intent and were INVISIBLE in the journal (audit proof: serials 3190-3194 —
+// ZEC TP3, PEPE/EVAA/Q/XRP SL — zero bridge trail). The report must show the
+// hole. 24h window keeps the journal relevant (older holes predate the
+// reporting horizon); one event per card, ever.
+const TERMINAL_CARD = new Set(["TP1", "TP2", "TP3", "SL", "EXPIRED", "CLOSED", "VOID"]);
+const UNMIRRORED_WINDOW_MS = 24 * 60 * 60_000;
 function orphanSweep(): void {
   if (orphanSweepBusy || !sqldb) return;
   orphanSweepBusy = true;
   try {
     const cards = fetchRecentCards(300); // ~last 300 cards ≈ 24-48h coverage
     for (const c of cards) {
-      if (c.status !== "ACTIVE" || S.intents[c.id] || orphanSeen.has(c.id)) continue;
+      const terminal = TERMINAL_CARD.has(c.status);
+      if (c.status !== "ACTIVE" && !terminal) continue;
+      if (S.intents[c.id] || orphanSeen.has(c.id)) continue;
       orphanSeen.add(c.id);
       if (orphanSeen.size > 500) { const first = orphanSeen.values().next().value; if (first) orphanSeen.delete(first); }
       const age = Date.now() - parseTs(c.createdAt);
-      S.doctrine.orphans = (S.doctrine.orphans ?? 0) + 1;
-      audit("ORPHAN-CARD", { serial: c.serial, symbol: c.symbol, direction: c.direction, ageMin: Math.round(age / 60_000), note: "ACTIVE card without execution intent — born during bridge downtime/ghost window (read-only visibility)" });
+      if (c.status === "ACTIVE") {
+        S.doctrine.orphans = (S.doctrine.orphans ?? 0) + 1;
+        audit("ORPHAN-CARD", { serial: c.serial, symbol: c.symbol, direction: c.direction, ageMin: Math.round(age / 60_000), note: "ACTIVE card without execution intent — born during bridge downtime/ghost window (read-only visibility)" });
+      } else if (age <= UNMIRRORED_WINDOW_MS) {
+        // v1.5.1 — terminal card with NO intent: its lifecycle ran entirely
+        // during bridge downtime. No position ever existed (nothing to close),
+        // but the report must show it — silent holes are how «پیگیری» breaks.
+        audit("UNMIRRORED-CARD", { serial: c.serial, symbol: c.symbol, direction: c.direction, cardStatus: c.status, ageMin: Math.round(age / 60_000), note: `card lifecycle completed (${c.status}) while bridge was down — no intent, no position, no execution possible; journaled for the report` });
+      }
     }
   } finally { orphanSweepBusy = false; }
 }
@@ -1292,7 +1395,7 @@ Bun.serve({
     const path = url.pathname;
     const authed = req.headers.get("x-nexus-key") === AUTH_KEY;
     if (req.method === "GET" && (path === "/health" || path === "/")) {
-      return Response.json({ ok: true, ver: VER, mode: isLiveMode() ? "LIVE" : "PAPER", execEnabled: S.cfg.execEnabled, killFile: killFile(), bootAt, uptimeS: Math.round((Date.now() - bootAt) / 1000) });
+      return Response.json({ ok: true, ver: VER, mode: isLiveMode() ? "LIVE" : "PAPER", execEnabled: S.cfg.execEnabled, keysInstalled: hasExecKeys(), killFile: killFile(), bootAt, uptimeS: Math.round((Date.now() - bootAt) / 1000) });
     }
     if (req.method === "GET" && path === "/doctrine") {
       // v1.3.0 — the senior-supervisor feed (supervisor-cron polls this)
@@ -1331,6 +1434,7 @@ Bun.serve({
         ver: VER,
         mode: isLiveMode() ? "LIVE" : "PAPER",
         liveApproved: S.cfg.liveApproved,
+        keysInstalled: hasExecKeys(), // v1.5.1 — the no-live-position cause, visible
         balanceUsdt, balanceAt,
         cfg: S.cfg,
         livePnl: {
@@ -1447,7 +1551,10 @@ if (openDb()) {
   await syncClock();
   await refreshInstruments().catch(() => undefined);
   await refreshBalance().catch(() => undefined);
-  log("info", "armed", { mode: isLiveMode() ? "LIVE" : "PAPER", instruments: instruments.size, balanceUsdt });
+  log("info", "armed", { mode: isLiveMode() ? "LIVE" : "PAPER", instruments: instruments.size, balanceUsdt, keysInstalled: hasExecKeys() });
+  // v1.5.1 — say the keys-gone cause OUT LOUD at boot (pre-1.5.1 this was a
+  // silent dead path: liveApproved=true, balance=null, mode PAPER forever).
+  if (!hasExecKeys()) log("warn", "exchange API keys missing — LIVE + account reconciliation DISABLED (PAPER-only) until the key file is restored", { liveApproved: S.cfg.liveApproved, envPath: `${ROOT}/mini-services/toobit-bridge/.env` });
   setInterval(() => { void pollCards(); }, POLL_MS);
   setInterval(() => { void reconcile(); }, RECON_MS);
   setInterval(() => { void doctrineScan(); }, 30_000); // v1.3.0 — senior-supervisor audit loop
