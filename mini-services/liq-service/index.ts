@@ -311,6 +311,7 @@ function okxIngestPoll(instId: string, binanceSym: string, ctVal: number, rows: 
   for (const x of rows) {
     const ts = Number(x.ts ?? x.time ?? 0);
     if (!ts || ts <= last) continue; // cursor gate — only NEW rows
+    if (Date.now() - ts > 1_800_000) continue; // freshness gate — the endpoint seeds up to 100 recent fills per uly (can reach back hours); >30min-old fills are history, not live-feed rows (v3.2.1)
     if (ts > newest) newest = ts;
     const side = x.posSide === "long" ? "SELL" : "BUY"; // long+sell wreck = forced SELL (Binance semantics)
     const sz = Number(x.sz ?? 0);

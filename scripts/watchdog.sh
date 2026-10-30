@@ -359,32 +359,13 @@ one_cycle() {
     fi
   fi
 
-  # ── P2.8 · liq-service :3010 — OWNED heal (v3.2.1, trace 1a18eba43d494571) ──
-  # The liq feed is now a REAL data lane (OKX REST poller — the only egress-proven
-  # market liquidation source; Binance/Bybit liq push streams are egress-muted).
-  # It was log-only before, but the 2026-10-30 22:00 OOM churn killed it and
-  # NOTHING respawned it → the dashboard liq row went NO DATA again while the
-  # code was fixed. A healable liq-service beats a parked one. Same owned-heal
-  # pattern as P2.6: HTTP probe, port-kill respawn, cross-layer ledger, 300s cooldown.
-  local lcode; lcode=$(probe http://localhost:3010/health 5)
-  if [ "$lcode" != "200" ]; then
-    local llast; llast=$(getk last_liq_spawn)
-    if [ $(( now - ${llast:-0} )) -ge 300 ]; then
-      local ll2; ll2=$(cat "$PROJECT/.data/p0-watchdog/heal-liq" 2>/dev/null || echo 0); ll2="${ll2%%:*}"
-      if [ $(( now - ${ll2:-0} )) -lt 300 ]; then
-        say "HEAL SKIP: liq-service healed <300s ago by layer-1 (cross-layer ledger)"
-      else
-        say "LIQ DOWN (http:$lcode) — respawn bun index.ts (owned by watchdog)"
-        ss -tlnp 2>/dev/null | grep -E ':3010\b' | grep -o 'pid=[0-9]*' | cut -d= -f2 | sort -u | xargs -r kill 2>/dev/null
-        sleep 1
-        ( cd "$PROJECT/mini-services/liq-service" && setsid bash -c 'exec bun index.ts' </dev/null 9>&- >> "$PROJECT/logs/liq-service.log" 2>&1 & )
-        setk last_liq_spawn "$now"
-        echo "$now:$$" > "$PROJECT/.data/p0-watchdog/heal-liq" 2>/dev/null
-      fi
-    fi
-  else
-    setk liq_fails 0
-  fi
+  # ── liq-service :3010 heal — NOT here (v3.2.1 note, trace 1a18eba43d494571) ──
+  # The liq feed is a REAL data lane now (OKX REST poller — the only egress-proven
+  # market liquidation source). Healing stays with the AUTHORITATIVE layer-2
+  # healer: p0-watchdog mini-service :3020 (v1.2.0+ probes liq /health with
+  # healCmd, 120s cooldown — proven live 2026-10-30 01:38 Tehran when it
+  # respawned the OOM-killed liq-service unprompted). A second healer here would
+  # double-spawn (EADDRINUSE churn). This layer stays log-only for liq.
 
   # ── P2.7 · mem-guard :3019 — OWNED heal (v3.3, RECOVERY-1016) ──
   # 2026-10-16 incident: the recycle killed mem-guard and NOTHING re-spawned it
