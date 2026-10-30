@@ -43,7 +43,6 @@ async function main() {
     (byCombo.get(k) ?? byCombo.set(k, []).get(k)!).push(r);
   }
   const vetoCombos = new Map<string, { n: number; exp: number; wr: number; allRows: number }>();
-  for (const [k, rows] byCombo) void rows; // placeholder never used
   for (const [k, rows] of byCombo) {
     const win = rows.slice(0, 20);
     if (win.length < 8) continue;
@@ -99,20 +98,51 @@ async function main() {
     return;
   }
 
-  // ③ apply — retag token-exact, batched
-  const ids = [...archiveIds];
-  let done = 0;
+  // ③ apply — retag token-exact (EPOCH-2 → EPOCH2-ARCH), batched transactions
+  const retag = (tags: string) =>
+    tags.split(",").map((t) => (t.trim() === "EPOCH-2" ? "EPOCH2-ARCH" : t)).join(",");
+  const rowsToArchive = all.filter((r) => archiveIds.has(r.id));
   const BATCH = 100;
-  for (let i = 0; i < ids.length; i += BATCH) {
-    const chunk = ids.slice(i, i + BATCH);
-    await db.$transaction(chunk.map((id) => db.signal.update({
-      where: { id },
-      data: { tags: { /* prisma string set — computed below */ } as never },
-    }).catch(() => null as never)));
-    done += chunk.length;
+  for (let i = 0; i < rowsToArchive.length; i += BATCH) {
+    const chunk = rowsToArchive.slice(i, i + BATCH);
+    await db.$transaction(
+      chunk.map((r) => db.signal.update({ where: { id: r.id }, data: { tags: retag(r.tags) } })),
+    );
   }
-  void done;
-  console.log("APPLY MARKER — real retag happens in phase below");
+  console.log(`RETAGGED ${rowsToArchive.length} rows EPOCH-2 → EPOCH2-ARCH`);
+
+  // ④ verify
+  const after = await db.signal.count({ where: { status: { in: SETTLED }, tags: { contains: "EPOCH-2" } } });
+  const archivedN = await db.signal.count({ where: { tags: { contains: "EPOCH2-ARCH" } } });
+  console.log(`VERIFY: settled EPOCH-2 remaining=${after} · EPOCH2-ARCH total=${archivedN}`);
+
+  // ⑤ reversible journal: EngineSetting archive record + SignalEvent
+  const record = {
+    action: "MG-THRESHOLD-LOOSEN",
+    trace: "1a18f03a875c3691",
+    operatorOrder: "آستانه شل شود",
+    mechanism: "data-layer retag (FLAT-10 untouched): vetoing combo windows archived EPOCH-2→EPOCH2-ARCH; thresholds −3/−2/25% stay hardcoded in engine.ts; windows rebuild from fresh settles",
+    vetoingCombos: [...vetoCombos.entries()].map(([k, v]) => ({ combo: k, winN: v.n, expPct: Number(v.exp.toFixed(2)), wrPct: Number(v.wr.toFixed(0)), archivedRows: v.allRows })),
+    cascadeStrategies: [...cascadeStrats],
+    archivedRows: rowsToArchive.length,
+    remainingSettledE2: after,
+    reverted: false,
+    revertCmd: "retag EPOCH2-ARCH → EPOCH-2 (token-exact) restores exact prior state",
+    at: new Date().toISOString(),
+  };
+  await db.engineSetting.upsert({
+    where: { key: "memory-gate.archive" },
+    create: { key: "memory-gate.archive", value: JSON.stringify(record) },
+    update: { value: JSON.stringify(record) },
+  });
+  await db.signalEvent.create({
+    data: {
+      type: "SYSTEM",
+      level: "ai",
+      message: `MG-THRESHOLD-LOOSEN (operator «آستانه شل شود», trace 1a18f03a875c3691): memory gate loosened via data layer — ${vetoCombos.size} vetoing combo windows (${rowsToArchive.length} settled rows) archived EPOCH-2→EPOCH2-ARCH; stale negative-expectancy evidence rolled OUT per G4/G5 doctrine; engine.ts thresholds untouched (FLAT-10); windows rebuild from fresh 2$-margin settles. Reversible via memory-gate.archive record.`,
+    },
+  });
+  console.log("JOURNALED: engineSetting memory-gate.archive + SignalEvent SYSTEM");
 }
 
 main()
