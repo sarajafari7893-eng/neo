@@ -82,7 +82,8 @@ export async function GET() {
     // v14.0 — per-plane health across the FOUR Binance planes of the consensus
     // sweep persisted on assets (BINANCE / BINANCE-SPOT / BINANCE-FUTWS /
     // BINANCE-GCP) — one exchange, four independent network paths.
-    const exchanges = ["BINANCE", "BINANCE-SPOT", "BINANCE-FUTWS", "BINANCE-GCP"].map((venue) => {
+    // v14.1 — venue ⑤ TOOBIT: the REAL second exchange (public perp board).
+    const exchanges = ["BINANCE", "BINANCE-SPOT", "BINANCE-FUTWS", "BINANCE-GCP", "TOOBIT"].map((venue) => {
       if (venue === "BINANCE") return { venue, ok: feedStatus.source === "LIVE" || feedStatus.source === "STALE", latencyMs: feedStatus.latencyMs };
       const withVenue = assets.find((a) => {
         if (!a.exchanges) return false;

@@ -19,8 +19,18 @@
 // (weight 40 full-universe ticker, critical lane); the spot ladders keep their
 // own direct fetch + shared spot-host gate (v13.2.1).
 // The v12.10 venue-expansion (GATE) and Task-49 HL allowlist are RETIRED here —
-// the system is Binance-only by mandate; PHANTOM-FEED outlier defense is now
+// the system is Binance-primary by mandate; PHANTOM-FEED outlier defense is now
 // carried by robustMedian across the four Binance planes (v10.30 doctrine).
+// v14.1 REAL SECOND EXCHANGE (operator mandate trace 1a18c926cd7742fd —
+// «EXCHANGE CONSENSUS از چند صرافی تشکیل شده بود اما الان فقط یک صرافی وجود
+// دارد. این کلیدها معتبر و فعال قابل استفاده هستن»): TOOBIT joins the consensus
+// as venue ⑤ — a genuine second exchange, not another Binance path. Market data
+// is PUBLIC (keys are only for account/execution): /quote/v1/contract/ticker/
+// 24hr returns the FULL perp board (1038 contracts) in ONE call, mapped
+// BTCUSDT → BTC-SWAP-USDT. Mid = (bid+ask)/2 when the book prints, else last.
+// A symbol absent from Toobit stays honestly null; robustMedian treats venue ⑤
+// symmetrically — a dislocated Toobit quote is REJECTED as an outlier exactly
+// like a rogue Binance plane would be.
 
 import { getFeedStatus } from "./market-feed";
 import { gateFetch } from "./fapi-gate";
@@ -281,6 +291,43 @@ async function futwsRingQuotes(): Promise<Map<string, number>> {
   return out;
 }
 
+// v14.1 — TOOBIT plane (venue ⑤): public perp board, one call, zero keys.
+const TOOBIT_QUOTE_URL = "https://api.toobit.com/quote/v1/contract/ticker/24hr";
+const TOOBIT_SWAP_SUFFIX = "-SWAP-USDT";
+let toobitBatchCache: { at: number; data: Map<string, number> } | null = null;
+let lastToobitLogAt = 0;
+
+async function toobitContractBatch(): Promise<Map<string, number>> {
+  const now = Date.now();
+  if (toobitBatchCache && now - toobitBatchCache.at < CACHE_TTL) return toobitBatchCache.data;
+  const out = new Map<string, number>();
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
+    const res = await fetch(TOOBIT_QUOTE_URL, { signal: ctrl.signal, cache: "no-store", headers: { Connection: "close" } });
+    clearTimeout(t);
+    if (res.ok) {
+      const rows = (await res.json()) as Array<{ s?: string; c?: string; b?: string; a?: string }>;
+      for (const r of rows) {
+        const tb = String(r.s ?? "").toUpperCase();
+        if (!tb.endsWith(TOOBIT_SWAP_SUFFIX)) continue;
+        const bid = Number(r.b), ask = Number(r.a), last = Number(r.c);
+        const mid = bid > 0 && ask > 0 ? (bid + ask) / 2 : last;
+        if (!(mid > 0)) continue;
+        out.set(`${tb.slice(0, tb.length - TOOBIT_SWAP_SUFFIX.length)}USDT`, mid);
+      }
+      toobitBatchCache = { at: now, data: out };
+      if (out.size > 0 && Date.now() - lastToobitLogAt > 600_000) {
+        lastToobitLogAt = Date.now();
+        console.log(`[multi-exchange] v14.1 TOOBIT plane fed by the public contract board (${out.size} perp mids, zero keys, one call)`);
+      }
+    }
+  } catch {
+    /* plane skips honestly — absent venue, never invented data */
+  }
+  return out;
+}
+
 // cached sweep (15s TTL, in-flight dedupe)
 const CACHE_TTL = 15_000;
 let cache: { at: number; data: Map<string, Consensus> } | null = null;
@@ -299,16 +346,19 @@ export async function sweepConsensus(symbols: string[]): Promise<Map<string, Con
   inFlight = (async () => {
     // v14.0 — four Binance planes (see header). Order matters only for the
     // quotes array; robustMedian treats them symmetrically.
-    const [composite, spot, futws, gcp] = await Promise.allSettled([
+    // v14.1 — venue ⑤ TOOBIT: the REAL second exchange joins the consensus.
+    const [composite, spot, futws, gcp, toobit] = await Promise.allSettled([
       binanceFuturesBatch(symbols),
       spotLadderBatch(symbols, SPOT_LADDER_VISION, "BINANCE-SPOT"),
       futwsRingQuotes(),
       spotLadderBatch(symbols, SPOT_LADDER_GCP, "BINANCE-GCP"),
+      toobitContractBatch(),
     ]);
     const compositeMap = composite.status === "fulfilled" ? composite.value : new Map<string, number>();
     const spotMap = spot.status === "fulfilled" ? spot.value : new Map<string, number>();
     const futwsMap = futws.status === "fulfilled" ? futws.value : new Map<string, number>();
     const gcpMap = gcp.status === "fulfilled" ? gcp.value : new Map<string, number>();
+    const toobitMap = toobit.status === "fulfilled" ? toobit.value : new Map<string, number>();
     const binanceStatus = getFeedStatus();
 
     const now = Date.now();
@@ -316,6 +366,7 @@ export async function sweepConsensus(symbols: string[]): Promise<Map<string, Con
     if (spotMap.size > 0) venueLastOkAt.set("BINANCE-SPOT", now);
     if (futwsMap.size > 0) venueLastOkAt.set("BINANCE-FUTWS", now);
     if (gcpMap.size > 0) venueLastOkAt.set("BINANCE-GCP", now);
+    if (toobitMap.size > 0) venueLastOkAt.set("TOOBIT", now);
 
     const out = new Map<string, Consensus>();
     for (const sym of symbols) {
@@ -324,6 +375,7 @@ export async function sweepConsensus(symbols: string[]): Promise<Map<string, Con
         { venue: "BINANCE-SPOT", price: spotMap.get(sym) ?? null, latencyMs: null, ok: spotMap.has(sym) },
         { venue: "BINANCE-FUTWS", price: futwsMap.get(sym) ?? null, latencyMs: null, ok: futwsMap.has(sym) },
         { venue: "BINANCE-GCP", price: gcpMap.get(sym) ?? null, latencyMs: null, ok: gcpMap.has(sym) },
+        { venue: "TOOBIT", price: toobitMap.get(sym) ?? null, latencyMs: null, ok: toobitMap.has(sym) },
       ];
       const prices = quotes.map((q) => q.price).filter((p): p is number => typeof p === "number" && p > 0);
       // v10.30: robust median — rejects outlier planes, refuses impossible midpoints
@@ -352,5 +404,6 @@ export function getConsensusHealth(): Array<{ venue: string; ok: boolean; latenc
     { venue: "BINANCE-SPOT", ok: fresh("BINANCE-SPOT"), latencyMs: null },
     { venue: "BINANCE-FUTWS", ok: fresh("BINANCE-FUTWS"), latencyMs: null },
     { venue: "BINANCE-GCP", ok: fresh("BINANCE-GCP"), latencyMs: null },
+    { venue: "TOOBIT", ok: fresh("TOOBIT"), latencyMs: null }, // v14.1 — the real second exchange
   ];
 }

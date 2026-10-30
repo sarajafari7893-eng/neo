@@ -634,9 +634,9 @@ export default function TerminalSection() {
                 </span>
               </div>
               <div className="flex items-center justify-between">
-                <span className="label-tech">4-ex consensus</span>
+                <span className="label-tech">5-ex consensus</span>
                 <span className="flex items-center gap-1 font-bold tabular-nums text-cyan-neon">
-                  {(feed?.exchanges ?? []).filter((v) => v.ok).length}/4
+                  {(feed?.exchanges ?? []).filter((v) => v.ok).length}/5
                   <LiveDot tone={(feed?.exchanges ?? []).filter((v) => v.ok).length >= 3 ? "neon" : "amber"} />
                 </span>
               </div>
