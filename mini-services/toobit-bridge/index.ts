@@ -126,7 +126,24 @@ import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSyn
 //      prevStatusSeen, so the next 1.5s poll re-fires the pending close/bank.
 //      Key return is now self-healing; KEYS-HOTRELOAD / KEYS-GONE-HOTRELOAD
 //      audited.
-const VER = "toobit-bridge 1.5.3";
+// v1.5.4 RECON HARDENING (operator order trace 1a18c3435c6a1be5 — «وضعیت TOOBIT
+//   EXEC BRIDGE را بررسی کن و گزارش عملکرد» — two money-truth defects proven by
+//   today's exchange forensics):
+//   ① FALSE-ZERO GONE — a transient empty/throttled /futures/positions response
+//      closed LSK-3203 prematurely (recon 06:50 «POSITION-GONE» with only the
+//      open-fee noise −0.0065 while qty-77 SHORT lived on): the real SL filled
+//      08:39 (−0.7369) with NO intent watching it — the residual sat 1.8h as
+//      RECON-UNKNOWN-POSITION (433 flags). Fix: GONE-DOUBLE-CONFIRM — one miss
+//      only arms RECON-GONE-SUSPECT; the intent closes on the SECOND consecutive
+//      miss (≥10s later); a re-appearing row heals the suspect (GONE-RECOVERED).
+//   ② GHOST-PNL SILENCE — vanished unknown/residual positions were only
+//      flagged, never money-journaled (JCT −2.6097 today left un-attributed).
+//      Fix: GHOST-RECLAIM — when a tracked unknown position disappears, its
+//      userTrades since firstSeen are summed and journaled (RECON-GHOST-CLOSED
+//      / RECON-GHOST-PNL); if the ghost is a RESIDUAL of one of our LIVE intents
+//      recon-closed on the same symbol+side within 12h, the PnL is re-attributed
+//      to that intent (RECON-RESIDUAL-RECLAIM) so /status livePnl speaks truth.
+const VER = "toobit-bridge 1.5.4";
 // v1.4.3 (operator order trace 1a172ca1af260c0d — «مارجین 5$/$0.5 به‌جای 10$، چرا هیچ سیگنالی در سود بسته نشده، وضعیت NX-3139 در لایو متفاوت است — اقدامات حیاتی فوری»):
 //   Forensics proved FOUR independent root causes, all fixed here:
 //   ① CONTRACT-MULTIPLIER SIZING BUG (the $0.5 margin) — exchangeInfo carries
@@ -336,6 +353,7 @@ interface Intent {
   entryDriftBps?: number;       // v1.3.0 doctrine — |refPrice − cardEntry| at entry, bps
   entryAgeMs?: number;          // v1.3.0 doctrine — card age at entry (created → filled)
   protected?: boolean;          // v1.3.0 doctrine — protective TP/SL attached (LIVE) / sim active (PAPER)
+  goneSince?: number;           // v1.5.4 — first recon miss of the position row (GONE-DOUBLE-CONFIRM arming)
   events: Array<{ at: number; ev: string; note?: string }>;
 }
 interface MetricsRow {
@@ -947,6 +965,28 @@ async function fetchRealizedPnl(it: Intent): Promise<number | null> {
     return Number(pnl.toFixed(4));
   } catch { return null; }
 }
+
+// v1.5.4 GHOST-RECLAIM — net realized money (pnl − fees + rebate) the account
+// took on `symbol` fills since `since`. Same money-truth as fetchRealizedPnl
+// but symbol/since-parameterized so vanished unknown positions can be journaled.
+async function fetchSymbolPnlSince(symbol: string, since: number): Promise<number | null> {
+  try {
+    const r = await signed<Array<{ time?: string; realizedPnl?: string; commission?: string; makerRebate?: string }>>("GET", "/api/v1/futures/userTrades", { symbol, limit: 100 });
+    const rows = Array.isArray(r.data) ? r.data : [];
+    let pnl = 0, seen = false;
+    for (const f of rows) {
+      if (Number(f.time ?? 0) < since) continue;
+      seen = true;
+      pnl += Number(f.realizedPnl ?? 0) - Number(f.commission ?? 0) + Number(f.makerRebate ?? 0);
+    }
+    return seen ? Number(pnl.toFixed(4)) : null;
+  } catch { return null; }
+}
+
+// v1.5.4 — unknown positions recon has seen (key `symbol|side`); used to detect
+// ghost disappearance and reclaim its money-truth (GHOST-RECLAIM).
+const ghostSeen = new Map<string, { symbol: string; side: string; qty: number; firstSeen: number; lastSeen: number }>();
+
 // revert the card-status transition so the next poll re-fires the failed
 // action (v1.4.3 — transitions are no longer one-shot on transient rejections;
 // capped so a permanently-rejected action cannot loop forever).
@@ -1282,7 +1322,14 @@ async function reconcile(): Promise<void> {
       const qty = Number(p.position);
       if (!(qty > 0)) continue;
       const match = openIntents.find((i) => i.tbSymbol === p.symbol && i.direction === p.side);
-      if (!match) { audit("RECON-UNKNOWN-POSITION", { symbol: p.symbol, side: p.side, qty }); continue; }
+      if (!match) {
+        audit("RECON-UNKNOWN-POSITION", { symbol: p.symbol, side: p.side, qty });
+        const gk = `${p.symbol}|${p.side}`; // v1.5.4 — track for GHOST-RECLAIM
+        const g = ghostSeen.get(gk);
+        if (g) { g.lastSeen = Date.now(); g.qty = qty; }
+        else ghostSeen.set(gk, { symbol: p.symbol, side: p.side, qty, firstSeen: Date.now(), lastSeen: Date.now() });
+        continue;
+      }
       // v1.4.3 — live PnL truth straight from the position row
       const rp = Number(p.realizedPnL); if (Number.isFinite(rp)) match.realizedPnlUsdt = Number(rp.toFixed(4));
       const up = Number(p.unrealizedPnL); if (Number.isFinite(up)) match.unrealizedPnlUsdt = Number(up.toFixed(4));
@@ -1308,11 +1355,44 @@ async function reconcile(): Promise<void> {
         match.protected = r.ok; // re-assert succeeded → protected again
       }
     }
+    // v1.5.4 GHOST-RECLAIM sweep — unknown positions that vanished → journal
+    // their money-truth; re-attribute to our most recent recon-closed LIVE
+    // intent on the same symbol+side (≤12h) so the ledger reflects reality.
+    const liveKeys = new Set(rows.filter((p) => Number(p.position) > 0).map((p) => `${p.symbol}|${p.side}`));
+    for (const [gk, g] of [...ghostSeen.entries()]) {
+      if (liveKeys.has(gk)) continue;
+      ghostSeen.delete(gk);
+      audit("RECON-GHOST-CLOSED", { symbol: g.symbol, side: g.side, qty: g.qty, ageMs: Date.now() - g.firstSeen });
+      const gpnl = await fetchSymbolPnlSince(g.symbol, g.firstSeen);
+      audit("RECON-GHOST-PNL", { symbol: g.symbol, pnl: gpnl ?? 0 });
+      if (gpnl === null || Math.abs(gpnl) < 1e-9) continue;
+      const cut = Date.now() - 12 * 3600_000;
+      const cand = Object.values(S.intents)
+        .filter((i) => i.tbSymbol === g.symbol && i.direction === g.side && i.mode === "LIVE" && i.status === "CLOSED" && (i.closedAt ?? 0) >= cut && (i.closeReason ?? "").includes("recon"))
+        .sort((a, b) => (b.closedAt ?? 0) - (a.closedAt ?? 0))[0];
+      if (cand) {
+        const base = cand.realizedPnlUsdt ?? 0;
+        cand.realizedPnlUsdt = Number((base + gpnl).toFixed(4));
+        cand.events.push({ at: Date.now(), ev: "RESIDUAL-RECLAIM", note: `ghost fills re-attributed: ${gpnl >= 0 ? "+" : ""}${gpnl} → total ${cand.realizedPnlUsdt}` });
+        audit("RECON-RESIDUAL-RECLAIM", { serial: cand.serial, symbol: g.symbol, addedPnl: gpnl, newTotal: cand.realizedPnlUsdt });
+      }
+    }
     // intents whose position vanished on-exchange → verify + close bookkeeping
+    // v1.5.4 GONE-DOUBLE-CONFIRM — one missing row is NOT a close: a transient
+    // empty positions response buried LSK-3203 alive (false-zero −0.0065 while
+    // the real SL filled 1.8h later at −0.7369). Two consecutive misses (≥10s
+    // apart) close the intent; a re-appearing row heals the suspect flag.
     for (const it of openIntents) {
       if (it.mode !== "LIVE") continue;
       const still = rows.some((p) => p.symbol === it.tbSymbol && p.side === it.direction && Number(p.position) > 0);
       if (!still && it.status === "OPEN") {
+        if (!it.goneSince) {
+          it.goneSince = Date.now();
+          audit("RECON-GONE-SUSPECT", { serial: it.serial, symbol: it.tbSymbol });
+          continue;
+        }
+        if (Date.now() - it.goneSince < 10_000) continue; // same-cycle noise — confirm on the next sweep
+        it.goneSince = undefined;
         const pnl = await fetchRealizedPnl(it); // v1.4.3 — money truth of exchange-side closes (stop/TP fired before the card)
         if (pnl !== null) it.realizedPnlUsdt = pnl;
         audit("RECON-POSITION-GONE", { serial: it.serial, symbol: it.tbSymbol, realizedPnlUsdt: pnl });
@@ -1321,6 +1401,9 @@ async function reconcile(): Promise<void> {
         it.closedAt = Date.now();
         it.closeReason = it.closeReason ?? "EXCHANGE-CLOSED (recon)";
         it.events.push({ at: Date.now(), ev: "RECON-CLOSED" });
+      } else if (still && it.goneSince) {
+        it.goneSince = undefined;
+        audit("RECON-GONE-RECOVERED", { serial: it.serial, symbol: it.tbSymbol });
       }
     }
     persistState();
