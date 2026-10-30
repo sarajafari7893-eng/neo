@@ -71,7 +71,8 @@ interface BridgeStatus {
 }
 
 // v1.5.0 — full-event journal (report + chart contract)
-interface JournalEvent { at: number; ev: string; note?: string; serial?: number }
+// v1.5.5 — `why` carries EXEC-SKIP reasons (RISK-CAP dust …) from the audit tail
+interface JournalEvent { at: number; ev: string; note?: string; serial?: number; why?: string }
 interface JournalData {
   ok: boolean; bridge?: string; mode?: string;
   account?: { anchorUsdt: number; realizedUsdt: number; equityUsdt: number; closedN: number; wins: number; losses: number; winRate: number | null; curveN: number };
@@ -126,6 +127,13 @@ export default function ToobitBridgeCard() {
   const levMax = levs.length ? Math.max(...levs) : null;
   const driftSkips = (d?.skipBy?.["ENTRY-DRIFT"] ?? 0) + (d?.skipBy?.["ENTRY-DELAY"] ?? 0);
   const staleSkips = d?.skipBy?.["STALE-CARD"] ?? 0; // v1.5.1 — downtime births
+  // v1.5.5 SKIP-VISIBILITY (trace 1a18db2beba9b781 — «چرا سیگنال 3214 در لایو فعال نشده؟»):
+  // RISK-CAP dust skips were journaled (EXEC-SKIP) but INVISIBLE in the dashboard —
+  // the operator saw an ACTIVE card with no live intent and no explanation. The
+  // guard itself is doctrine (v1.4.4 «حساب لایو داره از بین میره») and stays;
+  // only the silence is fixed: surface the counter + the last skip's exact reason.
+  const riskSkips = d?.skipBy?.["RISK-CAP"] ?? 0;
+  const lastSkip = (jn?.recent ?? []).find((e) => e.ev === "EXEC-SKIP");
   const keysOk = data?.keysInstalled !== false;
   const lp = data?.livePnl;
   const netUsdt = lp ? lp.realizedClosedUsdt + lp.openUnrealizedUsdt : null;
@@ -206,6 +214,14 @@ export default function ToobitBridgeCard() {
         {staleSkips > 0 && (
           <span className="rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 font-mono text-amber-500" title="کارت‌هایی که هنگام downtime پل متولد شدند و پنجرهٔ ورودشان (۹۰s) هنگام بازگشت پل گذشته بود — doctrine: تعقیب دیرهنگام ممنوع؛ در ژورنال با SKIP:STALE-CARD ثبت شده‌اند">
             {staleSkips} downtime
+          </span>
+        )}
+        {riskSkips > 0 && (
+          <span
+            className="rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 font-mono text-amber-500"
+            title={lastSkip?.why ? `آخرین رد: NX-${lastSkip.serial ?? "?"} — ${lastSkip.why} · گارد RISK-CAP (v1.4.4): نوتوینال × فاصلهٔ SL ≤ ۲٪ کیف صرافی؛ مارجینِ پس از کپ زیر کف ۱$ = معاملهٔ گرد-و-خاک و رد می‌شود — با equity 28$ فقط کارت‌های با SL-dist ≤~4.7% (در lev12) اجرا می‌شوند` : "گارد RISK-CAP (v1.4.4): نوتوینال × فاصلهٔ SL ≤ ۲٪ کیف صرافی؛ مارجینِ پس از کپ زیر کف ۱$ رد می‌شود"}
+          >
+            {riskSkips} ریسک-کپ
           </span>
         )}
         {(d?.violationsN ?? 0) > 0 ? (
