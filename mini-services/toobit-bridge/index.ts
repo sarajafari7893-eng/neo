@@ -111,7 +111,22 @@ import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSyn
 //      (the «سیگنالی صادر نشده» class). Every open intent is now tracked;
 //      IN-clause chunked at 400 (SQLite placeholder safety) in pollCards
 //      AND doctrineScan.
-const VER = "toobit-bridge 1.5.2";
+// v1.5.3 KEY-RETURN SELF-HEALING (operator order trace 1a18c3435c6a1be5 —
+//   «وضعیت TOOBIT EXEC BRIDGE را بررسی کن» performance report): the 08:05Z
+//   platform restore wiped mini-services/*/.env for the SECOND time; the
+//   08:07-booted bridge ran keyless while FIVE live intents (NX-3206/3207/
+//   3208/3209/3211) stayed stranded on the exchange. Every card-doctrine
+//   close retried 21× → EXEC-RETRY-ABANDONED — and pre-1.5.3 the abandon was
+//   permanent for the process lifetime: re-installing keys would NOT re-fire
+//   those closes (the card transition was already consumed). Fix:
+//   ① KEYS-HOTRELOAD — the .env file is watched (30s); any content change
+//      reloads API keys live (no restart).
+//   ② RE-ARM — on the no-keys→keys transition every LIVE intent with burned
+//      retries gets actionAttempts reset and lastStatusSeen reverted to
+//      prevStatusSeen, so the next 1.5s poll re-fires the pending close/bank.
+//      Key return is now self-healing; KEYS-HOTRELOAD / KEYS-GONE-HOTRELOAD
+//      audited.
+const VER = "toobit-bridge 1.5.3";
 // v1.4.3 (operator order trace 1a172ca1af260c0d — «مارجین 5$/$0.5 به‌جای 10$، چرا هیچ سیگنالی در سود بسته نشده، وضعیت NX-3139 در لایو متفاوت است — اقدامات حیاتی فوری»):
 //   Forensics proved FOUR independent root causes, all fixed here:
 //   ① CONTRACT-MULTIPLIER SIZING BUG (the $0.5 margin) — exchangeInfo carries
@@ -193,6 +208,43 @@ try {
 // wiped the key file; liveApproved stays true while isLiveMode() is permanently
 // false → LIVE + reconciliation (راستی‌آزمایی حساب) dead SILENTLY. Expose it.
 const hasExecKeys = (): boolean => API_KEY.length > 0 && API_SECRET.length > 0;
+
+// v1.5.3 — KEYS-HOTRELOAD + ABANDONED-ACTION RE-ARM (trace 1a18c3435c6a1be5).
+// Key file is re-read every 30s; on a no-keys→keys transition the bridge
+// re-arms every LIVE intent whose action retries were burned while keyless
+// (revertTransition gave up at attempts>20 without reverting the card-status
+// mirror — see EXEC-RETRY-ABANDONED). After re-arm the next 1.5s pollCards
+// re-fires the stranded close/bank/TP; no restart, no operator surgery.
+let keysSig = "";
+try { keysSig = readFileSync(`${ROOT}/mini-services/toobit-bridge/.env`, "utf8"); } catch { keysSig = ""; }
+async function watchKeysFile(): Promise<void> {
+  let env = "";
+  try { env = readFileSync(`${ROOT}/mini-services/toobit-bridge/.env`, "utf8"); } catch { env = ""; }
+  if (env === keysSig) return;
+  const had = hasExecKeys();
+  keysSig = env;
+  API_KEY = /^TOOBIT_API_KEY=(.*)$/m.exec(env)?.[1]?.trim() ?? "";
+  API_SECRET = /^TOOBIT_API_SECRET=(.*)$/m.exec(env)?.[1]?.trim() ?? "";
+  const now = hasExecKeys();
+  if (!had && now) {
+    const rearmed: number[] = [];
+    for (const it of Object.values(S.intents)) {
+      if (it.mode !== "LIVE" || (it.actionAttempts ?? 0) <= 0) continue;
+      it.actionAttempts = 0;
+      if (it.prevStatusSeen && it.lastStatusSeen !== it.prevStatusSeen) it.lastStatusSeen = it.prevStatusSeen;
+      rearmed.push(it.serial);
+    }
+    audit("KEYS-HOTRELOAD", { rearmed, note: "keys returned at runtime — abandoned actions re-armed, next poll re-fires them" });
+    log("info", "keys hot-reloaded — LIVE re-armed, stranded actions re-armed", { rearmed: rearmed.length, serials: rearmed });
+    await syncClock().catch(() => undefined);
+    await refreshBalance().catch(() => undefined);
+  } else if (had && !now) {
+    audit("KEYS-GONE-HOTRELOAD", { note: "key file emptied at runtime — LIVE dropped (PAPER-only) until keys return" });
+    log("warn", "keys removed at runtime — LIVE disabled until the key file returns", { envPath: `${ROOT}/mini-services/toobit-bridge/.env` });
+  } else {
+    audit("KEYS-ROTATED", { note: "key file content changed (same key-presence state) — reloaded in place" });
+  }
+}
 
 const BASE = "https://api.toobit.com";
 const POLL_MS = 1500;
@@ -1593,6 +1645,7 @@ if (openDb()) {
   setInterval(() => { void doctrineScan(); }, 30_000); // v1.3.0 — senior-supervisor audit loop
   setInterval(() => { void refreshBalance(); }, 60_000);
   setInterval(() => { void syncClock(); }, 10 * 60_000);
+  setInterval(() => { void watchKeysFile(); }, 30_000); // v1.5.3 — key-return self-healing (trace 1a18c3435c6a1be5)
   setInterval(flushState, 1000);
   setInterval(orphanSweep, 60_000); // v1.4.0 — unmirrored ACTIVE cards become auditable
   void pollCards();
