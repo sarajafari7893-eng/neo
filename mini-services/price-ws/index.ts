@@ -343,13 +343,23 @@ function connectSpotWs(): void {
 // tmp+rename, direct ownership v13.4-style) — the app reads that file for
 // futures liveness + ticker overlay; app restarts never blind it.
 const FUT_WS_BASE = "wss://fstream.binance.com/ws/";
+// v13.5.1 — ring repair (trace 1a18a758cb887281, operator report «NX-3196 چرا
+// همچنان نمایش داده می‌شود»): five entries produced ZERO frames — spot-named
+// symbols that do not exist on the futures plane (PEPEUSDT/SHIBUSDT/BONKUSDT/
+// FLOKIUSDT — the perps are the 1000-prefix listings) plus a dead TONUSDT
+// stream. 44 entries − 5 silent = the 39 rows the ring actually printed.
+// With fapi REST IP-banned (418), futures-only symbols outside the ring had
+// NO perp-native quote at all → sim tape → v10.16 settlement deferral froze
+// open cards (NX-3196 held past TTL, unsettled by doctrine). Corrected to the
+// real perp symbols (WS-probed live: bid frames confirmed for all four) and
+// the dead TON entry dropped — 43 fully-streaming liquid perps.
 const FUT_CORE_SYMBOLS = [
   "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT", "ADAUSDT", "AVAXUSDT",
-  "LINKUSDT", "TONUSDT", "SHIBUSDT", "SUIUSDT", "DOTUSDT", "NEARUSDT", "LTCUSDT", "APTUSDT",
-  "PEPEUSDT", "UNIUSDT", "ARBUSDT", "OPUSDT", "FILUSDT", "INJUSDT", "SEIUSDT", "TIAUSDT",
+  "LINKUSDT", "1000SHIBUSDT", "1000PEPEUSDT", "SUIUSDT", "DOTUSDT", "NEARUSDT", "LTCUSDT", "APTUSDT",
+  "1000BONKUSDT", "UNIUSDT", "ARBUSDT", "OPUSDT", "FILUSDT", "INJUSDT", "SEIUSDT", "TIAUSDT",
   "ATOMUSDT", "ETCUSDT", "BCHUSDT", "XLMUSDT", "HBARUSDT", "TRXUSDT", "AAVEUSDT", "WIFUSDT",
-  "BONKUSDT", "FETUSDT", "ORDIUSDT", "RUNEUSDT", "WLDUSDT", "ONDOUSDT", "ENAUSDT", "JUPUSDT",
-  "PYTHUSDT", "FLOKIUSDT", "ALGOUSDT", "CRVUSDT",
+  "1000FLOKIUSDT", "FETUSDT", "ORDIUSDT", "RUNEUSDT", "WLDUSDT", "ONDOUSDT", "ENAUSDT", "JUPUSDT",
+  "PYTHUSDT", "ALGOUSDT", "CRVUSDT",
 ];
 const FUT_PARSE_THROTTLE_MS = 250;
 const FUT_BOOK_FRESH_MS = 30_000;
@@ -369,7 +379,7 @@ function connectFutBook(sym: string): void {
       futCloses.set(sym, 0);
       futOpenLogged++;
       if (futOpenLogged === 1 || futOpenLogged % 11 === 0) {
-        console.log(`[price-ws] futures bookTicker ring open #${futOpenLogged} (${sym}) — live Binance perp best bid/ask plane (v13.5)`);
+        console.log(`[price-ws] futures bookTicker ring open #${futOpenLogged} (${sym}) — live Binance perp best bid/ask plane (v13.5.1)`);
       }
     };
     ws.onmessage = (ev) => {
@@ -593,8 +603,8 @@ function connect() {
   }
 }
 
-// v13.5 — staggered futures bookTicker ring boot (44 liquid perps; staggered
-// to stay inside fstream's per-IP connection-attempt budget).
+// v13.5.1 — staggered futures bookTicker ring boot (43 liquid perps after the
+// v13.5.1 ring repair; staggered to stay inside fstream's per-IP connection-attempt budget).
 FUT_CORE_SYMBOLS.forEach((sym, i) => setTimeout(() => connectFutBook(sym), 1500 + i * 250));
 
 // v14.0 stall watchdog → fuel priority (binance futures WS > futures bookTicker ring > binance spot WS > REST > OFFLINE)

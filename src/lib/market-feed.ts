@@ -60,7 +60,8 @@ let spotwsProbe: { at: number; fresh: boolean; printAt: number | null; rows: num
 
 // ── v13.5 FUTWS-LIVENESS (trace 1a184d8bbb826f0d) — .data/futws-quotes.json
 // is written DIRECTLY by price-ws :3003 every 3s from the futures bookTicker
-// ring (44 liquid perps, best bid/ask → mid). Fresh file (≤90s payload) = the
+// ring (43 liquid perps after the v13.5.1 ring repair — 5 entries were
+// spot-named/dead and printed zero frames, best bid/ask → mid). Fresh file (≤90s payload) = the
 // Binance FUTURES plane is exchange-pushed live: source stays LIVE through
 // app restarts, REST pool bans and boot windows, and fetchTickers overlays
 // those mids as perp-native quotes (see fetchTickers rung 2). 3s memo keeps
