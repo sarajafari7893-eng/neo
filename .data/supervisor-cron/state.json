@@ -2,15 +2,15 @@
  "ver": "supervisor-cron 1.6.0",
  "pid": 8489,
  "startedAt": "2026-10-29T23:18:14.774Z",
- "updatedAt": "2026-10-30T01:56:01.017Z",
+ "updatedAt": "2026-10-30T02:06:00.970Z",
  "jobs": {
   "sweep": {
-   "lastRunAt": 1793325360935,
+   "lastRunAt": 1793325960936,
    "nextRunAt": 1793325960935,
    "lastStatus": "ok",
-   "lastDurationMs": 47,
+   "lastDurationMs": 34,
    "lastError": null,
-   "runs": 228,
+   "runs": 229,
    "failures": 0
   },
   "progress": {
@@ -41,12 +41,12 @@
    "failures": 0
   },
   "backup": {
-   "lastRunAt": 1793314749232,
-   "nextRunAt": 1793325549232,
+   "lastRunAt": 1793325549232,
+   "nextRunAt": 1793336349232,
    "lastStatus": "ok",
-   "lastDurationMs": 37877,
+   "lastDurationMs": 18910,
    "lastError": null,
-   "runs": 12,
+   "runs": 13,
    "failures": 0
   },
   "digest": {
@@ -59,24 +59,24 @@
    "failures": 0
   },
   "keepwarm": {
-   "lastRunAt": 1793325360935,
-   "nextRunAt": 1793325360935,
+   "lastRunAt": 1793325960936,
+   "nextRunAt": 1793326260935,
    "lastStatus": "ok",
-   "lastDurationMs": 82,
+   "lastDurationMs": 24,
    "lastError": null,
-   "runs": 377,
+   "runs": 379,
    "failures": 105
   }
  },
  "lastSweep": {
-  "at": "2026-10-30T01:56:00.982Z",
+  "at": "2026-10-30T02:06:00.969Z",
   "verdict": "GREEN",
   "reason": "all services up · sentinel not RED",
   "services": {
    "app": {
     "up": true,
     "status": 200,
-    "ms": 24
+    "ms": 21
    },
    "liq": {
     "up": true,
@@ -86,7 +86,7 @@
    "trade": {
     "up": true,
     "status": 200,
-    "ms": 1
+    "ms": 0
    },
    "armor": {
     "up": true,
@@ -96,7 +96,7 @@
    "watchdog": {
     "up": true,
     "status": 200,
-    "ms": 1
+    "ms": 0
    },
    "sentinel": {
     "up": true,
@@ -106,17 +106,17 @@
    "ws": {
     "up": true,
     "status": 400,
-    "ms": 0
+    "ms": 2
    },
    "bridge": {
     "up": true,
     "status": 200,
-    "ms": 1
+    "ms": 0
    },
    "tbt": {
     "up": true,
     "status": 200,
-    "ms": 0
+    "ms": 1
    }
   },
   "anomalies": [],
@@ -143,11 +143,11 @@
   "newN": 3
  },
  "lastKeepwarm": {
-  "at": "2026-10-30T01:56:01.017Z",
+  "at": "2026-10-30T02:06:00.960Z",
   "ok": true,
-  "ms": 82,
+  "ms": 24,
   "bootAt": "2026-10-30T01:30:04.142Z",
-  "gitSha": "a8e84b3",
+  "gitSha": "bd0172a",
   "coldStreak": 0
  },
  "coldStreak": 0,
@@ -160,34 +160,6 @@
  "wsDownStreak": 0,
  "staleStreak": 0,
  "history": [
-  {
-   "id": "digest",
-   "at": 1793316026775,
-   "status": "ok",
-   "durationMs": 739,
-   "detail": "digest new=3 settled=1 bridge=ok"
-  },
-  {
-   "id": "keepwarm",
-   "at": 1793316060935,
-   "status": "ok",
-   "durationMs": 18,
-   "detail": "HEARTBEAT OK 18ms boot=23:17:23Z sha=677fd69"
-  },
-  {
-   "id": "sweep",
-   "at": 1793316360935,
-   "status": "ok",
-   "durationMs": 38,
-   "detail": "AMBER: toobit-bridge doctrine: 1 violation(s) — last=NOTIONAL-DELTA: exp=25.00 act=8.20 (6719bps)"
-  },
-  {
-   "id": "keepwarm",
-   "at": 1793316360936,
-   "status": "ok",
-   "durationMs": 41,
-   "detail": "HEARTBEAT OK 41ms boot=23:23:24Z sha=bb83c96"
-  },
   {
    "id": "keepwarm",
    "at": 1793316660935,
@@ -509,6 +481,34 @@
    "status": "ok",
    "durationMs": 82,
    "detail": "HEARTBEAT OK 82ms boot=01:30:04Z sha=a8e84b3"
+  },
+  {
+   "id": "backup",
+   "at": 1793325549232,
+   "status": "ok",
+   "durationMs": 18910,
+   "detail": "snapshot ok in 19s: SNAPSHOT OK — nexus-snapshot-20261030-015909.zip (44M) · 12 snapshots retained (max 12) · wal:VACUUM-COPY-CONSISTENT+CHECKPOINTED · cal:OK · enc:ENCRYPTED · off-site: DISABLED(oper"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1793325660936,
+   "status": "ok",
+   "durationMs": 14,
+   "detail": "HEARTBEAT OK 14ms boot=01:30:04Z sha=bd0172a"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1793325960936,
+   "status": "ok",
+   "durationMs": 24,
+   "detail": "HEARTBEAT OK 24ms boot=01:30:04Z sha=bd0172a"
+  },
+  {
+   "id": "sweep",
+   "at": 1793325960936,
+   "status": "ok",
+   "durationMs": 34,
+   "detail": "GREEN: all services up · sentinel not RED"
   }
  ],
  "watchRuns": [
