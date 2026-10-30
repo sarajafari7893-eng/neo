@@ -2,15 +2,15 @@
  "ver": "supervisor-cron 1.6.0",
  "pid": 2042,
  "startedAt": "2026-10-30T08:06:02.540Z",
- "updatedAt": "2026-10-30T17:26:01.306Z",
+ "updatedAt": "2026-10-30T17:36:01.144Z",
  "jobs": {
   "sweep": {
-   "lastRunAt": 1793381160935,
+   "lastRunAt": 1793381760935,
    "nextRunAt": 1793381760935,
    "lastStatus": "ok",
-   "lastDurationMs": 369,
+   "lastDurationMs": 209,
    "lastError": null,
-   "runs": 320,
+   "runs": 321,
    "failures": 0
   },
   "progress": {
@@ -59,29 +59,29 @@
    "failures": 0
   },
   "keepwarm": {
-   "lastRunAt": 1793381160935,
-   "nextRunAt": 1793381160935,
-   "lastStatus": "ok",
-   "lastDurationMs": 371,
-   "lastError": null,
-   "runs": 561,
-   "failures": 109
+   "lastRunAt": 1793381760938,
+   "nextRunAt": 1793382060935,
+   "lastStatus": "error",
+   "lastDurationMs": 10,
+   "lastError": "HEARTBEAT COLD app:3000 1ms streak=1",
+   "runs": 563,
+   "failures": 110
   }
  },
  "lastSweep": {
-  "at": "2026-10-30T17:26:01.304Z",
-  "verdict": "AMBER",
-  "reason": "sentinel :3030 verdict AMBER · toobit-bridge doctrine: 5 violation(s) — last=MIRROR-LAG: card=EXPIRED but intent still OPEN 8719s — pollCards transition should have fired",
+  "at": "2026-10-30T17:36:01.143Z",
+  "verdict": "RED",
+  "reason": "app :3000 down",
   "services": {
    "app": {
-    "up": true,
-    "status": 200,
-    "ms": 306
+    "up": false,
+    "status": null,
+    "ms": 0
    },
    "liq": {
     "up": true,
     "status": 200,
-    "ms": 1
+    "ms": 11
    },
    "trade": {
     "up": true,
@@ -91,7 +91,7 @@
    "armor": {
     "up": true,
     "status": 200,
-    "ms": 0
+    "ms": 2
    },
    "watchdog": {
     "up": true,
@@ -101,17 +101,17 @@
    "sentinel": {
     "up": true,
     "status": 200,
-    "ms": 1
+    "ms": 2
    },
    "ws": {
     "up": true,
     "status": 400,
-    "ms": 1
+    "ms": 2
    },
    "bridge": {
     "up": true,
     "status": 200,
-    "ms": 1
+    "ms": 4
    },
    "tbt": {
     "up": true,
@@ -121,9 +121,14 @@
   },
   "anomalies": [
    {
-    "class": "sentinel-amber",
-    "sev": "warn",
-    "msg": "sentinel :3030 verdict AMBER"
+    "class": "app-down",
+    "sev": "crit",
+    "msg": "app :3000 DOWN (HTTP unreachable) · healthz=err → pulse fallback"
+   },
+   {
+    "class": "sentinel-red",
+    "sev": "crit",
+    "msg": "sentinel :3030 verdict RED"
    },
    {
     "class": "tbt-doctrine-violation",
@@ -154,14 +159,14 @@
   "newN": 0
  },
  "lastKeepwarm": {
-  "at": "2026-10-30T17:26:01.306Z",
-  "ok": true,
-  "ms": 371,
-  "bootAt": "2026-10-30T17:25:17.103Z",
-  "gitSha": "3b39322",
-  "coldStreak": 0
+  "at": "2026-10-30T17:36:00.939Z",
+  "ok": false,
+  "ms": 1,
+  "bootAt": null,
+  "gitSha": null,
+  "coldStreak": 1
  },
- "coldStreak": 0,
+ "coldStreak": 1,
  "alertLedger": {
   "sentinel-red": 1793379970299,
   "review-llm-unavailable": 1793358042357,
@@ -172,27 +177,6 @@
  "wsDownStreak": 0,
  "staleStreak": 0,
  "history": [
-  {
-   "id": "keepwarm",
-   "at": 1793372160935,
-   "status": "ok",
-   "durationMs": 85,
-   "detail": "HEARTBEAT OK 85ms boot=14:55:03Z sha=e06bead"
-  },
-  {
-   "id": "sweep",
-   "at": 1793372160935,
-   "status": "ok",
-   "durationMs": 1014,
-   "detail": "RED: sentinel verdict RED"
-  },
-  {
-   "id": "keepwarm",
-   "at": 1793372460935,
-   "status": "ok",
-   "durationMs": 32,
-   "detail": "HEARTBEAT OK 32ms boot=14:55:03Z sha=415e25f"
-  },
   {
    "id": "sweep",
    "at": 1793372760935,
@@ -521,6 +505,27 @@
    "status": "ok",
    "durationMs": 371,
    "detail": "HEARTBEAT OK 371ms boot=17:25:17Z sha=3b39322"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1793381460935,
+   "status": "ok",
+   "durationMs": 708,
+   "detail": "HEARTBEAT OK 708ms boot=17:30:32Z sha=b758f6b"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1793381760938,
+   "status": "error",
+   "durationMs": 10,
+   "detail": "HEARTBEAT COLD app:3000 1ms streak=1"
+  },
+  {
+   "id": "sweep",
+   "at": 1793381760935,
+   "status": "ok",
+   "durationMs": 209,
+   "detail": "RED: app :3000 down"
   }
  ],
  "watchRuns": [
