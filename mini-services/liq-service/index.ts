@@ -381,29 +381,37 @@ async function okxPollOnce(target: OkxTarget): Promise<boolean> {
   }
 }
 
+let okxCycleInFlight = false;
 async function okxPollCycle(): Promise<void> {
   if (okxTargets.length === 0) return;
-  const st = venues.okx;
-  // bounded-concurrency worker pool
-  let idx = 0;
-  let ok = 0;
-  async function worker(): Promise<void> {
-    while (idx < okxTargets.length) {
-      const t = okxTargets[idx++];
-      if (await okxPollOnce(t)) ok++;
+  if (okxCycleInFlight) return; // overlap guard — a 120-target cycle can outlast the 12s tick; skip rather than race the shared idx cursor (v3.2.2)
+  okxCycleInFlight = true;
+  try {
+    const st = venues.okx;
+    // bounded-concurrency worker pool
+    let idx = 0;
+    let ok = 0;
+    async function worker(): Promise<void> {
+      while (idx < okxTargets.length) {
+        const t = okxTargets[idx++];
+        if (await okxPollOnce(t)) ok++;
+        if (OKX_WORKER_GAP_MS > 0) await new Promise((r) => setTimeout(r, OKX_WORKER_GAP_MS)); // rate-limit pacing (v3.2.2)
+      }
     }
+    await Promise.all(Array.from({ length: Math.min(OKX_CONCURRENCY, okxTargets.length) }, worker));
+    if (ok > 0) {
+      st.connected = true;
+      st.backoffMs = 0;
+    } else {
+      st.connected = false;
+      st.reconnects++;
+    }
+    // prune dedupe window (10min)
+    const cut = Date.now() - 600_000;
+    if (okxDedupe.size > 8000) for (const [k, t] of okxDedupe) if (t < cut) okxDedupe.delete(k);
+  } finally {
+    okxCycleInFlight = false;
   }
-  await Promise.all(Array.from({ length: Math.min(OKX_CONCURRENCY, okxTargets.length) }, worker));
-  if (ok > 0) {
-    st.connected = true;
-    st.backoffMs = 0;
-  } else {
-    st.connected = false;
-    st.reconnects++;
-  }
-  // prune dedupe window (10min)
-  const cut = Date.now() - 600_000;
-  if (okxDedupe.size > 8000) for (const [k, t] of okxDedupe) if (t < cut) okxDedupe.delete(k);
 }
 
 function startOkxPoller(): void {
