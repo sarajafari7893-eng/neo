@@ -226,22 +226,28 @@ export default function ToobitBridgeCard() {
             )}
             title={`حقایق مالی صرافی: بسته‌شده ${lp.closedN} intent → realized ${lp.realizedClosedUsdt}$ · باز ${lp.openN} → سود/زیان لحظه‌ای ${lp.openUnrealizedUsdt}$`}
           >
-            PnL {netUsdt !== null && netUsdt >= 0 ? "+" : ""}{netUsdt?.toFixed(2)}$
+            PnL واقعی {netUsdt !== null && netUsdt >= 0 ? "+" : ""}{netUsdt?.toFixed(2)}$
           </span>
         )}
       </div>
 
       {/* v1.5.0 — fixed-$3 account strip + equity curve (ژورنال مالی و نمودار) */}
       {pa && (
-        <div className="mt-2 rounded-md border border-border/60 bg-background/40 px-2 py-1.5">
+        <div
+          className="mt-2 rounded-md border border-border/60 bg-background/40 px-2 py-1.5"
+          title="حساب آزمون PAPER با لنگر ثابت ۳$ (فرمان «بالانس ثابت ۳$») — سود/زیان کاغذی با قیمت‌گذاری روی کتاب واقعی صرافی؛ این اعداد پول واقعی نیستند — PnL واقعی همان بج «PnL واقعی» بالاست. کارت‌هایی که در پنجرهٔ بی‌کلیدی آینه شدند به‌صورت آزمون بسته شدند"
+        >
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
-            <span className="flex items-center gap-1 font-mono" title="بالانس ثابت حساب (لنگر $3) — موجودی واقعی صرافی جداگانه نمایش داده می‌شود">
+            <span className="rounded border border-border/70 bg-background px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground" title="این ردیف حساب آزمون (کاغذی) است — بدون پول واقعی">
+              آزمون PAPER
+            </span>
+            <span className="flex items-center gap-1 font-mono" title="بالانس ثابت حساب آزمون (لنگر $3) — موجودی واقعی صرافی جداگانه در بالای کارت نمایش داده می‌شود">
               <BadgeDollarSign className="h-3.5 w-3.5 text-muted-foreground" aria-hidden />
               BALANCE {pa.anchorUsdt.toFixed(0)}$
             </span>
-            <span className="font-mono text-muted-foreground" title="ابره = لنگر + Σ سود/زیان محقق‌شدهٔ paper (قیمت‌گذاری روی کتاب واقعی)">equity <span className="text-neon">{pa.equityUsdt.toFixed(4)}$</span></span>
-            <span className={cn("font-mono", pa.realizedUsdt >= 0 ? "text-neon" : "text-danger-neon")} title="PnL محقق‌شدهٔ paper">PnL {pa.realizedUsdt >= 0 ? "+" : ""}{pa.realizedUsdt.toFixed(4)}$</span>
-            <span className="font-mono text-muted-foreground" title="برد/باخت intents بسته‌شده">{pa.wins}W/{pa.losses}L{pa.winRate !== null ? ` · ${pa.winRate}%` : ""}</span>
+            <span className="font-mono text-muted-foreground" title="ابره = لنگر + Σ سود/زیان محقق‌شدهٔ paper (قیمت‌گذاری روی کتاب واقعی) — عدد آزمون، نه واقعی">equity <span className="text-neon">{pa.equityUsdt.toFixed(4)}$</span></span>
+            <span className={cn("font-mono", pa.realizedUsdt >= 0 ? "text-neon" : "text-danger-neon")} title="PnL محقق‌شدهٔ paper (آزمون)">PnL {pa.realizedUsdt >= 0 ? "+" : ""}{pa.realizedUsdt.toFixed(4)}$</span>
+            <span className="font-mono text-muted-foreground" title="برد/باخت intents بسته‌شدهٔ آزمون">{pa.wins}W/{pa.losses}L{pa.winRate !== null ? ` · ${pa.winRate}%` : ""}</span>
             <span className="ml-auto font-mono text-muted-foreground">{evTotal} رویداد ژورنال</span>
           </div>
           {curve.length >= 2 && (
