@@ -2,15 +2,15 @@
  "ver": "supervisor-cron 1.6.0",
  "pid": 2503,
  "startedAt": "2026-10-30T18:01:13.747Z",
- "updatedAt": "2026-10-31T00:16:00.984Z",
+ "updatedAt": "2026-10-31T00:26:01.044Z",
  "jobs": {
   "sweep": {
-   "lastRunAt": 1793405760935,
-   "nextRunAt": 1793405760935,
+   "lastRunAt": 1793406360935,
+   "nextRunAt": 1793406360935,
    "lastStatus": "ok",
-   "lastDurationMs": 49,
+   "lastDurationMs": 109,
    "lastError": null,
-   "runs": 361,
+   "runs": 362,
    "failures": 0
   },
   "progress": {
@@ -59,29 +59,29 @@
    "failures": 0
   },
   "keepwarm": {
-   "lastRunAt": 1793405760935,
-   "nextRunAt": 1793406060935,
-   "lastStatus": "ok",
-   "lastDurationMs": 34,
-   "lastError": null,
-   "runs": 642,
-   "failures": 114
+   "lastRunAt": 1793406360936,
+   "nextRunAt": 1793406660935,
+   "lastStatus": "error",
+   "lastDurationMs": 2,
+   "lastError": "HEARTBEAT COLD app:3000 0ms streak=1",
+   "runs": 644,
+   "failures": 115
   }
  },
  "lastSweep": {
-  "at": "2026-10-31T00:16:00.984Z",
-  "verdict": "AMBER",
-  "reason": "sentinel :3030 verdict AMBER · toobit-bridge doctrine: 5 violation(s) — last=MIRROR-LAG: card=EXPIRED but intent still OPEN 8719s — pollCards transition should have fired",
+  "at": "2026-10-31T00:26:01.044Z",
+  "verdict": "RED",
+  "reason": "app :3000 down",
   "services": {
    "app": {
-    "up": true,
-    "status": 200,
-    "ms": 36
+    "up": false,
+    "status": null,
+    "ms": 0
    },
    "liq": {
     "up": true,
     "status": 200,
-    "ms": 0
+    "ms": 3
    },
    "trade": {
     "up": true,
@@ -91,7 +91,7 @@
    "armor": {
     "up": true,
     "status": 200,
-    "ms": 1
+    "ms": 0
    },
    "watchdog": {
     "up": true,
@@ -111,15 +111,20 @@
    "bridge": {
     "up": true,
     "status": 200,
-    "ms": 0
+    "ms": 1
    },
    "tbt": {
     "up": true,
     "status": 200,
-    "ms": 1
+    "ms": 0
    }
   },
   "anomalies": [
+   {
+    "class": "app-down",
+    "sev": "crit",
+    "msg": "app :3000 DOWN (HTTP unreachable) · healthz=err → pulse fallback"
+   },
    {
     "class": "sentinel-amber",
     "sev": "warn",
@@ -132,7 +137,7 @@
    }
   ],
   "data": {
-   "lastEventAgeMin": 0
+   "lastEventAgeMin": 1
   },
   "streaks": {
    "wsDown": 0,
@@ -154,14 +159,14 @@
   "newN": 6
  },
  "lastKeepwarm": {
-  "at": "2026-10-31T00:16:00.969Z",
-  "ok": true,
-  "ms": 34,
-  "bootAt": "2026-10-31T00:07:22.562Z",
-  "gitSha": "503c850",
-  "coldStreak": 0
+  "at": "2026-10-31T00:26:00.936Z",
+  "ok": false,
+  "ms": 0,
+  "bootAt": null,
+  "gitSha": null,
+  "coldStreak": 1
  },
- "coldStreak": 0,
+ "coldStreak": 1,
  "alertLedger": {
   "sentinel-red": 1793398562786,
   "review-llm-unavailable": 1793358042357,
@@ -172,27 +177,6 @@
  "wsDownStreak": 0,
  "staleStreak": 0,
  "history": [
-  {
-   "id": "keepwarm",
-   "at": 1793397060935,
-   "status": "ok",
-   "durationMs": 18,
-   "detail": "HEARTBEAT OK 18ms boot=21:38:04Z sha=97d2457"
-  },
-  {
-   "id": "sweep",
-   "at": 1793397360935,
-   "status": "ok",
-   "durationMs": 47,
-   "detail": "AMBER: sentinel :3030 verdict AMBER · toobit-bridge doctrine: 5 violation(s) — last=MIRROR-LAG: card=EXPIRED but intent still O"
-  },
-  {
-   "id": "keepwarm",
-   "at": 1793397360935,
-   "status": "ok",
-   "durationMs": 49,
-   "detail": "HEARTBEAT OK 49ms boot=21:38:04Z sha=97d2457"
-  },
   {
    "id": "keepwarm",
    "at": 1793397660936,
@@ -521,6 +505,27 @@
    "status": "ok",
    "durationMs": 49,
    "detail": "AMBER: sentinel :3030 verdict AMBER · toobit-bridge doctrine: 5 violation(s) — last=MIRROR-LAG: card=EXPIRED but intent still O"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1793406060935,
+   "status": "ok",
+   "durationMs": 150,
+   "detail": "HEARTBEAT OK 150ms boot=00:20:54Z sha=040968c"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1793406360936,
+   "status": "error",
+   "durationMs": 2,
+   "detail": "HEARTBEAT COLD app:3000 0ms streak=1"
+  },
+  {
+   "id": "sweep",
+   "at": 1793406360935,
+   "status": "ok",
+   "durationMs": 109,
+   "detail": "RED: app :3000 down"
   }
  ],
  "watchRuns": [
