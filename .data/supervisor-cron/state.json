@@ -2,15 +2,15 @@
  "ver": "supervisor-cron 1.6.0",
  "pid": 2005,
  "startedAt": "2026-10-31T02:53:28.118Z",
- "updatedAt": "2026-10-31T11:01:00.959Z",
+ "updatedAt": "2026-10-31T11:11:00.956Z",
  "jobs": {
   "sweep": {
-   "lastRunAt": 1793444160935,
-   "nextRunAt": 1793444760935,
+   "lastRunAt": 1793444760936,
+   "nextRunAt": 1793445360935,
    "lastStatus": "ok",
-   "lastDurationMs": 44,
+   "lastDurationMs": 40,
    "lastError": null,
-   "runs": 425,
+   "runs": 426,
    "failures": 0
   },
   "progress": {
@@ -41,12 +41,12 @@
    "failures": 0
   },
   "backup": {
-   "lastRunAt": 1793434052558,
-   "nextRunAt": 1793444852558,
+   "lastRunAt": 1793444852559,
+   "nextRunAt": 1793455652559,
    "lastStatus": "ok",
-   "lastDurationMs": 22718,
+   "lastDurationMs": 23401,
    "lastError": null,
-   "runs": 23,
+   "runs": 24,
    "failures": 0
   },
   "digest": {
@@ -59,24 +59,24 @@
    "failures": 0
   },
   "keepwarm": {
-   "lastRunAt": 1793444460936,
-   "nextRunAt": 1793444460935,
+   "lastRunAt": 1793445060935,
+   "nextRunAt": 1793445060935,
    "lastStatus": "ok",
-   "lastDurationMs": 23,
+   "lastDurationMs": 21,
    "lastError": null,
-   "runs": 770,
+   "runs": 772,
    "failures": 117
   }
  },
  "lastSweep": {
-  "at": "2026-10-31T10:56:00.979Z",
+  "at": "2026-10-31T11:06:00.976Z",
   "verdict": "AMBER",
   "reason": "sentinel :3030 verdict AMBER · toobit-bridge doctrine: 20 violation(s) — last=NOTIONAL-DELTA: exp=20.00 act=13.86 (3071bps)",
   "services": {
    "app": {
     "up": true,
     "status": 200,
-    "ms": 28
+    "ms": 24
    },
    "liq": {
     "up": true,
@@ -86,17 +86,17 @@
    "trade": {
     "up": true,
     "status": 200,
-    "ms": 1
+    "ms": 0
    },
    "armor": {
     "up": true,
     "status": 200,
-    "ms": 0
+    "ms": 1
    },
    "watchdog": {
     "up": true,
     "status": 200,
-    "ms": 1
+    "ms": 0
    },
    "sentinel": {
     "up": true,
@@ -106,12 +106,12 @@
    "ws": {
     "up": true,
     "status": 400,
-    "ms": 2
+    "ms": 1
    },
    "bridge": {
     "up": true,
     "status": 200,
-    "ms": 1
+    "ms": 0
    },
    "tbt": {
     "up": true,
@@ -154,11 +154,11 @@
   "newN": 0
  },
  "lastKeepwarm": {
-  "at": "2026-10-31T11:01:00.959Z",
+  "at": "2026-10-31T11:11:00.956Z",
   "ok": true,
-  "ms": 23,
-  "bootAt": "2026-10-31T10:43:10.538Z",
-  "gitSha": "c4412a1",
+  "ms": 21,
+  "bootAt": "2026-10-31T10:43:10.539Z",
+  "gitSha": "4a3a3b0",
   "coldStreak": 0
  },
  "coldStreak": 0,
@@ -172,34 +172,6 @@
  "wsDownStreak": 0,
  "staleStreak": 0,
  "history": [
-  {
-   "id": "keepwarm",
-   "at": 1793435460935,
-   "status": "ok",
-   "durationMs": 25,
-   "detail": "HEARTBEAT OK 25ms boot=08:30:50Z sha=d4314a5"
-  },
-  {
-   "id": "keepwarm",
-   "at": 1793435760936,
-   "status": "ok",
-   "durationMs": 79,
-   "detail": "HEARTBEAT OK 78ms boot=08:30:50Z sha=019e6f6"
-  },
-  {
-   "id": "sweep",
-   "at": 1793435760935,
-   "status": "ok",
-   "durationMs": 102,
-   "detail": "AMBER: sentinel :3030 verdict AMBER · toobit-bridge doctrine: 20 violation(s) — last=NOTIONAL-DELTA: exp=20.00 act=13.86 (3071b"
-  },
-  {
-   "id": "keepwarm",
-   "at": 1793436060935,
-   "status": "ok",
-   "durationMs": 39,
-   "detail": "HEARTBEAT OK 39ms boot=08:30:50Z sha=019e6f6"
-  },
   {
    "id": "sweep",
    "at": 1793436360935,
@@ -521,6 +493,34 @@
    "status": "ok",
    "durationMs": 23,
    "detail": "HEARTBEAT OK 23ms boot=10:43:10Z sha=c4412a1"
+  },
+  {
+   "id": "sweep",
+   "at": 1793444760936,
+   "status": "ok",
+   "durationMs": 40,
+   "detail": "AMBER: sentinel :3030 verdict AMBER · toobit-bridge doctrine: 20 violation(s) — last=NOTIONAL-DELTA: exp=20.00 act=13.86 (3071b"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1793444760936,
+   "status": "ok",
+   "durationMs": 41,
+   "detail": "HEARTBEAT OK 41ms boot=10:43:10Z sha=4a3a3b0"
+  },
+  {
+   "id": "backup",
+   "at": 1793444852559,
+   "status": "ok",
+   "durationMs": 23401,
+   "detail": "snapshot ok in 23s: SNAPSHOT OK — nexus-snapshot-20261031-110732.zip (47M) · 12 snapshots retained (max 12) · wal:VACUUM-COPY-CONSISTENT+CHECKPOINTED · cal:OK · enc:ENCRYPTED · off-site: DISABLED(oper"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1793445060935,
+   "status": "ok",
+   "durationMs": 21,
+   "detail": "HEARTBEAT OK 21ms boot=10:43:10Z sha=4a3a3b0"
   }
  ],
  "watchRuns": [
