@@ -26,7 +26,7 @@ import { Database } from "bun:sqlite";
 import { readFileSync, writeFileSync, renameSync } from "node:fs";
 
 const PORT = 3022;
-const VER = "card-sentinel 1.0.0";
+const VER = "card-sentinel 1.1.0";
 const ROOT = "/home/z/my-project";
 const DB_PATH = `${ROOT}/db/custom.db`;
 const STATE_PATH = `${ROOT}/.data/card-sentinel-state.json`;

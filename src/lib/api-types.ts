@@ -156,6 +156,26 @@ export interface RiskStateDTO {
   reasons: string[];
 }
 
+/** v13.3 CHOP-SHORT-OPEN forensics (trace 1a193604acd890f9): the bridge-side
+ * EXECUTION truth for a signal — resolved the operator's NX-3217 question
+ * (ledger marginUsd=10 is the FLAT-10 sizing ANCHOR; the live bridge enforces
+ * the operator's fixed-margin mandate cfg.marginUsdt=2). Attached by
+ * /api/signals when the bridge has seen this serial; null/fail-soft when the
+ * bridge is down or the card never reached the bridge. */
+export interface LiveIntentDTO {
+  serial: number;
+  mode: "LIVE" | "PAPER";
+  bridgeStatus: string; // OPEN | OPENING | CLOSED | SKIP | FAILED …
+  marginUsdt: number; // live execution margin (fixed-margin mandate truth)
+  leverage: number; // exchange-side leverage actually set (levSrc applied)
+  levSrc: string; // "card" | "cfg" | …
+  notionalUsdt: number; // marginUsdt × leverage (what the exchange saw)
+  fillPrice: number | null;
+  qtyOrig: number | null;
+  orderId: string | null;
+  slipBps: number | null;
+}
+
 export interface SignalDTO {
   id: string;
   symbol: string;
@@ -195,6 +215,7 @@ export interface SignalDTO {
   expiresAt: string;
   createdAt: string;
   closedAt: string | null;
+  liveIntent?: LiveIntentDTO | null;
 }
 
 export interface SignalEventDTO {

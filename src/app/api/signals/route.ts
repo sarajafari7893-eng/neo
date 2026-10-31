@@ -39,6 +39,52 @@ export async function OPTIONS() {
   return new NextResponse(null, { status: 204, headers: CORS });
 }
 
+// ── v13.3 LIVE-INTENT ENRICHMENT (operator forensics trace 1a193604acd890f9) ──
+// The ledger's marginUsd is the FLAT-10 sizing ANCHOR (engine deploy math);
+// the bridge's execution truth is the operator's FIXED-MARGIN mandate
+// (cfg.marginUsdt=2) — NX-3217 LSK showed both on different layers and the
+// operator saw two numbers. This merge attaches the bridge intent per serial
+// so every card can display the EXECUTION truth next to the ledger anchor.
+// Fail-soft: bridge down / slow → no liveIntent field, feed still serves.
+let bridgeIntentCache: { at: number; map: Map<number, import("@/lib/api-types").LiveIntentDTO> } | null = null;
+async function fetchBridgeIntentMap(): Promise<Map<number, import("@/lib/api-types").LiveIntentDTO>> {
+  if (bridgeIntentCache && Date.now() - bridgeIntentCache.at < 5000) return bridgeIntentCache.map;
+  const map = new Map<number, import("@/lib/api-types").LiveIntentDTO>();
+  try {
+    const res = await fetch("http://127.0.0.1:3021/status", { signal: AbortSignal.timeout(1500), cache: "no-store" });
+    if (res.ok) {
+      const j = (await res.json()) as { openIntents?: Record<string, unknown>[]; recent?: Record<string, unknown>[]; cfg?: { marginUsdt?: number } };
+      const cfgMargin = typeof j.cfg?.marginUsdt === "number" ? j.cfg.marginUsdt : null;
+      const seen = new Set<Record<string, unknown>>();
+      for (const i of [...(j.openIntents ?? []), ...(j.recent ?? [])]) {
+        if (seen.has(i)) continue; // openIntents ⊂ recent overlap
+        seen.add(i);
+        const serial = typeof i.serial === "number" ? i.serial : null;
+        if (serial === null || map.has(serial)) continue;
+        const margin = typeof i.marginUsdt === "number" ? i.marginUsdt : cfgMargin;
+        if (margin === null) continue;
+        map.set(serial, {
+          serial,
+          mode: i.mode === "PAPER" ? "PAPER" : "LIVE",
+          bridgeStatus: typeof i.status === "string" ? i.status : "UNKNOWN",
+          marginUsdt: margin,
+          leverage: typeof i.leverage === "number" ? i.leverage : 0,
+          levSrc: typeof i.levSrc === "string" ? i.levSrc : "n/a",
+          notionalUsdt: typeof i.notionalUsdt === "number" ? i.notionalUsdt : margin * (typeof i.leverage === "number" ? i.leverage : 0),
+          fillPrice: typeof i.fillPrice === "number" ? i.fillPrice : null,
+          qtyOrig: typeof i.qtyOrig === "number" ? i.qtyOrig : null,
+          orderId: typeof i.orderId === "string" ? i.orderId : null,
+          slipBps: typeof i.slipBps === "number" ? i.slipBps : null,
+        });
+      }
+    }
+  } catch {
+    // bridge down — honest absence (no liveIntent), never block the feed
+  }
+  bridgeIntentCache = { at: Date.now(), map };
+  return map;
+}
+
 /** GET /api/signals?status=ACTIVE&direction=LONG&symbol=BTCUSDT&limit=40 */
 export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams;
@@ -87,6 +133,18 @@ export async function GET(req: NextRequest) {
           tags: s.tags ? s.tags.split(",").filter(Boolean) : [],
         }))
       : signals.map(toSignalDTO);
+
+  // v13.3 — attach bridge execution truth per serial (full format only;
+  // compact stays a flat cheap widget row). Fail-soft: no field when down.
+  if (format !== "compact") {
+    const intentMap = await fetchBridgeIntentMap();
+    if (intentMap.size > 0) {
+      for (const dto of body) {
+        const li = intentMap.get((dto as { serial: number }).serial);
+        if (li) (dto as { liveIntent?: unknown }).liveIntent = li;
+      }
+    }
+  }
 
   return NextResponse.json(
     {

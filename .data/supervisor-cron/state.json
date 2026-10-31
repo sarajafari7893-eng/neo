@@ -2,15 +2,15 @@
  "ver": "supervisor-cron 1.6.0",
  "pid": 2089,
  "startedAt": "2026-10-31T11:56:43.766Z",
- "updatedAt": "2026-10-31T19:16:01.075Z",
+ "updatedAt": "2026-10-31T19:26:02.095Z",
  "jobs": {
   "sweep": {
-   "lastRunAt": 1793474160935,
+   "lastRunAt": 1793474760935,
    "nextRunAt": 1793474760935,
    "lastStatus": "ok",
-   "lastDurationMs": 139,
+   "lastDurationMs": 1160,
    "lastError": null,
-   "runs": 474,
+   "runs": 475,
    "failures": 0
   },
   "progress": {
@@ -59,29 +59,29 @@
    "failures": 0
   },
   "keepwarm": {
-   "lastRunAt": 1793474160935,
-   "nextRunAt": 1793474160935,
+   "lastRunAt": 1793474760935,
+   "nextRunAt": 1793475060935,
    "lastStatus": "ok",
-   "lastDurationMs": 140,
+   "lastDurationMs": 33,
    "lastError": null,
-   "runs": 868,
+   "runs": 870,
    "failures": 117
   }
  },
  "lastSweep": {
-  "at": "2026-10-31T19:16:01.074Z",
-  "verdict": "AMBER",
-  "reason": "sentinel :3030 verdict AMBER · toobit-bridge doctrine: 20 violation(s) — last=MIRROR-LAG: card=EXPIRED but intent still OPEN 61939s — pollCards transition should have fired",
+  "at": "2026-10-31T19:26:00.981Z",
+  "verdict": "RED",
+  "reason": "sentinel verdict RED",
   "services": {
    "app": {
     "up": true,
     "status": 200,
-    "ms": 27
+    "ms": 25
    },
    "liq": {
     "up": true,
     "status": 200,
-    "ms": 1
+    "ms": 0
    },
    "trade": {
     "up": true,
@@ -96,47 +96,52 @@
    "watchdog": {
     "up": true,
     "status": 200,
-    "ms": 0
+    "ms": 1
    },
    "sentinel": {
     "up": true,
     "status": 200,
-    "ms": 1
+    "ms": 0
    },
    "ws": {
     "up": true,
     "status": 400,
-    "ms": 1
+    "ms": 4
    },
    "bridge": {
     "up": true,
     "status": 200,
-    "ms": 1
+    "ms": 0
    },
    "tbt": {
     "up": true,
     "status": 200,
-    "ms": 0
+    "ms": 4
    }
   },
   "anomalies": [
    {
-    "class": "sentinel-amber",
-    "sev": "warn",
-    "msg": "sentinel :3030 verdict AMBER"
+    "class": "sentinel-red",
+    "sev": "crit",
+    "msg": "sentinel :3030 verdict RED"
    },
    {
     "class": "tbt-doctrine-violation",
     "sev": "crit",
     "msg": "toobit-bridge doctrine: 20 violation(s) — last=MIRROR-LAG: card=EXPIRED but intent still OPEN 61939s — pollCards transition should have fired"
+   },
+   {
+    "class": "data-stale",
+    "sev": "crit",
+    "msg": "data-stale: newest SignalEvent UNREADABLE old (cap 15min) · no-rows"
    }
   ],
   "data": {
-   "lastEventAgeMin": 0
+   "lastEventAgeMin": null
   },
   "streaks": {
    "wsDown": 0,
-   "stale": 0
+   "stale": 1
   }
  },
  "lastReview": {
@@ -154,45 +159,24 @@
   "newN": 1
  },
  "lastKeepwarm": {
-  "at": "2026-10-31T19:16:01.075Z",
+  "at": "2026-10-31T19:26:00.968Z",
   "ok": true,
-  "ms": 140,
-  "bootAt": "2026-10-31T19:13:01.172Z",
-  "gitSha": "a075a12",
+  "ms": 33,
+  "bootAt": "2026-10-31T19:22:17.304Z",
+  "gitSha": "249d51d",
   "coldStreak": 0
  },
  "coldStreak": 0,
  "alertLedger": {
-  "sentinel-red": 1793398562786,
+  "sentinel-red": 1793474761639,
   "review-llm-unavailable": 1793444350865,
   "app-down": 1793423761203,
-  "data-stale": 1793312163333,
-  "tbt-doctrine-violation": 1793409961857
+  "data-stale": 1793474762095,
+  "tbt-doctrine-violation": 1793474761865
  },
  "wsDownStreak": 0,
- "staleStreak": 0,
+ "staleStreak": 1,
  "history": [
-  {
-   "id": "keepwarm",
-   "at": 1793465160935,
-   "status": "ok",
-   "durationMs": 53,
-   "detail": "HEARTBEAT OK 53ms boot=16:28:17Z sha=118b169"
-  },
-  {
-   "id": "sweep",
-   "at": 1793465160935,
-   "status": "ok",
-   "durationMs": 67,
-   "detail": "AMBER: sentinel :3030 verdict AMBER · toobit-bridge doctrine: 20 violation(s) — last=NOTIONAL-DELTA: exp=20.00 act=13.86 (3071b"
-  },
-  {
-   "id": "keepwarm",
-   "at": 1793465460935,
-   "status": "ok",
-   "durationMs": 26,
-   "detail": "HEARTBEAT OK 26ms boot=16:50:44Z sha=e12b11c"
-  },
   {
    "id": "sweep",
    "at": 1793465760935,
@@ -521,6 +505,27 @@
    "status": "ok",
    "durationMs": 140,
    "detail": "HEARTBEAT OK 140ms boot=19:13:01Z sha=a075a12"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1793474460935,
+   "status": "ok",
+   "durationMs": 25,
+   "detail": "HEARTBEAT OK 25ms boot=19:16:54Z sha=249d51d"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1793474760935,
+   "status": "ok",
+   "durationMs": 33,
+   "detail": "HEARTBEAT OK 33ms boot=19:22:17Z sha=249d51d"
+  },
+  {
+   "id": "sweep",
+   "at": 1793474760935,
+   "status": "ok",
+   "durationMs": 1160,
+   "detail": "RED: sentinel verdict RED"
   }
  ],
  "watchRuns": [

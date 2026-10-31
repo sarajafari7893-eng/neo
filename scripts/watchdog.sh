@@ -298,6 +298,32 @@ one_cycle() {
       say "KEYS-GUARD: toobit-bridge/.env was wiped — reinstalled from sealed copy (0600); KEYS-HOTRELOAD re-arms LIVE ≤30s"
     fi
   fi
+  # v3 secrets-chain — DB-escrow fallback (P0 trace 1a193604acd890f9): when BOTH
+  # the live .env and the sealed copy are gone (5th-incident shape), decrypt the
+  # AES-256-CBC/PBKDF2 escrow stored in EngineSetting "toobit.key-escrow" with
+  # the off-tree passphrase. Last independent link before operator re-delivery.
+  local tb_pass="/home/z/.nexus-secrets/escrow.pass"
+  local tb_db="/home/z/my-project/db/custom.db"
+  if [ ! -s "$tb_env_f" ] && [ -s "$tb_pass" ] && [ -s "$tb_db" ]; then
+    local tb_enc; tb_enc=$(mktemp /home/z/.nexus-secrets/.escrow-XXXXXX.enc)
+    if python3 -c "
+import sqlite3,base64,json,sys
+try:
+    con=sqlite3.connect('$tb_db'); row=con.execute(\"SELECT value FROM EngineSetting WHERE key='toobit.key-escrow'\").fetchone(); con.close()
+    open(sys.argv[1],'wb').write(base64.b64decode(json.loads(row[0])['payloadB64'])) if row else sys.exit(3)
+except Exception: sys.exit(2)
+" "$tb_enc" 2>/dev/null && [ -s "$tb_enc" ]; then
+      mkdir -p "$(dirname "$tb_env_f")" 2>/dev/null
+      if openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -in "$tb_enc" -pass "file:$tb_pass" > "$tb_env_f" 2>/dev/null && grep -q "TOOBIT_API_KEY=" "$tb_env_f" 2>/dev/null; then
+        chmod 600 "$tb_env_f"
+        say "KEYS-GUARD v3: .env restored from DB ESCROW (both live+sealed were gone) — KEYS-HOTRELOAD re-arms LIVE ≤30s"
+      else
+        rm -f "$tb_env_f" 2>/dev/null
+        say "KEYS-GUARD: DB-escrow decrypt failed — bridge stays PAPER, operator re-delivery required"
+      fi
+    fi
+    rm -f "$tb_enc" 2>/dev/null
+  fi
 
   # ── P2.5 · telegram bridge :3005 — OWNED heal (v3.2) ───────────────
   # ROLLBACK-RECOVERY-0912-0030: the platform rollback killed the bridge and
