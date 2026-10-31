@@ -35,7 +35,7 @@ const KEY_ESCROW = "toobit.key-escrow";
 const ITER = 200_000;
 
 function ensurePass(): Buffer {
-  if (existsSync(PASS_PATH)) return readFileSync(PASS_PATH).trim() as unknown as Buffer;
+  if (existsSync(PASS_PATH)) return readFileSync(PASS_PATH, "utf8").trim() as unknown as Buffer;
   mkdirSync("/home/z/.nexus-secrets", { recursive: true });
   const pass = randomBytes(32).toString("hex");
   writeFileSync(PASS_PATH, pass + "\n", { mode: 0o600 });
