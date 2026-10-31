@@ -33113,3 +33113,36 @@ Stage Summary:
 - راستی‌آزمایی زنده: بریج LIVE/keysInstalled ✓، رزم KEYS-GUARD ✓، tbenv roundtrip MATCH ✓، تک‌نمونه L2 با سایکل‌های پیوسته ✓، price-ws پس از رزم 400-OK ✓، recovery-restore کامپایل OK ✓، bash -n هر دو شل OK ✓.
 - lint = ۱۷ پایه (صفر جدید).
 - AMBER باقی‌مانده برای توجه اپراتور: کسری مزمن RAM (BREAKER 3/h)، cards failures1h=64 و staleHot=5 (بدترین: TREEUSDT با ۸۹۵۰ دقیقه)، باز paper-veto arm ۵۷٪، آفسایت بکاپ DISABLED (فرمان 2026-10-22 — با درام امروز کلید، بازنگری توصیه می‌شود).
+
+## مأموریت 2026-10-31 — CHOP-SHORT-OPEN + بستهٔ کامل P0-P2 +NX forensics (trace 1a193604acd890f9)
+**فرمان اپراتور:** «آیا REGIME-CHOP کامل وتو می‌شود؟ فقط شورت را برایش باز بگذار. سپس تمام توصیه‌های P0 تا P2 و Next mission proposal را کامل و مهندسی انجام بده»
+
+### ① قید مهندسی
+- FLAT-10 (src/lib/engine.ts) بایت‌به‌بایت دست‌نخورده (md5 پیش/پس یکسان) — همهٔ تغییرات در لایهٔ دیتا (knobهای gate-settings)، APIها، کامپوننت‌ها و mini-services بود.
+- minScore=17 [PINNED] و regimeGuard=L1 لمس نشدند؛ هیچ knob جدیدی به engine.ts اضافه نشد.
+
+### ② ممیزی — آیا REGIME-CHOP کامل وتو می‌کند؟
+- **نه کامل؛ اما عملاً بله برای شورت.** semantics فعلی (regime.ts، L1): ① BREAKOUT/MOMENTUM/AI-SCALP هر دو جهت هارد-وتو (v11.6 cell-flip: AI-SCALP −$169.39 SHORT/−$245.63 LONG، WR 19.6%/24%) ② LONG بقیهٔ استراتژی‌ها هارد-وتو (EQ-100 ledger: CHOP LONG −$959.39 all-time) ③ **SHORT در پلکان مالیاتی مجاز** (CHOP SHORT +$1171.84 all-time؛ قوی ×0.7/+10thr، متوسط ×0.85/+6thr).
+- ژورنال (۴۰۰ بلاک آخر REGIME): ۳۸۵ LONG / ۱۵ SHORT — ۱۵تاد همه AI-SCALP بودند (خانوادهٔ cell-flip؛ خودش pause کتابی EQ-97 دارد).
+- **دیوار واقعی شورت، پایین‌دست بود**: R1 SHORT-GUARD (shortGuard=1 HTF-ALIGN) روزانه ۲۴۶ کاندید SHORT را که از پلکان رژیم گذشته بودند می‌کشت (۱۲ بلاک/۴۰دقیقه پیش از فلیپ).
+
+### ③ اعمال — CHOP-SHORT-OPEN
+- `scripts/chop-short-open.ts` (الگوی برگشت‌پذیر MG): نوشتن لایهٔ دیتا EngineSetting `gate` — **shortGuard 1→0** در 19:19:03Z با merge کامل ۴۰ کلید (سایر کلیدها بایت-حفظ) + رکورد ممیزی `short-guard.open` + SignalEvent.
+- **حفظ‌شده‌ها (شواهد-محور، عمداً)**: وتوی LONG در CHOP، وتوی BREAKOUT/MOMENTUM/AI-SCALP در CHOP، pause کتابی AI-SCALP، DECISIVE (v10.6، شواهد زنده no-touch 75/113)، minScore پین، STALEها. بازگشت: `bun scripts/chop-short-open.ts --restore`.
+
+### ④ راستی‌آزمایی زنده
+- ژورنال پسا-فلیپ: **SHORT-GUARD = صفر** (قبلاً ۱۲/۴۰دقیقه) · کاندیدهای SHORT از REGIME (پلکان) و R1 عبور و به آخرین گیت کیفیت DECISIVE می‌رسند (ENAUSDT ×۳، PARTIUSDT) — مسیر شورت مکانیکی باز است؛ صدور منوط به عبور از ستون‌های کیفیت با شواهد است (چرخهٔ ۱۳ دقیقه‌ای ارزیابی صادقانه، نه دیوار پنهان).
+- فرماندار چرخهٔ 19:26 در جریان؛ merge آن shortGuard=0 را حفظ کرد (updatedAt ردیف gate همان زمان، مقدار ۰ مانده).
+- lint = ۱۷ پایه (صفر جدید) · app 200 · FLAT-10 دست‌نخورده.
+
+### ⑤ بستهٔ P0-P2 و NX forensics (همه اجرا شد)
+- **P0 — پناهگاه چهارم کلید (KEYCHAIN v3)**: `scripts/keychain-escrow.ts` — AES-256-CBC/PBKDF2-200k سازگار-بایت با openssl، ذخیره در EngineSetting `toobit.key-escrow` (passphrase خارج پروژه: /home/z/.nexus-secrets/escrow.pass 0600). فالبک DB-escrow به recovery-restore.sh (secrets chain v3) و KEYS-GUARD واچ‌داگ اضافه شد. رزم کامل: شبیه‌سازی پاک‌شدن .env → بازیابی از escrow → sha256 یکسان (36554c1a…) → keysInstalled=true. ماتریس: ①env ✓ ②sealed=env ✓ ③tbenv N/A ④escrow=env ✓ ⑤بریج ✓ → RECOVERY-PROOF.
+- **P1 — NX-3217 (LSK)**: معما حل شد — ledger marginUsd=$10 لنگر سایزینگ FLAT-10 است؛ اجرای لایو با مارجین ثابت ۲$ (cfg.marginUsdt=2، mandate اپراتور): notional 28$، qty 136، اهرم ۱۴ (levSrc=card، levMap=۱۴). اثبات عددی: SL −52.8% gross → realized −1.2821 USDT ≈ 2$×14×3.77% + کارمزد (اگر مارجین ۱۰$ بود −۵.۵$ می‌شد). **فیکس UI**: `/api/signals` حالا `liveIntent` بریج را به هر کارت می‌چسباند (کش ۵s، fail-soft) و SignalCard/SignalDetailDialog «LIVE margin $2 · LEDGER $10» و اهرم واقعی صرافی را نشان می‌دهند — دو عدد دو لایه‌اند، دیگر یکجا و شفاف.
+- **P1 — NX-3218 (HYPE)**: در لایو صادر نشد چون **MIN_FLOOR_SKIP**: کف مجاز تووبیت برای HYPE-SWAP-USDT برابر 90.04$ نوتنشنال است و مارجین ثابت ۲$×اهرم۱۱=۲۲$ کفایت نمی‌کند — رد ساختاری صرافی، نه گیت مخفی (audit.jsonl: EXEC-SKIP). رفتار محافظه‌کارانهٔ درست؛ skip حالا روی کارت زنده دیده می‌شود.
+- **P1 — کارت‌سنتینل v1.1.0**: ریشهٔ failures1h=101: ① باگ regex در flow-refresh (`{2,20}` نمادهای تک‌حرفی مثل QUSDT را ۴۰۰ می‌کرد) → `{1,20}` ② نمادهای مرده (REZUSDT scan-fail) هر ۶ دقیقه بودجهٔ رفرش را می‌بلعیدند → قرنطینهٔ ۳-ضربه (۶۰دقیقه؛ bad-symbol=۶ ساعت) + آخرین رفرش موفق ۴۱دقیقه قدیمی بود. سرویس بازسازی و راه‌اندازی مجدد شد (pid جدید، health v1.1.0 ✓).
+- **P1 — paper-veto arm (۵۶.۷٪، starved 20h)**: پیامد مستقیم برداشتن دیوارهاست — بازو از «کاندیدِ PASS که هسته وتو می‌کند» تغذیه می‌شود؛ با حذف MEMORY/R1 وتو کمتر → گرسنگی صادقانه. مانیتور؛ اقدام ساختاری لازم ندارد.
+- **P2 — instrumentation.ts**: ۳× process.exit و memoryUsage → namespace `node:process` (nodeProc.*) — منشا ~۲۰۰ خط هشدار مزمن Turbopack در dev.log؛ کامپایل OK، app 200. پاک‌شدن کامل هشدارها با ری‌استارت بعدی dev-server تأیید می‌شود (بدون ریسک چرخش حین مأموریت).
+- **P2 — RAM**: next-server 2127MB RSS / avail ~789MB — ram-shed لاین A/B/C مسلح (recycle در RSS>1800 یا avail<420)؛ خود-مدیریت‌گر، مداخله حین مأموریت رد شد.
+
+### ⑥ Next mission proposal (پیشنهاد برای فرمان بعدی)
+- ① **پایش صدور ۲۴ساعته پسا-فلیپ**: اگر SHORT در CHOP از DECISIVE+minScore عبور نکرد، فقط دو مسیر باقی است — threshold پلکان (+6/+10 روی ۱۷ پین) یا خشکسالی کاندید؛ آنگاه تصمیم اپراتور دربارهٔ کوتاه‌کردن پلکان (یک knob دیتایی دیگر) ② **کف نوتنشنال تووبیت**: نقشهٔ کامل سمبل‌هایی که با مارجین ۲$ غیرقابل‌معامله‌اند (مثل HYPE) در doctrine بریج تا انتظارات کارت شفاف باشد ③ **آفسایت واقعی**: زنجیرهٔ ۴-حلقه‌ای الان مقاوم به ریکاوری است؛ بازگشت کانال تلگرام-آفسایت (DISABLED با فرمان 2026-10-22) فقط با فرمان اپراتور.

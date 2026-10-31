@@ -129,16 +129,48 @@ function budgetMs(heat: CardRow["heat"]): number {
 
 // ── refresh lane ─────────────────────────────────────────────────────────────
 const lastRefreshAttempt = new Map<string, number>();
+// v1.1.0 QUARANTINE (P1 fix, trace 1a193604acd890f9): dead/delisted symbols
+// (REZUSDT scan-fails, QUSDT bad-symbol regex) retried every 6min consumed the
+// whole refresh budget → failures1h=101 while refreshable cards starved
+// (lastRefreshOk 41min old). Three consecutive hard failures → 60min quarantine;
+// a 400 "bad symbol" is permanent → 6h quarantine. Success resets strikes.
+const QUAR_STRIKES = 3;
+const QUAR_COOLDOWN_MS = 60 * 60_000;
+const QUAR_BAD_MS = 6 * 60 * 60_000;
+const quarantine = new Map<string, { strikes: number; until: number }>();
+
+function quarantined(symbol: string, now: number): boolean {
+  const q = quarantine.get(symbol);
+  if (!q) return false;
+  if (now >= q.until) {
+    quarantine.delete(symbol);
+    return false;
+  }
+  return true;
+}
+
+function strike(symbol: string, now: number, permanent = false): void {
+  const q = quarantine.get(symbol) ?? { strikes: 0, until: 0 };
+  q.strikes += 1;
+  if (permanent || q.strikes >= QUAR_STRIKES) {
+    q.until = now + (permanent ? QUAR_BAD_MS : QUAR_COOLDOWN_MS);
+    log("warn", "quarantined", { symbol, strikes: q.strikes, minutes: Math.round((q.until - now) / 60_000) });
+  }
+  quarantine.set(symbol, q);
+}
 
 async function refreshSymbol(symbol: string): Promise<boolean | "skipped"> {
   try {
     const res = await fetch(`${APP}/api/internal/flow-refresh?symbol=${encodeURIComponent(symbol)}`, {
       signal: AbortSignal.timeout(30_000),
     });
-    const j = (await res.json().catch(() => ({}))) as { ok?: boolean; skipped?: string };
+    const j = (await res.json().catch(() => ({}))) as { ok?: boolean; skipped?: string; error?: string };
     if (res.ok && j.ok) return j.skipped ? "skipped" : true; // v1.0.1 — rate-limit is neutral, not failure
+    if (res.status === 400 || /bad symbol/i.test(j.error ?? "")) strike(symbol, Date.now(), true);
+    else strike(symbol, Date.now());
     return false;
   } catch {
+    strike(symbol, Date.now());
     return false;
   }
 }
@@ -180,7 +212,8 @@ async function cycle(): Promise<void> {
   const now = Date.now();
   const stale = cards
     .filter((c) => c.ageMin * 60_000 > budgetMs(c.heat))
-    .filter((c) => now - (lastRefreshAttempt.get(c.symbol) ?? 0) > PER_SYMBOL_MIN_MS);
+    .filter((c) => now - (lastRefreshAttempt.get(c.symbol) ?? 0) > PER_SYMBOL_MIN_MS)
+    .filter((c) => !quarantined(c.symbol, now)); // v1.1.0 — zombies never eat the batch
   const heatRank = { hot: 0, warm: 1, dust: 2 } as const;
   stale.sort((a, b) => heatRank[a.heat] - heatRank[b.heat] || b.ageMin - a.ageMin);
   const hotStale = stale.filter((c) => c.heat === "hot");

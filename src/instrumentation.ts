@@ -82,6 +82,13 @@ export async function register(): Promise<void> {
     const TICK_MS = 15_000;
     const highStart = { a: 0, b: 0 }; // sustained-pressure streak clocks (ms)
     let lastHeartbeat = 0;
+    // v13.3 P2 (trace 1a193604acd890f9): namespace-import node:process and use
+    // nodeProc.* — Turbopack's Edge-Runtime static analyzer flagged the GLOBAL
+    // process.exit/memoryUsage member-access (≈200 chronic dev.log warning
+    // lines per compile) even though this whole block is nodejs-guarded.
+    // Same object, same semantics — only the analyzer's view changes.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const nodeProc = require("node:process") as typeof process;
     const availMB = (): number => {
       try {
         // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -96,7 +103,7 @@ export async function register(): Promise<void> {
       try {
         const st = g.__nexusRamShed!;
         if (Date.now() - BOOT_AT < GRACE_MS) return;
-        st.rssMB = Math.round(process.memoryUsage().rss / 1048576);
+        st.rssMB = Math.round(nodeProc.memoryUsage().rss / 1048576);
         st.availMB = availMB();
         const now = Date.now();
         // telemetry heartbeat every 5min — always visible in dev.log
@@ -137,7 +144,7 @@ export async function register(): Promise<void> {
           console.error(
             `[ram-shed] SELF-RECYCLE#${st.recycles} lane=A rss=${st.rssMB}MB avail=${st.availMB}MB held=90s — controlled exit, warm-cache heal expected ≤45s (RAM-SHED-20261024)`
           );
-          process.exit(0);
+          nodeProc.exit(0);
         }
         if (laneB && now - highStart.b >= 120_000) {
           st.lastRecycleAt = now;
@@ -145,7 +152,7 @@ export async function register(): Promise<void> {
           console.error(
             `[ram-shed] SELF-RECYCLE#${st.recycles} lane=B rss=${st.rssMB}MB held=120s — hard plateau, controlled exit (RAM-SHED-20261024)`
           );
-          process.exit(0);
+          nodeProc.exit(0);
         }
         if (laneC) {
           st.lastRecycleAt = now;
@@ -153,7 +160,7 @@ export async function register(): Promise<void> {
           console.error(
             `[ram-shed] SELF-RECYCLE#${st.recycles} lane=C avail=${st.availMB}MB single-tick — kernel-imminent, controlled exit (RAM-SHED-20261024)`
           );
-          process.exit(0);
+          nodeProc.exit(0);
         }
       } catch {
         /* the governor must never crash the process it guards */
