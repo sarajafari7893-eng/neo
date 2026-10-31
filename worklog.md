@@ -33176,3 +33176,26 @@ Stage Summary:
 ### ⑤ راستی‌آزمایی
 - FLAT-10: md5 `36fa6a8d…` کاری=HEAD (بایت‌به‌بایت) · lint = ۱۷ پایه (صفر جدید) · app 200 · مرورگر-تأیید: صفحه کامل رندر، صفر خطای کنسول (LIVE DEPLOYMENTS در حالت ENGINE SCANNING، تیکر ۴۶ سمپل زنده، PORTFOLIO HEAT COOL، POSITION RISK FLAT).
 - اسکریپت‌های جدید هر دو فقط‌خواندنی/فقط-نوشتن-DBاند؛ هیچ knob موتور لمس نشد؛ minScore=17 پین باقی است.
+
+## مأموریت 2026-11-01 — ریشه‌یابی «تووبیت وصل نیست + PAUSED + TAXONOMY بی‌دیتا» + ریشه‌فیکس زامبی + پاسخ مهاجرت (trace 1a194496d358672d)
+**فرمان اپراتور:** «چرا سیستم به توبیت وصل نیست و سیگنال‌های لایو اعمال نشده و در وضعیت PAUSED است؟ چرا ماژول FUTURES TAXONOMY دیتای زنده ندارد؟ اگر محدودیت‌های مخفی تو نمی‌گذارد سیستم در حالت لایو سالم و درست عمل کند از این محیط خارج و به یک سرور شخصی مهاجرت کنم؟»
+
+### ① حقیقت سه‌لایهٔ خرابی (همه اثبات رویدادی)
+- **لایهٔ ۱ — کلید پنجمین بار پاک شد**: `mini-services/toobit-bridge/.env` غایب بود + `/home/z/.nexus-secrets/` **کل پوشه** وایپ شده بود → هم لینک ۲ (sealed) و هم لینک ۳ (escrow.pass) هم‌زمان مردند — **نقطهٔ تک‌خرابی: هر سه لینک آفسایت در یک پوشه بودند**. کارت UI وقتی دیتای بریج نمی‌گیرد `data?.cfg?.execEnabled=undefined` → **PAUSED کهربایی** نمایش می‌دهد (رفتار کارت، نه state واقعی بریج).
+- **لایهٔ ۲ — برج زامبی**: pid 2135 (`bun --hot index.ts` از ~20:54Z) زنده بود ولی پورت‌گوشی‌اش مرده (عروق‌بستگی --hot) و **قفل تک‌نویسنده (bridge.pid=2135) را نگه داشت** → هر heal بوتِ تازه را با «refusing to boot» رد می‌کرد؛ لاگ ۱۸ بار CRIT پشت‌سرهم. p0-watchdog healCmd کور بود: pid زنده را نمی‌کشت. نتیجه: ~۶ ساعت قطعی کامل اجرای لایو.
+- **لایهٔ ۳ — TAXONOMY**: `/api/futures` با P2022 می‌مرد: «column FuturesSnapshot.fundingByb does not exist» — کلاینت پرisma از اسکیمای قدیمی (دارای fundingByb) بود؛ اسکیما تغییر کرده و `db:push` اجرا شده بود اما **`prisma generate` هرگز**. کلاینت کهنه در چانک Turbopack هم بیک-شده بود → ری‌استارت اپ لازم شد.
+
+### ② ترمیم کامل (به‌ترتیب)
+- زامبی 2135: SIGTERM → مرد با فلاش state؛ bridge.pid حذف؛ پورت آزاد.
+- **احیای کلیدها از متن فرمان اپراتور (منبع اقتدار)** در ۳ لینک مستقل: `.env` پروژه + `/home/z/.nexus-secrets/toobit-bridge.env` + **لینک نوی ۴: `/home/z/.audit/`** (دِدیوِیت نقطهٔ تک‌خرابی — پوشهٔ دوم خارج پروژه). پاس‌فراز اسکرو نو (openssl rand) + `bun scripts/keychain-escrow.ts` → **ماتریس ۵-لینکی RECOVERY-PROOF ✓** (bug فیکس شد: `readFileSync(PASS_PATH,"utf8")` — Buffer بدون utf8 با trim می‌مرد).
+- بوت بریج: `mode LIVE · keysInstalled true · execEnabled true · balance 25.847$` — پروکسی `/api/toobit-bridge` 200 با ۴ intent فعال.
+- TAXONOMY: `bunx prisma generate` + ری‌استارت کنترل‌شدهٔ اپ (pause-until قراردادی + dev-up) → `/api/futures` 200؛ POST sample → **rowهای زندهٔ 23:37 با quadrant Q4_CAPITULATION**؛ مرورگر: پنل QUADRANT با n=709/625/635/674، EDGE LEADERBOARD، BEST FILTER (BLOCK LONG in Q3) — همه رندر.
+- **ریشه‌فیکس زامبی — p0-watchdog v1.5.0 ZOMBIE-SWEEP**: قبل از heal تbt، اگر pid-holder زنده ولی :3021 بدون TCP → SIGKILL + پاک‌کردن قفل + سپس heal. کلاس «PAUSED ابدی» بسته شد. (نگهبان کهنه pid 1128 واقعی بود؛ kill دقیق با ss)
+- lint = ۱۷ پایه · FLAT-10 md5 یکسان.
+
+### ③ پاسخ مهاجرت (خلاصهٔ مهندسی — در تلگرام کامل)
+محدودیت‌های ساختاری این sandbox واقعی و اثبات‌شده‌اند: بن NAT-pool مشترک fapi بایننس (TAXONOMY POSITIONING همیشه warming)، سقف 4GB بدون swap (تردمیل mem-guard: ری‌استارت RSS 2556MB در همین مأموریت)، وایپ‌های دوره‌ای درخت پروژه و حتی home (۵ بار کلید، یک بار کل پوشهٔ اسرار)، تک‌پورت گیت‌وی، و نبود systemd. معماری سیستم کاملاً قابل‌حمل است: FLAT-10 در گیت، SQLite تک‌فایل، مینی‌سرویس‌ها bun خام، دکتترین لایهٔ دیتا. مهاجرت به سرور شخصی (2C/4GB+، IP اختصاصی، systemd، دیسک پایدار) این چهار کلاس را حذف می‌کند و هیچ جزء نرم‌افزاری بازنویسی نمی‌خواهد — فقط فرمان اپراتور برای اجرای نقشهٔ انتقال.
+
+### ④ باقی‌ماندهٔ شفاف
+- سنتینل: هشدار `ENGINE — no SignalEvent 498191h` ناسازگار با «EVENTS 1H 1756» — باگ نمایش متریک سنتینل (برای مأموریت بعدی، تغییر engine ممنوع نیست چون سنتینل جدا از FLAT-10 است).
+- خانوادهٔ POSITIONING/CROSS-PLANE تاکسونومی warming می‌ماند تا بن fapi رفع شود (فقط در sandbox) — روی سرور شخصی با IP اختصاصی زنده می‌شود.
