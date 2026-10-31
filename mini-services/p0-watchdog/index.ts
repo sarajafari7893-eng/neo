@@ -44,7 +44,7 @@ import net from "node:net";
 // TWO-PLACE RULE respected: type+map here AND state initializer below.
 // Also: /status now re-reads the pause file (fresh paused display — the stale
 // cached pausedUntil display masked real pauses during the 2026-10-15 morning).
-const VER = "p0-watchdog 1.4.9";
+const VER = "p0-watchdog 1.5.0"; // v1.5.0 trace-1a194496d358672d: tbt ZOMBIE-SWEEP — pid alive + port dead ⇒ SIGKILL holder + clear singleton lock before heal (the 2026-10-31 6h PAUSED outage: wedged bridge 2135 held bridge.pid while every heal was refused with "another instance alive")
 // v1.4.4 (SENTINEL-RED-0929, live-fire 21:52-21:57Z): probe TIMEOUT ≠ down.
 // Dev-mode Turbopack cold-compile ran 15-29s/route under memory pressure while
 // this probe cap is 4s — a HEALTHY-but-compiling app read as "down", heals
@@ -479,6 +479,36 @@ function heal(key: SvcKey, cfg: SvcCfg, st: SvcState) {
   }, key);
   if (st.mode === "escalated") {
     void tgSend("crit", `🛡 <b>P0-WATCHDOG · ESCALATED</b>\n<code>${cfg.label}</code> DOWN — ${st.heals} heal attempts failed\nlast HTTP: ${st.lastStatus ?? "unreachable"} · mem ${mem.availableMb ?? "?"}MB\n${tehran()} IRST`);
+  }
+  // ── v1.5.0 ZOMBIE-SWEEP (tbt only) — before spawning the heal, a bridge whose
+  // pid is ALIVE but whose :3021 refuses TCP is a zombie holding the singleton
+  // pid-lock: every fresh boot is refused ("another bridge instance is alive —
+  // refusing to boot") and the outage becomes permanent (the 2026-10-31 ~6h
+  // PAUSED root cause). Sweep: SIGKILL the holder, unlink the stale lock, THEN
+  // spawn the heal so a clean instance can actually boot.
+  if (key === "tbt") {
+    try {
+      const pidFile = `${ROOT}/.data/toobit-bridge/bridge.pid`;
+      if (existsSync(pidFile)) {
+        const old = Number(readFileSync(pidFile, "utf8").trim());
+        if (Number.isFinite(old) && old > 0 && old !== process.pid) {
+          let alive = true;
+          try { process.kill(old, 0); } catch { alive = false; }
+          if (alive) {
+            const probe = Bun.spawnSync(["bash", "-c", "curl -s -m 2 -o /dev/null -w '%{http_code}' http://127.0.0.1:3021/health"]);
+            const httpCode = probe.stdout.toString().trim();
+            if (httpCode !== "200") {
+              try { process.kill(old, "SIGKILL"); } catch { /* died meanwhile */ }
+              try { unlinkSync(pidFile); } catch { /* gone */ }
+              log("warn", "zombie-sweep: lock-holder alive but port :3021 dead — SIGKILL + lock cleared", { pid: old, httpCode }, key);
+            }
+          } else {
+            try { unlinkSync(pidFile); } catch { /* gone */ }
+            log("warn", "zombie-sweep: stale pidfile (pid gone) — lock cleared", { pid: old }, key);
+          }
+        }
+      }
+    } catch (e) { log("warn", "zombie-sweep-error", { err: String(e).slice(0, 120) }, key); }
   }
   try { Bun.spawn(["bash", "-c", cfg.healCmd], { stdin: "ignore", stdout: "ignore", stderr: "ignore" }); }
   catch (e) { log("crit", "heal-spawn-error", { err: String(e).slice(0, 120) }, key); }
