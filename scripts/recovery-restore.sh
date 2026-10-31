@@ -240,6 +240,22 @@ def main() -> int:
     else:
         print("[WARN] .data journals absent in snapshot zip — optional, skipped")
 
+    # secrets chain v2 — Toobit bridge keys (trace 1a1934073fe04971): the gitignored
+    # service .env never lives in repo.tar or snapshot zips; the sealed off-tree copy
+    # survives tree-level restores and must be reinstalled BEFORE the bridge boots.
+    sealed = "/home/z/.nexus-secrets/toobit-bridge.env"
+    tb_env = os.path.join(ROOT, "mini-services", "toobit-bridge", ".env")
+    if os.path.isfile(sealed) and os.path.getsize(sealed) > 0:
+        os.makedirs(os.path.dirname(tb_env), exist_ok=True)
+        if not os.path.isfile(tb_env) or os.path.getsize(tb_env) == 0:
+            shutil.copy2(sealed, tb_env)
+            os.chmod(tb_env, 0o600)
+            step("toobit-bridge/.env reinstalled from sealed copy (keys survive recovery)", True)
+        else:
+            step("toobit-bridge/.env already present", True)
+    else:
+        print("[WARN] sealed key copy /home/z/.nexus-secrets/toobit-bridge.env ABSENT — bridge boots PAPER until operator re-delivers keys")
+
     # manifests + calibration + worklog (evidence chain)
     for rel in ("backups/MANIFEST.json", "backups/calibration-latest.json", "worklog.md"):
         src = os.path.join(STAGE, rel)

@@ -456,6 +456,48 @@ if [ -n "$PASS" ]; then
   ENV_VER_COUNT=$(ls -1 "$ENVDIR"/env-*.enc 2>/dev/null | wc -l)
 fi
 
+# ── (2) TBENV — toobit-bridge/.env versioned AES-256 backup (trace 1a1934073fe04971).
+# The gitignored service .env is wiped by every sandbox repo.tar rebuild (5th incident
+# 2026-10-31 ~11:56Z). Same contract as the ROOT .env block above: sha256 no-change
+# detection, AES-256-CBC/PBKDF2-200k, keep 12, telegram offsite when channel exists.
+TB_ENV="$ROOT/mini-services/toobit-bridge/.env"
+TBENV_STATUS="SKIP"
+if [ -s "$TB_ENV" ]; then
+  TB_SHA=$(sha256sum "$TB_ENV" | cut -d' ' -f1)
+  TB_NEWEST=$(ls -1t "$ENVDIR"/tbenv-*.enc 2>/dev/null | head -1)
+  TB_SAME=0
+  if [ -n "$TB_NEWEST" ]; then
+    TB_DEC=$(openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -in "$TB_NEWEST" -pass "env:BACKUP_PASSPHRASE" 2>/dev/null | sha256sum | cut -d' ' -f1)
+    [ "$TB_DEC" = "$TB_SHA" ] && TB_SAME=1
+  fi
+  if [ "$TB_SAME" = "0" ]; then
+    TB_ENC="$ENVDIR/tbenv-${TB_SHA:0:8}-$STAMP.enc"
+    if openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt \
+         -in "$TB_ENV" -out "$TB_ENC" -pass "env:BACKUP_PASSPHRASE" 2>/dev/null && [ -s "$TB_ENC" ]; then
+      TBENV_STATUS="VERSIONED"
+      ls -1t "$ENVDIR"/tbenv-*.enc 2>/dev/null | tail -n +13 | while read -r tbold; do rm -f "$tbold"; done
+      if [ "$OFFSITE_ENABLED" = "1" ] && [ -n "$TOKEN" ] && [ -n "$CHAT" ]; then
+        TBRES=$(curl -s -m 60 -X POST "https://api.telegram.org/bot$TOKEN/sendDocument" \
+          -F "chat_id=$CHAT" \
+          -F "document=@$TB_ENC" \
+          -F "caption=NEXUS//SIGNALS toobit-bridge .env versioned backup (AES-256) — $(basename "$TB_ENC") · passphraseSha8:$PASS_SHA8 · $(date -u '+%Y-%m-%d %H:%M UTC')" 2>/dev/null)
+        if echo "$TBRES" | grep '"ok":true' >/dev/null; then
+          TBENV_STATUS="VERSIONED+OFFSITE"
+        else
+          TBENV_STATUS="OFFSITE-FAILED"
+        fi
+      else
+        TBENV_STATUS="VERSIONED (no channel)"
+      fi
+    else
+      TBENV_STATUS="FAILED"
+      rm -f "${TB_ENC:-}" 2>/dev/null || true
+    fi
+  else
+    TBENV_STATUS="NO-CHANGE"
+  fi
+fi
+
 # manifest for the UI (what /api/backup GET reads — legacy fields preserved, new fields added)
 cat > "$BACKUPS/latest.json" <<EOF
 {
@@ -466,7 +508,8 @@ cat > "$BACKUPS/latest.json" <<EOF
   "offsite": "$OFFSITE_STATUS",
   "channel": "$CHANNEL_STATUS",
   "s3": "$S3_STATUS",
-  "includes": ["src", "prisma", "mini-services", "docs", "scripts", ".zscripts", "Caddyfile", ".env", "worklog.md", "db/custom.db", "MANIFEST.json", "calibration-latest.json", ".data/shadow-veto.jsonl", ".data/shadow-veto.jsonl.old (rotated ring, when present)", ".data/shadow-veto-telemetry.json", ".data/shadow-veto-telemetry.jsonl", ".data/shadow-veto-latest.json", ".data/gate-journal.jsonl", ".data/rawcal-telemetry.jsonl", ".data/fourpack-journal.jsonl", ".data/fourpack-journal.jsonl.old (rotated ring, when present)", ".data/fourpack-latest.json"],
+  "tbenv": "$TBENV_STATUS",
+  "includes": ["src", "prisma", "mini-services", "docs", "scripts", ".zscripts", "Caddyfile", ".env", "mini-services/toobit-bridge/.env (AES-256 tbenv-* + offsite)", "worklog.md", "db/custom.db", "MANIFEST.json", "calibration-latest.json", ".data/shadow-veto.jsonl", ".data/shadow-veto.jsonl.old (rotated ring, when present)", ".data/shadow-veto-telemetry.json", ".data/shadow-veto-telemetry.jsonl", ".data/shadow-veto-latest.json", ".data/gate-journal.jsonl", ".data/rawcal-telemetry.jsonl", ".data/fourpack-journal.jsonl", ".data/fourpack-journal.jsonl.old (rotated ring, when present)", ".data/fourpack-latest.json"],
   "walStatus": "$WAL_STATUS",
   "calibrationStatus": "$CAL_STATUS",
   "encrypted": "$ENC_STATUS",

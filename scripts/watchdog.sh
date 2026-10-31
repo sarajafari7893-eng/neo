@@ -282,6 +282,23 @@ one_cycle() {
     [ "$(getk ws_fails)" -ge "$SIDE_FAILS_TO_ALERT" ] && say "SIDECAR ERROR (log-only): price-ws :3003 http:$ws fails=$(getk ws_fails) — app demotes to REST 2.5s poll; manual restart: cd $PROJECT/mini-services/price-ws && bun index.ts"
   fi
 
+  # ── KEYS-GUARD — toobit-bridge .env auto-restore (trace 1a1934073fe04971) ──
+  # The sandbox repo.tar rebuild (/start.sh full-tree restore) wipes the gitignored
+  # service .env — 5th incident 2026-10-31 ~11:56Z (bridge booted keysInstalled:false,
+  # LIVE silently dead ~7h until the operator re-delivered the keys). The sealed
+  # off-tree copy lives OUTSIDE /home/z/my-project so it survives every tree-level
+  # restore; bridge KEYS-HOTRELOAD (v1.5.3+) re-arms LIVE ≤30s after the file
+  # returns — no process restart needed. recovery-restore.sh + backup.sh tbenv-*
+  # carry the same secret through the restore and offsite chains.
+  local tb_env_f="/home/z/my-project/mini-services/toobit-bridge/.env"
+  local tb_sealed="/home/z/.nexus-secrets/toobit-bridge.env"
+  if [ ! -s "$tb_env_f" ] && [ -s "$tb_sealed" ]; then
+    mkdir -p "$(dirname "$tb_env_f")" 2>/dev/null
+    if cp "$tb_sealed" "$tb_env_f" 2>/dev/null && chmod 600 "$tb_env_f" 2>/dev/null; then
+      say "KEYS-GUARD: toobit-bridge/.env was wiped — reinstalled from sealed copy (0600); KEYS-HOTRELOAD re-arms LIVE ≤30s"
+    fi
+  fi
+
   # ── P2.5 · telegram bridge :3005 — OWNED heal (v3.2) ───────────────
   # ROLLBACK-RECOVERY-0912-0030: the platform rollback killed the bridge and
   # manual spawns die with their spawning session — only watchdog-tree spawns
@@ -300,7 +317,7 @@ one_cycle() {
         say "BRIDGE DOWN (http:$bcode) — respawn bun index.ts (owned by watchdog)"
         # 9>&- — the child MUST NOT inherit the locked flock fd (v3.2a: an
         # inheriting child pins the lock forever and deadlocks every cycle)
-        ( cd "$PROJECT/mini-services/telegram-bridge" && setsid bash -c 'exec bun index.ts' </dev/null 9>&- >> /tmp/bridge-wd.out 2>&1 & )
+        ( cd "$PROJECT/mini-services/telegram-bridge" && setsid bash -c 'exec bun index.ts' </dev/null 9>&- 8>&- >> /tmp/bridge-wd.out 2>&1 & )
         setk last_bridge_spawn "$now"
         echo "$now:$$" > "$PROJECT/.data/p0-watchdog/heal-bridge" 2>/dev/null
       fi
@@ -352,7 +369,7 @@ one_cycle() {
         # kill by LISTENING PORT — cmdline is "bun index.ts", name-matches never hit it
         ss -tlnp 2>/dev/null | grep -E ':3003\b' | grep -o 'pid=[0-9]*' | cut -d= -f2 | sort -u | xargs -r kill 2>/dev/null
         sleep 1
-        ( cd "$PROJECT/mini-services/price-ws" && setsid bash -c 'exec bun index.ts' </dev/null 9>&- >> /tmp/ws-wd.out 2>&1 & )
+        ( cd "$PROJECT/mini-services/price-ws" && setsid bash -c 'exec bun index.ts' </dev/null 9>&- 8>&- >> /tmp/ws-wd.out 2>&1 & )
         setk last_ws_spawn "$now"
         echo "$now:$$" > "$PROJECT/.data/p0-watchdog/heal-ws" 2>/dev/null
       fi
@@ -381,7 +398,7 @@ one_cycle() {
         say "HEAL SKIP: mem-guard healed <300s ago by layer-1 (cross-layer ledger)"
       else
         say "MEM-GUARD DOWN (http:$mcode) — spawn via mem-guard-up.sh (owned by watchdog)"
-        ( setsid bash "$PROJECT/scripts/mem-guard-up.sh" </dev/null 9>&- >> /tmp/mem-wd.out 2>&1 & )
+        ( setsid bash "$PROJECT/scripts/mem-guard-up.sh" </dev/null 9>&- 8>&- >> /tmp/mem-wd.out 2>&1 & )
         setk last_memspawn "$now"
         echo "$now:$$" > "$PROJECT/.data/p0-watchdog/heal-mem" 2>/dev/null
       fi
