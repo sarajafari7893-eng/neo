@@ -1,5 +1,5 @@
 {
-  "at": 1793472134629,
+  "at": 1793472404632,
   "ver": "toobit-bridge 1.6.0",
   "gates": {
     "marginUsdt": 2,
@@ -17,18 +17,6 @@
     "orphans": 0
   },
   "violations": [
-    {
-      "at": 1793471504629,
-      "serial": 3225,
-      "kind": "NOTIONAL-DELTA",
-      "detail": "exp=18.00 act=13.53 (2482bps)"
-    },
-    {
-      "at": 1793471534629,
-      "serial": 3225,
-      "kind": "NOTIONAL-DELTA",
-      "detail": "exp=18.00 act=13.53 (2482bps)"
-    },
     {
       "at": 1793471564629,
       "serial": 3225,
@@ -76,38 +64,19 @@
       "serial": 3225,
       "kind": "NOTIONAL-DELTA",
       "detail": "exp=18.00 act=13.53 (2482bps)"
-    }
-  ],
-  "openIntents": [
-    {
-      "serial": 3221,
-      "symbol": "ZECUSDT",
-      "direction": "LONG",
-      "lev": 9,
-      "levSrc": "card",
-      "expectedNotional": 18,
-      "actualNotional": 17.997732,
-      "entryAgeMs": 2301,
-      "entryDriftBps": 4.88,
-      "cardStatus": "EXPIRED",
-      "status": "OPEN",
-      "mode": "LIVE",
-      "protected": true
     },
     {
+      "at": 1793472284632,
+      "serial": 3221,
+      "kind": "MIRROR-LAG",
+      "detail": "card=EXPIRED but intent still OPEN 63432s — pollCards transition should have fired"
+    },
+    {
+      "at": 1793472284633,
       "serial": 3222,
-      "symbol": "LINKUSDT",
-      "direction": "LONG",
-      "lev": 8,
-      "levSrc": "card",
-      "expectedNotional": 16,
-      "actualNotional": 15.998871,
-      "entryAgeMs": 1784,
-      "entryDriftBps": 13.77,
-      "cardStatus": "EXPIRED",
-      "status": "OPEN",
-      "mode": "LIVE",
-      "protected": true
+      "kind": "MIRROR-LAG",
+      "detail": "card=EXPIRED but intent still OPEN 61939s — pollCards transition should have fired"
     }
-  ]
+  ],
+  "openIntents": []
 }
