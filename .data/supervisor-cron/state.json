@@ -2,15 +2,15 @@
  "ver": "supervisor-cron 1.6.0",
  "pid": 2005,
  "startedAt": "2026-10-31T02:53:28.118Z",
- "updatedAt": "2026-10-31T03:31:00.957Z",
+ "updatedAt": "2026-10-31T03:41:01.073Z",
  "jobs": {
   "sweep": {
-   "lastRunAt": 1793417160935,
-   "nextRunAt": 1793417760935,
+   "lastRunAt": 1793417760935,
+   "nextRunAt": 1793418360935,
    "lastStatus": "ok",
-   "lastDurationMs": 49,
+   "lastDurationMs": 76,
    "lastError": null,
-   "runs": 380,
+   "runs": 381,
    "failures": 0
   },
   "progress": {
@@ -59,34 +59,34 @@
    "failures": 0
   },
   "keepwarm": {
-   "lastRunAt": 1793417460935,
-   "nextRunAt": 1793417460935,
+   "lastRunAt": 1793418060935,
+   "nextRunAt": 1793418060935,
    "lastStatus": "ok",
-   "lastDurationMs": 22,
+   "lastDurationMs": 138,
    "lastError": null,
-   "runs": 680,
+   "runs": 682,
    "failures": 116
   }
  },
  "lastSweep": {
-  "at": "2026-10-31T03:26:00.984Z",
+  "at": "2026-10-31T03:36:01.011Z",
   "verdict": "AMBER",
-  "reason": "sentinel :3030 verdict AMBER · toobit-bridge doctrine: 5 violation(s) — last=MIRROR-LAG: card=EXPIRED but intent still OPEN 8719s — pollCards transition should have fired",
+  "reason": "sentinel :3030 verdict AMBER · toobit-bridge doctrine: 6 violation(s) — last=MIRROR-LAG: card=EXPIRED but intent still OPEN 8816s — pollCards transition should have fired",
   "services": {
    "app": {
     "up": true,
     "status": 200,
-    "ms": 32
+    "ms": 41
    },
    "liq": {
     "up": true,
     "status": 200,
-    "ms": 3
+    "ms": 1
    },
    "trade": {
     "up": true,
     "status": 200,
-    "ms": 1
+    "ms": 0
    },
    "armor": {
     "up": true,
@@ -106,17 +106,17 @@
    "ws": {
     "up": true,
     "status": 400,
-    "ms": 0
+    "ms": 1
    },
    "bridge": {
     "up": true,
     "status": 200,
-    "ms": 1
+    "ms": 0
    },
    "tbt": {
     "up": true,
     "status": 200,
-    "ms": 0
+    "ms": 1
    }
   },
   "anomalies": [
@@ -128,7 +128,7 @@
    {
     "class": "tbt-doctrine-violation",
     "sev": "warn",
-    "msg": "toobit-bridge doctrine: 5 violation(s) — last=MIRROR-LAG: card=EXPIRED but intent still OPEN 8719s — pollCards transition should have fired"
+    "msg": "toobit-bridge doctrine: 6 violation(s) — last=MIRROR-LAG: card=EXPIRED but intent still OPEN 8816s — pollCards transition should have fired"
    }
   ],
   "data": {
@@ -154,11 +154,11 @@
   "newN": 2
  },
  "lastKeepwarm": {
-  "at": "2026-10-31T03:31:00.957Z",
+  "at": "2026-10-31T03:41:01.073Z",
   "ok": true,
-  "ms": 22,
+  "ms": 138,
   "bootAt": "2026-10-31T03:24:02.845Z",
-  "gitSha": "ee7321a",
+  "gitSha": "cbb030d",
   "coldStreak": 0
  },
  "coldStreak": 0,
@@ -172,27 +172,6 @@
  "wsDownStreak": 0,
  "staleStreak": 0,
  "history": [
-  {
-   "id": "keepwarm",
-   "at": 1793408160935,
-   "status": "ok",
-   "durationMs": 37,
-   "detail": "HEARTBEAT OK 37ms boot=00:49:37Z sha=ba1e066"
-  },
-  {
-   "id": "sweep",
-   "at": 1793408160935,
-   "status": "ok",
-   "durationMs": 48,
-   "detail": "AMBER: sentinel :3030 verdict AMBER · toobit-bridge doctrine: 5 violation(s) — last=MIRROR-LAG: card=EXPIRED but intent still O"
-  },
-  {
-   "id": "keepwarm",
-   "at": 1793408460936,
-   "status": "ok",
-   "durationMs": 21,
-   "detail": "HEARTBEAT OK 21ms boot=00:59:40Z sha=7fa9058"
-  },
   {
    "id": "keepwarm",
    "at": 1793408760935,
@@ -521,6 +500,27 @@
    "status": "ok",
    "durationMs": 22,
    "detail": "HEARTBEAT OK 22ms boot=03:24:02Z sha=ee7321a"
+  },
+  {
+   "id": "sweep",
+   "at": 1793417760935,
+   "status": "ok",
+   "durationMs": 76,
+   "detail": "AMBER: sentinel :3030 verdict AMBER · toobit-bridge doctrine: 6 violation(s) — last=MIRROR-LAG: card=EXPIRED but intent still O"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1793417760935,
+   "status": "ok",
+   "durationMs": 78,
+   "detail": "HEARTBEAT OK 77ms boot=03:24:02Z sha=cbb030d"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1793418060935,
+   "status": "ok",
+   "durationMs": 138,
+   "detail": "HEARTBEAT OK 138ms boot=03:24:02Z sha=cbb030d"
   }
  ],
  "watchRuns": [
