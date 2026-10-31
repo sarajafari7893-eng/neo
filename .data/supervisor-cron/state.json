@@ -2,15 +2,15 @@
  "ver": "supervisor-cron 1.6.0",
  "pid": 2005,
  "startedAt": "2026-10-31T02:53:28.118Z",
- "updatedAt": "2026-10-31T04:21:00.958Z",
+ "updatedAt": "2026-10-31T04:31:00.957Z",
  "jobs": {
   "sweep": {
-   "lastRunAt": 1793420160935,
-   "nextRunAt": 1793420760935,
+   "lastRunAt": 1793420760935,
+   "nextRunAt": 1793421360935,
    "lastStatus": "ok",
-   "lastDurationMs": 58,
+   "lastDurationMs": 44,
    "lastError": null,
-   "runs": 385,
+   "runs": 386,
    "failures": 0
   },
   "progress": {
@@ -59,29 +59,29 @@
    "failures": 0
   },
   "keepwarm": {
-   "lastRunAt": 1793420460935,
-   "nextRunAt": 1793420460935,
+   "lastRunAt": 1793421060935,
+   "nextRunAt": 1793421060935,
    "lastStatus": "ok",
-   "lastDurationMs": 23,
+   "lastDurationMs": 22,
    "lastError": null,
-   "runs": 690,
+   "runs": 692,
    "failures": 116
   }
  },
  "lastSweep": {
-  "at": "2026-10-31T04:16:00.993Z",
+  "at": "2026-10-31T04:26:00.979Z",
   "verdict": "AMBER",
-  "reason": "sentinel :3030 verdict AMBER · toobit-bridge doctrine: 7 violation(s) — last=MIRROR-LAG: card=EXPIRED but intent still OPEN 8823s — pollCards transition should have fired",
+  "reason": "sentinel :3030 verdict AMBER · toobit-bridge doctrine: 10 violation(s) — last=NOTIONAL-DELTA: exp=20.00 act=13.86 (3071bps)",
   "services": {
    "app": {
     "up": true,
     "status": 200,
-    "ms": 29
+    "ms": 30
    },
    "liq": {
     "up": true,
     "status": 200,
-    "ms": 1
+    "ms": 0
    },
    "trade": {
     "up": true,
@@ -91,7 +91,7 @@
    "armor": {
     "up": true,
     "status": 200,
-    "ms": 2
+    "ms": 1
    },
    "watchdog": {
     "up": true,
@@ -106,12 +106,12 @@
    "ws": {
     "up": true,
     "status": 400,
-    "ms": 2
+    "ms": 1
    },
    "bridge": {
     "up": true,
     "status": 200,
-    "ms": 2
+    "ms": 1
    },
    "tbt": {
     "up": true,
@@ -128,7 +128,7 @@
    {
     "class": "tbt-doctrine-violation",
     "sev": "warn",
-    "msg": "toobit-bridge doctrine: 7 violation(s) — last=MIRROR-LAG: card=EXPIRED but intent still OPEN 8823s — pollCards transition should have fired"
+    "msg": "toobit-bridge doctrine: 10 violation(s) — last=NOTIONAL-DELTA: exp=20.00 act=13.86 (3071bps)"
    }
   ],
   "data": {
@@ -154,11 +154,11 @@
   "newN": 2
  },
  "lastKeepwarm": {
-  "at": "2026-10-31T04:21:00.958Z",
+  "at": "2026-10-31T04:31:00.957Z",
   "ok": true,
-  "ms": 23,
-  "bootAt": "2026-10-31T04:12:41.374Z",
-  "gitSha": "5684168",
+  "ms": 22,
+  "bootAt": "2026-10-31T04:26:58.263Z",
+  "gitSha": "03256aa",
   "coldStreak": 0
  },
  "coldStreak": 0,
@@ -172,27 +172,6 @@
  "wsDownStreak": 0,
  "staleStreak": 0,
  "history": [
-  {
-   "id": "keepwarm",
-   "at": 1793411160935,
-   "status": "ok",
-   "durationMs": 49,
-   "detail": "HEARTBEAT OK 49ms boot=01:39:33Z sha=a4741ad"
-  },
-  {
-   "id": "sweep",
-   "at": 1793411160935,
-   "status": "ok",
-   "durationMs": 62,
-   "detail": "AMBER: sentinel :3030 verdict AMBER · toobit-bridge doctrine: 5 violation(s) — last=MIRROR-LAG: card=EXPIRED but intent still O"
-  },
-  {
-   "id": "keepwarm",
-   "at": 1793411460935,
-   "status": "ok",
-   "durationMs": 22,
-   "detail": "HEARTBEAT OK 22ms boot=01:49:36Z sha=57c6fdb"
-  },
   {
    "id": "keepwarm",
    "at": 1793411760936,
@@ -521,6 +500,27 @@
    "status": "ok",
    "durationMs": 23,
    "detail": "HEARTBEAT OK 23ms boot=04:12:41Z sha=5684168"
+  },
+  {
+   "id": "sweep",
+   "at": 1793420760935,
+   "status": "ok",
+   "durationMs": 44,
+   "detail": "AMBER: sentinel :3030 verdict AMBER · toobit-bridge doctrine: 10 violation(s) — last=NOTIONAL-DELTA: exp=20.00 act=13.86 (3071b"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1793420760935,
+   "status": "ok",
+   "durationMs": 45,
+   "detail": "HEARTBEAT OK 45ms boot=04:12:41Z sha=03256aa"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1793421060935,
+   "status": "ok",
+   "durationMs": 22,
+   "detail": "HEARTBEAT OK 22ms boot=04:26:58Z sha=03256aa"
   }
  ],
  "watchRuns": [
