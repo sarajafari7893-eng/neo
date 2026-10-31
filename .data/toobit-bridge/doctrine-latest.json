@@ -1,5 +1,5 @@
 {
-  "at": 1793464604559,
+  "at": 1793465204561,
   "ver": "toobit-bridge 1.6.0",
   "gates": {
     "marginUsdt": 2,
@@ -8,7 +8,7 @@
     "maxConcurrent": 0
   },
   "counters": {
-    "opens": 26,
+    "opens": 27,
     "skipBy": {
       "STALE-CARD": 5,
       "RISK-CAP": 3,
@@ -17,18 +17,6 @@
     "orphans": 0
   },
   "violations": [
-    {
-      "at": 1793428618649,
-      "serial": 3223,
-      "kind": "NOTIONAL-DELTA",
-      "detail": "exp=20.00 act=13.86 (3071bps)"
-    },
-    {
-      "at": 1793428648649,
-      "serial": 3223,
-      "kind": "NOTIONAL-DELTA",
-      "detail": "exp=20.00 act=13.86 (3071bps)"
-    },
     {
       "at": 1793428678649,
       "serial": 3223,
@@ -76,6 +64,18 @@
       "serial": 3223,
       "kind": "NOTIONAL-DELTA",
       "detail": "exp=20.00 act=13.86 (3071bps)"
+    },
+    {
+      "at": 1793465204435,
+      "serial": 3225,
+      "kind": "NOTIONAL-DELTA",
+      "detail": "exp=18 act=13.533 (2482bps) — step-rounding or minQty floor"
+    },
+    {
+      "at": 1793465204562,
+      "serial": 3225,
+      "kind": "NOTIONAL-DELTA",
+      "detail": "exp=18.00 act=13.53 (2482bps)"
     }
   ],
   "openIntents": [
@@ -107,6 +107,21 @@
       "cardStatus": "EXPIRED",
       "status": "OPEN",
       "mode": "LIVE",
+      "protected": true
+    },
+    {
+      "serial": 3225,
+      "symbol": "NEARUSDT",
+      "direction": "LONG",
+      "lev": 9,
+      "levSrc": "card",
+      "expectedNotional": 18,
+      "actualNotional": 13.533,
+      "entryAgeMs": 1304,
+      "entryDriftBps": 6.65,
+      "cardStatus": "ACTIVE",
+      "status": "OPEN",
+      "mode": "PAPER",
       "protected": true
     }
   ]
