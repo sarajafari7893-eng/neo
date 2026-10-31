@@ -1,72 +1,77 @@
 {
- "at": "2026-10-31T10:59:10.864Z",
- "tehran": "31/10/2026, 14:29:10",
+ "at": "2026-10-31T22:59:11.053Z",
+ "tehran": "01/11/2026, 02:29:11",
  "status": "llm_unavailable",
  "err": "Error: API request failed with status 401: {\"error\":\"missing X-Token header\"}",
  "review": null,
  "telemetrySnapshot": {
-  "generatedAt": "2026-10-31T10:59:10.835Z",
+  "generatedAt": "2026-10-31T22:59:11.018Z",
   "liveExecution": "DISABLED (paper/research-only; SUPPRESSED engine path — honesty contract)",
-  "strategyValidationStatus": "PROMOTE gate = FAIL-OPEN-GAPS — OOS 2646/300 (100%) · weak per-strategy (<60): MOMENTUM · pace 38.2/day · ETA 0d (protocol STRATEGY-VALIDATION-PROTOCOL.md; sample-size leg only) — recommend only evidence-respecting actions",
+  "strategyValidationStatus": "PROMOTE gate = FAIL-OPEN-GAPS — OOS 2647/300 (100%) · weak per-strategy (<60): MOMENTUM · pace 35.6/day · ETA 0d (protocol STRATEGY-VALIDATION-PROTOCOL.md; sample-size leg only) — recommend only evidence-respecting actions",
   "sentinel": {
-   "verdict": "AMBER",
+   "verdict": "RED",
    "anomalies": [
     {
+     "sev": "crit",
+     "area": "engine",
+     "msg": "no SignalEvent for 498190h+58m — engine may be stalled"
+    },
+    {
      "sev": "warn",
-     "area": "dev.log",
-     "msg": "231 error lines in recent log window"
+     "area": "watchdog",
+     "msg": "layer-1 non-ok services: {\"app\":\"ok\",\"liq\":\"ok\",\"ws\":\"ok\",\"bridge\":\"ok\",\"trade\":\"ok\",\"sentinel\":\"ok\",\"armor\":\"ok\",\"cron\":\"ok\",\"stable\":\"ok\",\"kw\":\"ok\",\"mem\":\"ok\",\"warm\":\"ok\",\"tbt\":\"escalated\",\"cards\":\"ok\"}"
     }
    ],
    "mem": {
-    "availableMb": 436
+    "availableMb": 623
    },
    "disk": {
-    "rootFreeGb": 3.21,
-    "tmpFreeGb": 3.21
+    "rootFreeGb": 3.63,
+    "tmpFreeGb": 3.63
    },
    "backup": {
     "ok": true,
     "dir": "/tmp/my-project/backups",
     "encCount": 12,
     "zipCount": 12,
-    "newestEncMs": 1793434073214.0342,
-    "newestAnyMs": 1793434073214.0342,
-    "encAgeMs": 10234974.965820312
+    "newestEncMs": 1793477270805.206,
+    "newestAnyMs": 1793477270805.206,
+    "encAgeMs": 10233880.793945312
    },
    "rawcal": {
     "armed": true,
-    "issued": 726,
-    "issuedTotal": 2144,
+    "issued": 729,
+    "issuedTotal": 2147,
     "target": 3217,
     "heartbeatAgeH": 0,
-    "heartbeatAt": "2026-10-31T1058Z ARMED issued=726/2137 target=3217"
+    "heartbeatAt": "2026-10-31T2257Z ARMED issued=729/2140 target=3217"
    }
   },
-  "deepSweepQuick": "# NEXUS-SENTINEL DEEP SWEEP — 2026-10-31T10:59:09Z\n\n\n## 1 · LIVE VERDICT — AMBER\n- verdict: AMBER · scan: 2026-10-31T10:58:28.308Z\n  · app       UP  http=200 23ms\n  · ws        UP  http=400 3ms\n  · bridge    UP  http=200 2ms\n  · liq       UP  http=200 2ms\n  · trade     UP  http=200 2ms\n  · watchdog  UP  http=200 2ms\n- mem: 436 MB avail · disk root: 3.21 GB · /tmp: 3.21 GB\n  - [warn] dev.log: 231 error lines in recent log window\n",
+  "deepSweepQuick": "# NEXUS-SENTINEL DEEP SWEEP — 2026-10-31T22:59:09Z\n\n\n## 1 · LIVE VERDICT — RED\n- verdict: RED · scan: 2026-10-31T22:58:24.926Z\n  · app       UP  http=200 25ms\n  · ws        UP  http=400 4ms\n  · bridge    UP  http=200 3ms\n  · liq       UP  http=200 3ms\n  · trade     UP  http=200 3ms\n  · watchdog  UP  http=200 3ms\n- mem: 623 MB avail · disk root: 3.63 GB · /tmp: 3.63 GB\n  - [crit] engine: no SignalEvent for 498190h+58m — engine may be stalled\n  - [warn] watchdog: layer-1 non-ok services: {\"app\":\"ok\",\"liq\":\"ok\",\"ws\":\"ok\",\"bridge\":\"ok\",\"trade\":\"ok\",\"sentinel\":\"ok\",\"armor\":\"ok\",\"cron\":\"ok\",\"stable\":\"ok\",\"kw\":\"ok\",\"mem\":\"ok\",\"warm\":\"ok\",\"tbt\":\"escalated\",\"cards\":\"ok\"}\n",
   "pulseStats": {
-   "winRate": 26,
-   "totalSignals": 139,
-   "wins": 36,
-   "losses": 45,
-   "pnl24hUsd": -9.52,
-   "totalPnlUsd": 29.54,
-   "avgPnlPercent": 2.13,
+   "winRate": 27,
+   "totalSignals": 118,
+   "wins": 31,
+   "losses": 42,
+   "pnl24hUsd": -9.84,
+   "totalPnlUsd": 52.33,
+   "avgPnlPercent": 4.55,
    "streak": {
     "type": "loss",
-    "count": 0
+    "count": 1
    },
    "account": {
     "startBalance": 100,
-    "balance": 320.05,
-    "equity": 320.05,
-    "unrealizedPnl": 0,
-    "unrealizedPnlAllRows": 0,
+    "balance": 320.15,
+    "equity": 320.61,
+    "unrealizedPnl": 0.46,
+    "unrealizedPnlAllRows": 0.46,
     "unsafeOpenRows": 0,
-    "exposureUsd": 0,
-    "freeMargin": 320.05,
-    "marginUsedPct": 0,
-    "openPositions": 0,
-    "feesPaid": 199.306,
+    "exposureUsd": 30,
+    "freeMargin": 290.61,
+    "marginUsedPct": 9.4,
+    "openPositions": 3,
+    "feesPaid": 199.398,
     "closeAll": {
      "enabled": true,
      "targetUsd": 20,
@@ -75,38 +80,24 @@
     }
    },
    "window24h": {
-    "n": 12,
-    "wins": 4,
-    "winRatePct": 33.3,
-    "pnlUsd": -9.52
+    "n": 11,
+    "wins": 3,
+    "winRatePct": 27.3,
+    "pnlUsd": -9.84
    },
    "window7d": {
-    "n": 60,
-    "wins": 41,
-    "winRatePct": 68.3,
-    "pnlUsd": 73.39
+    "n": 57,
+    "wins": 38,
+    "winRatePct": 66.7,
+    "pnlUsd": 70.78
    },
    "byStrategy": [
     {
      "strategy": "AI-SCALP",
-     "count": 9,
+     "count": 5,
      "wins": 0,
-     "pnl": -1.97,
-     "avgConfidence": 72
-    },
-    {
-     "strategy": "AI-SWING",
-     "count": 115,
-     "wins": 33,
-     "pnl": 34.06,
-     "avgConfidence": 74
-    },
-    {
-     "strategy": "BREAKOUT",
-     "count": 7,
-     "wins": 1,
-     "pnl": -3.98,
-     "avgConfidence": 80
+     "pnl": -1.06,
+     "avgConfidence": 73
     },
     {
      "strategy": "MOMENTUM",
@@ -116,7 +107,21 @@
      "avgConfidence": 77
     },
     {
+     "strategy": "AI-SWING",
+     "count": 98,
+     "wins": 28,
+     "pnl": 49.13,
+     "avgConfidence": 75
+    },
+    {
      "strategy": "MEAN-REVERT",
+     "count": 4,
+     "wins": 1,
+     "pnl": 2.83,
+     "avgConfidence": 82
+    },
+    {
+     "strategy": "BREAKOUT",
      "count": 4,
      "wins": 1,
      "pnl": 2.83,
@@ -125,57 +130,52 @@
    ],
    "equityCurveTail": [
     {
-     "date": "10-24",
-     "cum": -21.91,
-     "daily": -21.91
-    },
-    {
      "date": "10-25",
-     "cum": -34.83,
-     "daily": -12.92
+     "cum": -12.14,
+     "daily": -12.14
     },
     {
      "date": "10-26",
-     "cum": -39.08,
+     "cum": -16.39,
      "daily": -4.25
     },
     {
      "date": "10-29",
-     "cum": 6.61,
+     "cum": 29.29,
      "daily": 45.69
     },
     {
      "date": "10-30",
-     "cum": 39.48,
+     "cum": 62.17,
      "daily": 32.88
     },
     {
      "date": "10-31",
-     "cum": 29.54,
-     "daily": -9.94
+     "cum": 52.33,
+     "daily": -9.84
     }
    ]
   },
   "rawcal": {
    "armed": true,
    "target": 3217,
-   "settledN": 2079,
-   "openRaw": 0,
+   "settledN": 2080,
+   "openRaw": 3,
    "rawWinRatePct": 22,
    "disarmReason": "",
-   "paceSettledE2": 2079,
-   "paceSettleRate3h": 0.33,
-   "paceNeeded": 1138,
+   "paceSettledE2": 2080,
+   "paceSettleRate3h": 0,
+   "paceNeeded": 1137,
    "qualityInformativePct": 67,
-   "qualityHealthyPct": 92.5,
+   "qualityHealthyPct": 92.4,
    "qualityGate": {
     "verdict": "GREEN",
     "healthFloor": 85,
     "blockers": [],
     "window": {
      "since": "2026-09-15T11:30:00.000Z",
-     "settled": 200,
-     "healthyPct": 92.5,
+     "settled": 197,
+     "healthyPct": 92.4,
      "informativePct": 67
     }
    }
@@ -203,7 +203,7 @@
     "target": 30,
     "fillPct": 100,
     "winRatePct": 40,
-    "starved": true
+    "starved": false
    },
    {
     "id": "paper-veto",
@@ -211,26 +211,26 @@
     "target": 30,
     "fillPct": 56.7,
     "winRatePct": 76.5,
-    "starved": false
+    "starved": true
    }
   ],
   "shadowVetoStats": {
-   "total": 600,
-   "passSide": 377,
-   "rejectSide": 223,
-   "vetoCount": 527,
-   "tradeCount": 73,
-   "modelSharePct": 39.7,
+   "total": 9313,
+   "passSide": 5427,
+   "rejectSide": 3886,
+   "vetoCount": 6322,
+   "tradeCount": 2991,
+   "modelSharePct": 40.8,
    "modelGroundedPct": 100,
-   "avgConfidence": 66.8,
-   "gateAgreement": 193,
-   "paperOpen": 9,
+   "avgConfidence": 66.7,
+   "gateAgreement": 2494,
+   "paperOpen": 10,
    "paperSettled": 1401,
    "recent24h": {
-    "n": 254,
-    "modelSharePct": 44.9,
-    "lastModelAgeH": 8.7,
-    "lastVerdictAgeH": 0
+    "n": 137,
+    "modelSharePct": 19,
+    "lastModelAgeH": 2.7,
+    "lastVerdictAgeH": 0.1
    }
   },
   "futures": {
@@ -245,32 +245,37 @@
    "watch": 2,
    "lastFrameAt": null,
    "spotConnected": true,
-   "spotFrames": 229621,
-   "spotLastFrameAt": 1793444349118,
+   "spotFrames": 37357,
+   "spotLastFrameAt": 1793487548838,
    "spotStreams": 2,
    "spotReconnects": 0,
-   "restBannedUntil": 1793449218823,
+   "restBannedUntil": null,
    "restProbeConsecutiveFails": 1,
    "symbols": 2,
-   "trades": 231690,
-   "restPolls": 8,
-   "restErrors": 4,
+   "trades": 37357,
+   "restPolls": 1,
+   "restErrors": 1,
    "reconnects": 0,
-   "uptimeMs": 29141059
+   "uptimeMs": 7424420
   },
   "lastSweepAnomalies": [
    {
-    "class": "sentinel-amber",
+    "class": "svc-down:tbt",
     "sev": "warn",
-    "msg": "sentinel :3030 verdict AMBER"
+    "msg": "tbt :3021 DOWN (HTTP unreachable)"
    },
    {
-    "class": "tbt-doctrine-violation",
-    "sev": "warn",
-    "msg": "toobit-bridge doctrine: 20 violation(s) — last=NOTIONAL-DELTA: exp=20.00 act=13.86 (3071bps)"
+    "class": "sentinel-red",
+    "sev": "crit",
+    "msg": "sentinel :3030 verdict RED"
+   },
+   {
+    "class": "data-stale",
+    "sev": "crit",
+    "msg": "data-stale: newest SignalEvent UNREADABLE old (cap 15min) · no-rows"
    }
   ],
-  "lastReviewAt": "2026-10-30T22:59:15.542Z"
+  "lastReviewAt": "2026-10-31T10:59:10.864Z"
  },
- "deepSweepChars": 432
+ "deepSweepChars": 671
 }
