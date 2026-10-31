@@ -33071,3 +33071,45 @@ Stage Summary:
 - ژورنال گیت (پنجرهٔ ~۵min پس از بوت تازه): **۵۹ بلاک** — REGIME ×۴۴ (CHOP روی TAO/PARTI/XAU/ZEC/UNI/XRP)، DECISIVE ×۱ (فیلتر سفر-پیش‌بینی دوباره کار می‌کند)، FLOW ×۳، FLUSH-EXHAUSTION/DISLOCATION/STALE-BAR/CHASE-EXTREME/SURROGATE-BREAKOUT. کاندیدهای PASS هم جاری: LINK 68، AAVE 68، LSK 58 — خط لوله زنده، گیت‌ها داوری می‌کنند.
 - صدور پس از بازگردانی: سیگنال جدیدی صادر نشده (tape آرام + دیوارهای برگشته + flow CONFLICTS روی SPOT-MIRROR/fapi-starved) — این همان وضعیت حفاظتی طراحی‌شده است؛ اگر اپراتور صدور پُرتداوم بخواهد، شل‌کردن مجدد فقط با فرمان صریح.
 - lint=17 پایه (صفر جدید). محیط: سه recycle مزمن next-server در پنجرهٔ راستی‌آزمایی (۰۰:۲۰:۵۴ / ~۰۰:۲۶ / ~۰۰:۳۱) — heal-chain هر بار ≤۶۰s برگرداند؛ مرورگر آزمایشی بعد از هر بررسی بسته شد (درس OOM). فایل جدید: scripts/diagnostic-restore.ts (ابزار برگشت‌پذیر، کد موتور دست‌نخورده).
+
+## 2026-10-31 — SENTINEL KEYCHAIN-v2: زنجیرهٔ بازیابی‌پذیری کلید Toobit + ممیزی دقیق گیت‌ها 29/10↔31/10 (trace 1a1934073fe04971)
+
+**فرمان اپراتور:** «وضعیت و عملکرد سیستم را بررسی کن، چرا کلید دوباره ازبین رفته؟ کلید را ایمن نگه دار تا با ریکاوری سیستم قابل بازیابی باشد [کلیدها تحویل شد]. 29/10 گیت ها رو ممیزی بررسی کن و با امروز دقیق مقایسه کن چه تفاوتی پیدا کرده؟ چه رژیم های وتو می شوند؟ regimeGuard چه فرقی کرده؟»
+
+### ① وضعیت و عملکرد سیستم (M0/M1)
+- سنتینل **AMBER** ولی ۶/۶ سرویس بالا (app/ws/bridge/liq/trade/watchdog؛ به‌علاوه tbt/cards/sentinel). DB سالم: ۳۲۲۵ سیگنال، ۸۰۰۰۹ رویداد، صفر orphan، صفر stuckActive/stuckPump.
+- RAM مزمن تنگ: available ۳۷۸-۵۷۵MB روی باکس ۴GB بی‌سواپ؛ MEM-GUARD BREAKER 3/h (alert-only). اپ 18:36:51Z ری‌بوت (recoveries ۲۲، RSS ~2.2-2.4GB، ram-shed v13.1). دیسک روت 3.02GB.
+- خطاهای dev.log (۲۰۵-۲۳۱ خط): هشدارهای مزمن Turbopack روی src/instrumentation.ts (process.exit در Edge Runtime) — P2 شناخته‌شده، نه رگرسیون؛ صفر OOM/ENOSPC/hydration/unhandled/settlement-stall.
+- Shadow arms سالم (fill ۸۹٪، real-keep/real-veto/paper-keep پر، paper-veto ۵۷٪)؛ RAWCAL مسلح (issued 726/3217، heartbeat 0h)؛ واچ‌داگ L1 1.4.9 با ۱۴ مود ok.
+
+### ② چرا کلید دوباره پرید + زنجیرهٔ بازیابی‌پذیری جدید (پاسخ اصلی فرمان)
+- **حادثهٔ پنجم ~11:56Z امروز**: ری‌استور درختی پلتفرم (repo.tar). شواهد: بوت بریج 11:56:43Z با `keysInstalled:false`، mtime اسکریپت‌ها 11:56، چرخش ژورنال گیت 11:56، آبجکت کامیت محلی `6c1e43e0` از گیت پرید (محتوا: اسکریپت‌ها/ورک‌لاگ/وضعیت DB سالم ماند). `.env` سرویس gitignored است و **هرگز وارد repo.tar یا سنپ‌شات نمی‌شود** — ریشهٔ تکرار حادثه.
+- بازگردانی فوری: کلید اپراتور نصب شد → **KEYS-HOTRELOAD ظرف ~۳۵ ثانیه بریج را LIVE برگرداند** (keysInstalled:true، wallet 25.85$، ۲ پوزیشن باز سالم).
+- **زنجیرهٔ پنج‌لایه (مأموریت این فرمان)**:
+  - L1 فایل زندهٔ `mini-services/toobit-bridge/.env` (600)
+  - L2 مهروموم خارج-درخت `/home/z/.nexus-secrets/toobit-bridge.env` (dir 700 / file 600) — از ری‌استور درختی مصون است
+  - L3 **KEYS-GUARD** در `scripts/watchdog.sh`: هر سایکل ۶۰ث، اگر فایل زنده غایب شد از sealed بازنصب (600) — **رزم زنده شد**: فایل عمداً پاک شد → در سایکل بعد بازنصب → بریج ≤۳۰ث دوباره LIVE
+  - L4 `scripts/recovery-restore.sh` گام «secrets chain v2»: پس از هر ریکاوری کامل، کلید از sealed بازنصب می‌شود (کامپایل پایتون OK)
+  - L5 `scripts/backup.sh` بلاک **TBENV**: نسخه‌دار رمزنگاری AES-256-CBC/PBKDF2-200k با keep=12 و manifest (`tbenv: VERSIONED`) — **گردش رمز sha256 MATCH** اثبات شد. آفسایت تلگرام به‌موجب فرمان خود اپراتور (2026-10-22) DISABLED است؛ بازیابی از کانال فقط با فرمان بازکردن offsite.
+- **فیکس جانبی حیاتی**: نششت fd قفل در اسپاون‌های خود watchdog — فرزند bunِ price-ws قفل‌های fd-8/fd-9 را به ارث برده بود و پس از مرگ حلقهٔ والد، قفل‌ها را «از جسد» نگه می‌داشت → هر سایکل و هر مسلح‌سازی جدید SKIP/refuse می‌شد. سه نقطهٔ اسپاون اکنون `9>&- 8>&-`. + درس ثبت‌شده: اسپاون L2 از شل ابزار با پایان سشن می‌میرد؛ مسیر موثق setsid یا re-arm خودِ اپ است.
+
+### ③ ممیزی گیت‌ها — 29/10 در برابر 31/10 (عدد به عدد)
+- **29/10 (روز طلایی v14.0)**: ۳۱ سیگنال (DB). در SignalEvent هیچ پیام GUARD/veto — دیوار ورودی همان دکترین پیشا-29/10 بود (ENTRY-DELAY 90s / ENTRY-DRIFT 80bps / STALE-CARD 10m / MIN-FLOOR / REGIME v11.6) ولی بازار اجازهٔ عبور می‌داد. ژورنال گیت آن روز در بلای ری‌استور از دست رفته است.
+- **30/10 21:11Z → 31/10 11:35Z (ژورنال .old)**: REGIME 5831 (۱۰۰٪ CHOP) · MEMORY 336 · SHORT-GUARD 250 · DECISIVE 152 · STALE-BAR 118 · STALE-ANCHOR 98 · BOTTOM-FADE 22.
+- **31/10 00:00-11:35Z**: REGIME 2670 · DECISIVE 161 · SHORT-GUARD 82 · STABLE-REGIME 101 · FLOW 58 · STALE-BAR 21.
+- **31/10 14:55Z → 18:45Z (پسا-ری‌استور، ~۳.۸h)**: REGIME 7041 (~۱۸۵۰/h در برابر ~۲۳۰/h صبح — جهش ~۸×) · SHORT-GUARD 246 · DECISIVE 228 · STALE-ANCHOR 79 · BOTTOM-FADE 30 · STABLE-REGIME 24 · STALE-BAR 35 · FLOW 21 · ONSET-RETEST 20 · CHASE-EXTREME 17 · SINGLE-VENUE 14 · V-REVERSAL 5 · CASCADE-FREEZE 2.
+- **خلاصهٔ تفاوت**: ① سیگنال روزانه ۳۱ (29/10) → ۱۸ (30/10) → ۶ (31/10 تا این ساعت) ② گیت MEMORY از ۳۳۶ بلاک → **صفر** پس از آرشیو MG-THRESHOLD-LOOSEN (طبق فرمان «آستانه شل شود» — پنجره‌ها از ستل‌های تازه بازسازی می‌شوند) ③ جهش آهنگ REGIME-CHOP ~۸×: زیرگیت‌های شل‌تر (آرشیو Memory) کاندیدهای بیشتری را به دادگاه REGIME می‌فرستند و بازار هم CHOP است ④ سیگنال‌های زندهٔ لایو بریج در همین بازه ادامه دارد (NX-3222 LINK باز است).
+
+### ④ چه رژیم‌هایی وتو می‌شوند؟
+**فقط CHOP** — ۷۰۴۱ از ۷۰۴۱ بلاک REGIME امروز و ۵۸۳۱ از ۵۸۳۱ در پنجرهٔ .old، همگی خانوادهٔ «CHOP (path efficiency زیر آستانه — rotational chop، v11.6 cell-flip: AI-SCALP −$169.39 SHORT / −$245.63 LONG، WR 19.6%/24%)». BTC در رژیم CHOP است (riskgovernor: chop cohort n=2594، wr 39.5%؛ slope20 −$7.15؛ verdict DEFENSIVE sizeMult 0.75) → REGIME-CHOP دقیقاً طبق دکترین داوری می‌کند؛ این «خرابی» نیست، «فیلتر رژیم با شواهد تحقق‌یافته» است.
+
+### ⑤ regimeGuard چه فرقی کرده؟
+- knob امروز: `regimeGuard=1 (L1)` — سگمنت governor «REGIME-GUARD L1»، `minScore=17 [PINNED]`، shortGuard=1، decisiveFilter=1، breakoutGuard=0، volBarrier=0، dlConfFloor=0.
+- تاریخچه: در جلسات شل‌سازی 30/10→31/10 موقتاً L0 شد؛ **فرماندار خودکار در 10-30T23:45:36Z به L1 برگرداند** (hysteresis: `set_regime_guard to=1` — دکتترین governor.ts: «L0 re-opens the book's worst losing cohort»)؛ DIAGNOSTIC-RESTORE در 31/10 00:16Z تایید نهایی کرد (همزمان shortGuard 0→1، decisiveFilter 0→1).
+- **نسبت به 29/10: سطح knob تغییر دائمی نکرده** — همان L1 دکترین است. آنچه عوض شده «محیط» است (BTC → CHOP) نه تنظیم؛ بنابراین دیوارِ فعال امروز، ترکیب «رژیم بازار + L1» است نه یک تغییر پیکربندی پنهان.
+
+### ⑥ دامنهٔ تغییر و راستی‌آزمایی
+- فایل‌ها: `scripts/watchdog.sh` (KEYS-GUARD + فیکس fd-leak سه اسپاون)، `scripts/backup.sh` (بلاک TBENV + manifest tbenv/includes)، `scripts/recovery-restore.sh` (گام secrets-chain v2). **FLAT-10 بایت‌به‌بایت دست‌نخورده (md5 36fa6a8d ✓).**
+- راستی‌آزمایی زنده: بریج LIVE/keysInstalled ✓، رزم KEYS-GUARD ✓، tbenv roundtrip MATCH ✓، تک‌نمونه L2 با سایکل‌های پیوسته ✓، price-ws پس از رزم 400-OK ✓، recovery-restore کامپایل OK ✓، bash -n هر دو شل OK ✓.
+- lint = ۱۷ پایه (صفر جدید).
+- AMBER باقی‌مانده برای توجه اپراتور: کسری مزمن RAM (BREAKER 3/h)، cards failures1h=64 و staleHot=5 (بدترین: TREEUSDT با ۸۹۵۰ دقیقه)، باز paper-veto arm ۵۷٪، آفسایت بکاپ DISABLED (فرمان 2026-10-22 — با درام امروز کلید، بازنگری توصیه می‌شود).
