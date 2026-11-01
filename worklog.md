@@ -33199,3 +33199,35 @@ Stage Summary:
 ### ④ باقی‌ماندهٔ شفاف
 - سنتینل: هشدار `ENGINE — no SignalEvent 498191h` ناسازگار با «EVENTS 1H 1756» — باگ نمایش متریک سنتینل (برای مأموریت بعدی، تغییر engine ممنوع نیست چون سنتینل جدا از FLAT-10 است).
 - خانوادهٔ POSITIONING/CROSS-PLANE تاکسونومی warming می‌ماند تا بن fapi رفع شود (فقط در sandbox) — روی سرور شخصی با IP اختصاصی زنده می‌شود.
+
+## مأموریت 2026-11-01 — حادثهٔ «تووبیت بدون کلید» پس از ری‌استارت 09:42Z + بازیابی از tbenv + وصلهٔ نقطه‌کور واچ‌داگ + ممیزی کوهورت Shadow-veto (trace 1a196a30609a86ed)
+**فرمان اپراتور:** «وضعیت سیستم را بررسی کن، چرا توبیت بدون کلید است؟ آیا Shadow veto را به حالت Shadow بزاریم بهتر است؟» — مأموریت M0+M4 سنتینل.
+
+### ① وضعیت سیستم (M0)
+- سرویس‌ها هر ۷ سبز (app/ws/bridge/liq/trade/watchdog/sentinel) · DB ok (signals 3230, events1h 1314, orphans 0, stuckPump 0) · حلقهٔ بکاپ زنده (۱۲ .enc، جدیدترین 2.26h) · mem 684MB آزاد · دیسک ریشه 3.53GB.
+- Verdict سنتینل RED = همان مثبت‌کاذب شناخته‌شده (لنگر شکستهٔ «no SignalEvent 498202h») — با 1,314 رویداد/ساعت تناقض آشکار.
+- یافتهٔ واقعی زیر RED: **بریج با keysInstalled=false و mode PAPER-only در حال اجرا بود.**
+
+### ② حادثهٔ کلید — ریشه‌یابی و ترمیم
+- **ریشه**: ری‌استارت کامل محیط در **09:42:27Z** (بوت هم‌زمان p0-watchdog/sentinel/بریج). پنج‌مین وایپ کلید: `mini-services/toobit-bridge/.env` + کل `/home/z/.nexus-secrets/` (هر دو لینک ۱ و ۲) هم‌زمان مردند.
+- **چرا واچ‌داگ cron نفهمید**: v1.1 فقط وقتی بریج DOWN باشد اسکرو را برمی‌گرداند؛ p0-watchdog بریج را قبل از کرون revive کرده بود → health همیشه `ok:true` → ۱۲+ دور cron بی‌صدا رد شد (نقطه‌کور health-UP/keys-missing).
+- **پیامد**: ZEC-3230 (پوزیشن باز لایو) ۲۱ بار `CLOSE_REJECTED: no API credentials` → ABANDONED +Violation MIRROR-LAG؛ بریج به PAPER-only سقوط کرد.
+- **ترمیم**: زنجیرهٔ بازیابی از لینک ۴ (نسخه‌دار `backups/env/tbenv-36554c1a-20261031-185428.enc`، رمز AES-256-CBC/PBKDF2-200k با BACKUP_PASSPHRASE ریشه‌ای که زنده مانده بود) → sha256 رمزگشایی = `36554c1a…` دقیقاً مشخصهٔ نسخهٔ معروف-سالم → نوشتن مستقیم `.env` (600) + بازسازی `/home/z/.nexus-secrets/toobit-bridge.env` (700/600) بدون عبور از /tmp.
+- **KEYS-HOTRELOAD** در 10:27:58Z کلیدها را برداشت (`rearmed:[3230]`)، mode→LIVE، `keysInstalled:true`؛ ZEC-3230 دوباره مسلح و **در 10:27:59Z با موفقیت بسته شد** (`EXEC-CLOSE err=null، realizedPnl=+0.0615$`) → realized کل به −3.4639$ در ۱۷ معامله، openN=0.
+
+### ③ ریشه‌فیکس — bridge-watchdog v1.2 (KEYS BLIND-SPOT)
+- حالا وقتی health `ok:true` ولی `keysInstalled:false` است، بلافاصله `.env` را از اسکرو برمی‌گرداند (KEYS-HOTRELOAD ≤۳۰s نصب می‌کند — بدون ری‌استارت) و اگر اسکرو هم نبود پیام MANUAL با مسیر tbenv می‌دهد + EXIT=1. bash -n ✓ · خشک‌اجرا EXIT=0 ✓.
+- **یافتهٔ شفاف — لینک ۳ قفل شد**: `escrow.pass` (پاس‌فراز keychain-escrow DB) با وایپ پوشه از بین رفت → EngineSetting `toobit.key-escrow` (658B) تا بازگرداندن پاس‌فراز توسط اپراتور قابل رمزگشایی نیست. زنجیرهٔ فعلی: L1 env ✓ · L2 sealed ✓ · L3 DB-escrow 🔒 · L4 tbenv نسخه‌دار ✓ · L5 آفسایت (طبق فرمان 2026-10-22 DISABLED). پوشش دوگانه کافی است ولی پاس‌فراز باید بازتولید شود.
+
+### ④ ممیزی کوهورت Shadow-veto (M4 — پاسخ سؤال اپراتور، فقط‌خواندنی)
+- config فعلی (EngineSetting `shadowveto.config`): `mode=veto · autoPromote=false · patternVeto=true`.
+- **`scripts/shadow-cohort-audit.ts` (جدید، فقط‌خواندنی)** روی 19,411 رکورد ژورنال، 2,600 ورودی ستل‌شدهٔ paper:
+  - KEEP (عبور-دادهٔ مدل): 905 عدد · WR 37.7% · **−19.44$** · ۷روز: 15 عدد، WR 66.7%، +9.08$.
+  - VETO (وتوشدهٔ مدل): 1,695 عدد · WR 49.9% · **+56.89$** · ۷روز: 80 عدد، WR 73.8%، **+46.37$**.
+  - **دلتا: وتوهای اخیر برنده بودند** → معیار ارتقا (negative would-veto net) برعکس است = فشار لغو وتو.
+- سهم عملیاتی وتوی مدل از قیف: **صفر بلاک SHADOW-VETO در ۷ روز** (7,814 بلاک/۲۴h همه از DECISIVE/REGIME/... ) → mode=veto الان عملاً هیچ چیزی را بلاک نمی‌کند؛ دموسیون به shadow اثر عملیاتی ≈ صفر دارد.
+- سهم مدل در وریدی‌های ۲۴h اخیر فقط 17.1% (بقیه HEURISTIC) — کیفیت مدرک وتوی سراسری پایین.
+- **پیشنهاد (در انتظار فرمان، بدون تغییر)**: دموسیون به `mode=shadow` با نگه‌داشتن `patternVeto=true` (سلول‌های اثبات‌شده وتوی اسکوپ‌دار می‌مانند) — مسیر لایه‌دیتایی EngineSetting + ژورنال. autoPromote=false است پس فلیپ برگشتی خودکار ندارد.
+
+### ⑤ راستی‌آزمایی
+- FLAT-10: md5 کاری = HEAD = `36fa6a8d…` ✓ · بریج LIVE/keysInstalled=true بعد از ترمیم ✓ · واچ‌داگ v1.2 خشک EXIT=0 ✓ · هیچ knob موتوری لمس نشد.
