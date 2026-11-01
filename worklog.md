@@ -33255,3 +33255,26 @@ Stage Summary:
 
 ### ④ راستی‌آزمایی نهایی
 - FLAT-10: md5 کاری=HEAD=`36fa6a8d…` ✓ · سلامت: pulse 200 · p0 200 · بریج 200 (LIVE/keys) · سنتینل 200 · هیچ knob موتوری لمس نشد؛ تغییر رفتار فقط EngineSetting config (مسیر رسمی API).
+
+## مأموریت 2026-11-01 — ترمیم ششمین وایپ کلید بریج (بوت 18:43Z) + اثبات واچ‌داگ v1.2 (trace کرون 491600)
+
+**وضعیت کشف‌شده:** کرون واچ‌داگ 18:53Z اولین EXIT=1 را داد. بریج در بوت 18:43Z (uptime 9min) بدون کلید بالا آمده بود: `/health` → `ok:true, mode:"PAPER", keysInstalled:false`، BOOT audit با `hasKeys:false` در 18:48:51Z. L1+L2 وایپ شده بودند (الگوی همان حادثهٔ 09:42Z همان روز) و اسکرو L2 (`/home/z/.nexus-secrets/`) غایب بود → پیام MANUAL واچ‌داگ v1.2 دقیقاً طبق طراحی. **پوزیشن باز LSK-3231 SHORT بدون نگهبان مانده بود** (RECON-REATTACH-TPSL از آخرین ok در 18:51:18Z قطع شده بود).
+
+### ① راستی‌آزمایی محیط پیش از هر اقدام
+- FLAT-10: md5 `36fa6a8d…` ✓ بایت‌به‌بایت سالم
+- root `.env` زنده (BACKUP_PASSPHRASE موجود) · بوت سیستم: Nov 1 18:43 (uptime 9min)
+- **یافتهٔ معماری جدید**: بکاپ‌های نسخه‌دار tbenv در `BACKUPS="/tmp/my-project/backups"` (بیرون درخت پروژه) زندگی می‌کنند — به همین دلیل از وایپ‌های in-tree جان سالم برده‌اند؛ پوشهٔ `backups/env/` داخل پروژه هرگز وجود نداشت (پیام MANUAL واچ‌داگ به مسیر درستی اشاره نمی‌کرد — مسیر واقعی /tmp است). L4 در `/tmp/my-project/backups/env/tbenv-36554c1a-20261031-185428.enc` سالم ماند.
+- گیت: دو کامیت armor جدید (18:12 و 18:48) — حلقهٔ nexus-state بعد از بوت زنده است
+
+### ② ترمیم چهارلایه (اسکریپت جدید scripts/restore-keys.sh — بدون چاپ کلید)
+- رمزگشایی tbenv با `openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -pass env:BACKUP_PASSPHRASE` → sha256 `36554c1a1fcc7aa1…dbc2` = **fingerprint شناخته‌شده ✓**
+- نوشتن L1 (`mini-services/toobit-bridge/.env`, 600) + L2 (`/home/z/.nexus-secrets/toobit-bridge.env`, dir 700/file 600)
+- **KEYS-HOTRELOAD در 18:54:22Z نصب کرد** → `/health` → `mode:"LIVE", keysInstalled:true` — audit: `KEYS-HOTRELOAD … abandoned actions re-armed`
+- RECON-REATTACH-TPSL برای LSK-3231 بلافاصله ok شد؛ پوزیشن سالم: entry 0.2078 (fill 0.20717)، استاپ روی سر‌به‌سر (BE-TRAIL مسلح)، TP1 0.201062، qty 135
+
+### ③ جمع‌بندی و پیشنهاد
+- واچ‌داگ v1.2 (وصلهٔ نقطه‌کور صبح امروز) در اولین فرصت واقعی خود را اثبات کرد: کشف keys-missing در ~10 دقیقه بعد از بوت + EXIT=1 + پیام دقیق. دفعهٔ قبل ۱۲+ دور بی‌صدا بود.
+- این ششمین وایپ است؛ L3 (DB-escrow) همچنان قفل است — مأموریت معلق trace `1a196b17ed24be11` بخش ② (re-seal escrow با passphrase تازه) **فوری‌تر شده**.
+- یک ناهماهنگی جزئی: پیام MANUAL واچ‌داگ مسیر `backups/env/` را پیشنهاد می‌دهد ولی مسیر واقعی `/tmp/my-project/backups/env/` است — اصلاح رشتهٔ پیام در نوبت بعدی (تغییر کد، طبق قید «هیچ تغییری در کد/دیتا» در همین کرون انجام نشد؛ ثبت شد).
+
+**دامنهٔ تغییر:** `mini-services/toobit-bridge/.env` + `/home/z/.nexus-secrets/toobit-bridge.env` (ترمیم عملیاتی — نه کد، نه دیتای موتور) + اسکریپت جدید `scripts/restore-keys.sh`. FLAT-10 دست‌نخورده. صفر تغییر گیت/کنفیگ.
