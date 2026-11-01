@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ── NEXUS//SIGNALS bridge-watchdog (v1.0 — trace 1a19469b82a27fd9) ──────────
+# ── NEXUS//SIGNALS bridge-watchdog (v1.2 — keys blind-spot fix, trace 1a196a30609a86ed) ──────────
 # Operator mandate «مورد ۴»: the operator stays in this sandbox (no personal
 # server), so the Toobit bridge must SELF-REVIVE after any sandbox recycle /
 # process death instead of silently staying down for hours (the 2026-10-31
@@ -24,6 +24,21 @@ log() { echo "[$(now)] $*" >> "$LOG"; }
 
 health=$(curl -s -m 5 http://localhost:3021/health 2>/dev/null || true)
 if echo "$health" | grep -q '"ok":true'; then
+  # v1.2 — KEYS BLIND-SPOT FIX (trace 1a196a30609a86ed, incident 2026-11-01 09:42Z):
+  # sandbox recycle → p0-watchdog revived the bridge BEFORE this cron ran, so health
+  # was always "ok":true while keysInstalled=false — v1.1 exited silently for ~45min
+  # while ZEC-3230 storm-looped CLOSE_REJECTED (21 attempts → ABANDONED). Health-UP
+  # no longer implies keys-OK: restore the escrow .env on sight; KEYS-HOTRELOAD
+  # (30s watcher inside the bridge) installs them at runtime — no restart needed.
+  if echo "$health" | grep -q '"keysInstalled":false'; then
+    if [ -s "$ESCROW" ]; then
+      cp "$ESCROW" "$BR/.env" && chmod 600 "$BR/.env"
+      log "bridge UP but keys MISSING — .env restored from escrow ($(stat -c%s "$ESCROW") bytes); KEYS-HOTRELOAD installs in ≤30s"
+      exit 0
+    fi
+    log "keys MISSING and escrow absent ($ESCROW) — MANUAL: restore from backups/env/tbenv-*.enc (BACKUP_PASSPHRASE) or operator"
+    exit 1
+  fi
   # healthy — silent exit, no log spam
   exit 0
 fi
