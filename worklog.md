@@ -33231,3 +33231,27 @@ Stage Summary:
 
 ### ⑤ راستی‌آزمایی
 - FLAT-10: md5 کاری = HEAD = `36fa6a8d…` ✓ · بریج LIVE/keysInstalled=true بعد از ترمیم ✓ · واچ‌داگ v1.2 خشک EXIT=0 ✓ · هیچ knob موتوری لمس نشد.
+
+## مأموریت 2026-11-01 — دموسیون Shadow-veto به shadow (فرمان اپراتور) + قفل‌گشایی L3 اسکرو + پایدارسازی FUTURES TAXONOMY (trace 1a196b17ed24be11)
+**فرمان اپراتور:** «به حالت Shadow ببر و پیشنهاد مأموریت بعدی را کامل و مهندسی انجام بده. ماژول FUTURES TAXONOMY پایدار کن»
+
+### ① دموسیون Shadow-veto (mode=veto→shadow) — الگوی MG-THRESHOLD-LOOSEN
+- **شبیه‌سازی قبل از تغییر**: ممیزی کوهورت (مأموریت قبلی) + صفر بلاک SHADOW-VETO در ۷روز → دلتای عملیاتی ≈ ۰؛ آرم‌ها به ضبط ادامه می‌دهند (observeCapture=true)؛ فقط سلول‌های patternVeto اسکوپ‌دار می‌مانند.
+- **اجرا از مسیر رسمی**: `POST /api/ai/shadow-veto {"mode":"shadow"}` → `{"ok":true,"mode":"shadow"}` — با cooldown 45s، fireEvent خودکار موتور و cache-refresh درون-پردازشی (نه نوشتن خام DB).
+- **راستی‌آزمایی سه‌لایه**: ① GET config → mode=shadow، بقیهٔ ۱۰ فیلد بایت‌به‌بایت ثابت ② SignalEvent `10:42:53Z ENGINE info SHADOW-VETO mode → SHADOW — verdicts recorded, live flow untouched (fail-open)` ③ ژورنال k=d با tags کامل (trace، شبیه‌سازی، کوهورت، ROLLBACK:POST-mode=veto).
+- **برگشت‌پذیری**: یک POST برعکس؛ autoPromote=false → فلیپ خودکار ندارد. شواهد آرم‌ها دست‌نخورده جمع می‌شود.
+
+### ② قفل‌گشایی L3 زنجیرهٔ کلید (پیشنهاد بعدی — اجرای کامل و مهندسی)
+- پاس‌فراز نو (openssl rand معادل randomBytes(32) hex) → `/home/z/.nexus-secrets/escrow.pass` (0600، خارج درخت).
+- `bun scripts/keychain-escrow.ts escrow` → بازرمزگذاری از `.env` زنده (sha256 `36554c1a…` مطابق نسخهٔ معروف-سالم) → EngineSetting `toobit.key-escrow` (payload 192B) + **self-test roundtrip بایت-یکسان MATCH ✓**.
+- **ماتریس ۵-لینکی: RECOVERY-PROOF ✓** — ①env ②sealed ③tbenv نسخه‌دار ④DB-escrow (دوباره قابل رمزگشایی) ⑤bridge auth (keysInstalled).
+
+### ③ پایدارسازی FUTURES TAXONOMY — ریشه‌یابی P2022 + بیلد محصولی
+- **ریشه**: ری‌استارت 09:42Z کلاینت پرisma کهنه را برگرداند (دارای `fundingByb` حذف‌شده، بدون `fundingSettled` v14.0) → `/api/futures` 500 با P2022 (کلاس معروف «schema نو / DB نو / client کهنه» — generate در وایپ گم می‌شود).
+- **تشخیص**: DB به‌روز بود (fundingSettled ✓، fundingByb حذف ✓) — فقط کلاینت بود که `bunx prisma generate` کم داشت (fundingSettled 36 hit، fundingByb 0 hit پس از تولید).
+- **ترمیم با قرارداد safe-moment**: pause-until +900s → توقف امن next-server (پورت بسته ✓) → `prod-build.sh` (بیلد standalone ~2min، chdir-stripped + static) → spawn `bun .next/standalone/server.js` → **پاز زودهنگام وچ‌داگ** (بازگشت حفاظت قبل از انقضای pause).
+- **راستی‌آزمایی**: `/api/futures` 500→**200 لایو** (anchors BTC/ETH با quadrant، series، services tape/liq connected) · DB: 13,875 ردیف، 13,855 ستل‌شده، lastTs همان دقیقه، source=LIVE · edge study با 13,875 ردیف اسکن.
+- **باقی‌ماندهٔ شفاف (ساختاری، نه باگ)**: لاین‌های fapi بایننس (fundingSettled/topLS/liq) در بن NAT-pool sandbox تا ~11:23Z — فapi-gate خودش مدیریت می‌کند و پس از انقضا لاین‌ها زنده می‌شوند؛ ماژول حالا در بن به‌جای 500 با warming شیک 200 می‌دهد.
+
+### ④ راستی‌آزمایی نهایی
+- FLAT-10: md5 کاری=HEAD=`36fa6a8d…` ✓ · سلامت: pulse 200 · p0 200 · بریج 200 (LIVE/keys) · سنتینل 200 · هیچ knob موتوری لمس نشد؛ تغییر رفتار فقط EngineSetting config (مسیر رسمی API).
