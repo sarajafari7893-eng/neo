@@ -318,12 +318,12 @@ export default function TerminalSection() {
               {String(totalEvents).padStart(3, "0")} EV
             </span>
             {paused ? (
-              <NeonBadge tone="amber">
-                <LiveDot tone="amber" /> PAUSED
+              <NeonBadge tone="amber" title="این نشان فقط مکثِ اسکرولِ خودکارِ لاگ است — وضعیت موتور سیگنال یا اتصال صرافی را نشان نمی‌دهد؛ موتور مستقل از این دکمه به کارش ادامه می‌دهد">
+                <LiveDot tone="amber" /> SCROLL-HOLD
               </NeonBadge>
             ) : (
-              <NeonBadge tone="neon" glow>
-                <LiveDot /> LIVE
+              <NeonBadge tone="neon" glow title="جریان زندهٔ لاگ — وضعیت موتور سیگنال را نشان نمی‌دهد؛ موتور همیشه مستقل از این پنل کار می‌کند">
+                <LiveDot /> STREAM
               </NeonBadge>
             )}
           </div>

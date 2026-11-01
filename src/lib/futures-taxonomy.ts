@@ -113,6 +113,58 @@ async function spotKlines(symbol: string, interval: string, limit: number): Prom
   return spotLadderJson<Array<[number, string, string, string, string]>>(`/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`, SPOT_HOSTS);
 }
 
+// ── v13.3.1 BYBIT-PUBLIC MIRROR (trace 1a19469b82a27fd9 — operator mandate
+// «مورد ۴»: سیستم بدون مهاجرت در همین محیط باید سالم لایو کار کند) ───────────
+// The sandbox egress rides shared-IP 429/418 ban-storms on Binance fapi; the
+// ETH anchor lost OI/funding/LS for HOURS (10/12 rows in the last 3h had null
+// OI → quadrant grid dark → operator read the module as "no live data").
+// Bybit v5 public market endpoints are KEYLESS, reachable from this egress
+// (probed 200 @ 2026-11-01: open-interest, tickers with funding+OI, account-
+// ratio) and track the SAME USDT-perp contract. Used ONLY as a fallback when
+// the Binance lane answers null — real data, no invention; every delta is
+// computed WITHIN one venue's own history, so ban-edge rows never mix sources.
+// Family E crossCheck stays Binance-only (v14.0 zero-foreign-venue doctrine).
+const BYBIT_HOST = "https://api.bybit.com";
+async function bybitJson<T>(path: string, timeoutMs = 6000): Promise<T | null> {
+  return jsonUrl<T>(`${BYBIT_HOST}${path}`, timeoutMs);
+}
+interface BybitOiList { retCode?: number; result?: { list?: Array<{ openInterest: string; timestamp: string }> } }
+interface BybitTicker { retCode?: number; result?: { list?: Array<{ lastPrice: string; fundingRate: string; openInterest: string; openInterestValue: string }> } }
+interface BybitAcctRatio { retCode?: number; result?: { list?: Array<{ buyRatio: string; sellRatio: string }> } }
+
+/** OI 5m history → ASC series like Binance openInterestHist (mirror). */
+async function bybitOiSeries(symbol: string, limit = 13): Promise<number[] | null> {
+  const j = await bybitJson<BybitOiList>(`/v5/market/open-interest?category=linear&symbol=${symbol}&intervalTime=5min&limit=${limit}`);
+  const rows = j?.result?.list;
+  if (!rows || rows.length < 2) return null;
+  const arr = rows.map((r) => Number(r.openInterest)).reverse(); // bybit is DESC → asc
+  return arr.every((v) => Number.isFinite(v) && v >= 0) ? arr : null;
+}
+/** lastPrice + fundingRate + current OI(+USD value) in ONE call (mirror). */
+async function bybitTicker(symbol: string): Promise<{ price: number | null; funding8h: number | null; oiBase: number | null; oiUsd: number | null } | null> {
+  const j = await bybitJson<BybitTicker>(`/v5/market/tickers?category=linear&symbol=${symbol}`);
+  const t = j?.result?.list?.[0];
+  if (!t) return null;
+  const price = Number(t.lastPrice);
+  const fr = Number(t.fundingRate);
+  const oi = Number(t.openInterest);
+  const oiUsd = Number(t.openInterestValue);
+  return {
+    price: Number.isFinite(price) && price > 0 ? price : null,
+    funding8h: Number.isFinite(fr) ? Number((fr * 100).toFixed(4)) : null,
+    oiBase: Number.isFinite(oi) && oi > 0 ? oi : null,
+    oiUsd: Number.isFinite(oiUsd) && oiUsd > 0 ? oiUsd : null,
+  };
+}
+/** crowd L/S account ratio mirror — buyRatio/sellRatio ≈ Binance global L/S. */
+async function bybitCrowdLS(symbol: string): Promise<number | null> {
+  const j = await bybitJson<BybitAcctRatio>(`/v5/market/account-ratio?category=linear&symbol=${symbol}&period=5min&limit=1`);
+  const r = j?.result?.list?.[0];
+  if (!r) return null;
+  const buy = Number(r.buyRatio), sell = Number(r.sellRatio);
+  return Number.isFinite(buy) && Number.isFinite(sell) && sell > 0 ? Number((buy / sell).toFixed(4)) : null;
+}
+
 interface PremIndex { markPrice: string; lastFundingRate: string; nextFundingTime: number }
 interface OiHistRow { sumOpenInterest: string; sumOpenInterestValue: string; timestamp: number }
 interface LsRow { longShortRatio: string; timestamp: number }
@@ -177,17 +229,20 @@ export async function maybeFuturesSample(force = false): Promise<FuturesSampleOu
           crossCheck(symbol),
         ]);
 
-        // Task 34-4/35 — price fallback tiers (v14.0 Binance-only): fapi
-        // markPrice → binance spot mirror. A fapi ban window no longer zeroes
-        // the whole sample; the row keeps flowing with futures-only families
-        // honestly null.
+        // Task 34-4/35 — price fallback tiers: fapi markPrice → binance spot
+        // mirror → v13.3.1 bybit mirror. A fapi ban window no longer zeroes
+        // the whole sample; the row keeps flowing with real fallback data.
+        const bt = !prem || !oiHistArr || oiHistArr.length < 2 || !crowdArr ? await bybitTicker(symbol) : null;
         let price = prem ? Number(prem.markPrice) || null : null;
         if (price === null) price = await spotPrice(symbol);
+        if (price === null) price = bt?.price ?? null; // v13.3.1 tier-3 mirror
         if (price === null) continue; // honest — no price from ANY host, no row
 
-        const oi = oiHistArr && oiHistArr.length >= 2 ? oiHistArr.map((h) => Number(h.sumOpenInterest)) : null;
+        let oi = oiHistArr && oiHistArr.length >= 2 ? oiHistArr.map((h) => Number(h.sumOpenInterest)) : null;
+        if (!oi) oi = await bybitOiSeries(symbol); // v13.3.1 mirror — same-contract OI history
         const oiBase = oi ? oi[oi.length - 1]! : null;
-        const oiUsdRaw = oiHistArr && oiHistArr.length ? Number(oiHistArr[oiHistArr.length - 1]!.sumOpenInterestValue) : null;
+        let oiUsdRaw = oiHistArr && oiHistArr.length ? Number(oiHistArr[oiHistArr.length - 1]!.sumOpenInterestValue) : null;
+        if (oiUsdRaw === null && bt?.oiUsd) oiUsdRaw = bt.oiUsd;
         const oiDelta15m = oi && oi.length > 3 ? pct(oi[oi.length - 1]!, oi[oi.length - 4]!) : null;
         const oiDelta1h = oi && oi.length > 12 ? pct(oi[oi.length - 1]!, oi[oi.length - 13]!) : null;
 
@@ -208,6 +263,8 @@ export async function maybeFuturesSample(force = false): Promise<FuturesSampleOu
         }
 
         const liqRow = liqSnap?.bySymbol?.[symbol] ?? null;
+        // v13.3.1 mirror — crowd L/S only when the Binance lane answered null
+        const crowdMirror = crowdArr && crowdArr.length ? null : await bybitCrowdLS(symbol);
 
         const data = {
           symbol,
@@ -222,8 +279,8 @@ export async function maybeFuturesSample(force = false): Promise<FuturesSampleOu
           oiDelta1h,
           quadrant15m: classifyQuadrant(priceDelta15m, oiDelta15m),
           quadrant1h: classifyQuadrant(priceDelta1h, oiDelta1h),
-          funding8h: prem ? Number((Number(prem.lastFundingRate) * 100).toFixed(4)) : null,
-          crowdLS: crowdArr && crowdArr.length ? Number(crowdArr[crowdArr.length - 1]!.longShortRatio) : null,
+          funding8h: prem ? Number((Number(prem.lastFundingRate) * 100).toFixed(4)) : bt?.funding8h ?? null,
+          crowdLS: crowdArr && crowdArr.length ? Number(crowdArr[crowdArr.length - 1]!.longShortRatio) : crowdMirror,
           topLS: topArr && topArr.length ? Number(topArr[topArr.length - 1]!.longShortRatio) : null,
           takerLS: null,
           cvd15mPct: tape ? Number(tape.cvd15mPct.toFixed(2)) : null,
