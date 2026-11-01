@@ -1,77 +1,72 @@
 {
- "at": "2026-10-31T22:59:11.053Z",
- "tehran": "01/11/2026, 02:29:11",
+ "at": "2026-11-01T11:00:39.870Z",
+ "tehran": "01/11/2026, 14:30:39",
  "status": "llm_unavailable",
- "err": "Error: API request failed with status 401: {\"error\":\"missing X-Token header\"}",
+ "err": "Error: API request failed with status 429: {\"error\":\"Too many requests, please try again later\"}",
  "review": null,
  "telemetrySnapshot": {
-  "generatedAt": "2026-10-31T22:59:11.018Z",
+  "generatedAt": "2026-11-01T10:59:09.814Z",
   "liveExecution": "DISABLED (paper/research-only; SUPPRESSED engine path — honesty contract)",
-  "strategyValidationStatus": "PROMOTE gate = FAIL-OPEN-GAPS — OOS 2647/300 (100%) · weak per-strategy (<60): MOMENTUM · pace 35.6/day · ETA 0d (protocol STRATEGY-VALIDATION-PROTOCOL.md; sample-size leg only) — recommend only evidence-respecting actions",
+  "strategyValidationStatus": "PROMOTE gate = FAIL-OPEN-GAPS — OOS 2652/300 (100%) · weak per-strategy (<60): MOMENTUM · pace 32.2/day · ETA 0d (protocol STRATEGY-VALIDATION-PROTOCOL.md; sample-size leg only) — recommend only evidence-respecting actions",
   "sentinel": {
    "verdict": "RED",
    "anomalies": [
     {
      "sev": "crit",
      "area": "engine",
-     "msg": "no SignalEvent for 498190h+58m — engine may be stalled"
-    },
-    {
-     "sev": "warn",
-     "area": "watchdog",
-     "msg": "layer-1 non-ok services: {\"app\":\"ok\",\"liq\":\"ok\",\"ws\":\"ok\",\"bridge\":\"ok\",\"trade\":\"ok\",\"sentinel\":\"ok\",\"armor\":\"ok\",\"cron\":\"ok\",\"stable\":\"ok\",\"kw\":\"ok\",\"mem\":\"ok\",\"warm\":\"ok\",\"tbt\":\"escalated\",\"cards\":\"ok\"}"
+     "msg": "no SignalEvent for 498202h+58m — engine may be stalled"
     }
    ],
    "mem": {
-    "availableMb": 623
+    "availableMb": 2841
    },
    "disk": {
-    "rootFreeGb": 3.63,
-    "tmpFreeGb": 3.63
+    "rootFreeGb": 3.16,
+    "tmpFreeGb": 3.16
    },
    "backup": {
     "ok": true,
     "dir": "/tmp/my-project/backups",
     "encCount": 12,
     "zipCount": 12,
-    "newestEncMs": 1793477270805.206,
-    "newestAnyMs": 1793477270805.206,
-    "encAgeMs": 10233880.793945312
+    "newestEncMs": 1793520473223.977,
+    "newestAnyMs": 1793520473223.977,
+    "encAgeMs": 10234440.022949219
    },
    "rawcal": {
     "armed": true,
-    "issued": 729,
-    "issuedTotal": 2147,
+    "issued": 730,
+    "issuedTotal": 2148,
     "target": 3217,
     "heartbeatAgeH": 0,
-    "heartbeatAt": "2026-10-31T2257Z ARMED issued=729/2140 target=3217"
+    "heartbeatAt": "2026-11-01T1058Z ARMED issued=730/2141 target=3217"
    }
   },
-  "deepSweepQuick": "# NEXUS-SENTINEL DEEP SWEEP — 2026-10-31T22:59:09Z\n\n\n## 1 · LIVE VERDICT — RED\n- verdict: RED · scan: 2026-10-31T22:58:24.926Z\n  · app       UP  http=200 25ms\n  · ws        UP  http=400 4ms\n  · bridge    UP  http=200 3ms\n  · liq       UP  http=200 3ms\n  · trade     UP  http=200 3ms\n  · watchdog  UP  http=200 3ms\n- mem: 623 MB avail · disk root: 3.63 GB · /tmp: 3.63 GB\n  - [crit] engine: no SignalEvent for 498190h+58m — engine may be stalled\n  - [warn] watchdog: layer-1 non-ok services: {\"app\":\"ok\",\"liq\":\"ok\",\"ws\":\"ok\",\"bridge\":\"ok\",\"trade\":\"ok\",\"sentinel\":\"ok\",\"armor\":\"ok\",\"cron\":\"ok\",\"stable\":\"ok\",\"kw\":\"ok\",\"mem\":\"ok\",\"warm\":\"ok\",\"tbt\":\"escalated\",\"cards\":\"ok\"}\n",
+  "deepSweepQuick": "# NEXUS-SENTINEL DEEP SWEEP — 2026-11-01T10:59:09Z\n\n\n## 1 · LIVE VERDICT — RED\n- verdict: RED · scan: 2026-11-01T10:58:27.765Z\n  · app       UP  http=200 15ms\n  · ws        UP  http=400 4ms\n  · bridge    UP  http=200 3ms\n  · liq       UP  http=200 3ms\n  · trade     UP  http=200 3ms\n  · watchdog  UP  http=200 3ms\n- mem: 2841 MB avail · disk root: 3.16 GB · /tmp: 3.16 GB\n  - [crit] engine: no SignalEvent for 498202h+58m — engine may be stalled\n",
   "pulseStats": {
    "winRate": 27,
-   "totalSignals": 118,
-   "wins": 31,
-   "losses": 42,
-   "pnl24hUsd": -9.84,
-   "totalPnlUsd": 52.33,
-   "avgPnlPercent": 4.55,
+   "totalSignals": 90,
+   "wins": 24,
+   "losses": 33,
+   "pnl24hUsd": 4.54,
+   "totalPnlUsd": 58.2,
+   "avgPnlPercent": 6.47,
    "streak": {
-    "type": "loss",
+    "type": "win",
     "count": 1
    },
    "account": {
     "startBalance": 100,
-    "balance": 320.15,
-    "equity": 320.61,
-    "unrealizedPnl": 0.46,
-    "unrealizedPnlAllRows": 0.46,
+    "balance": 324.59,
+    "equity": 324.59,
+    "unrealizedPnl": 0,
+    "unrealizedPnlAllRows": 0,
     "unsafeOpenRows": 0,
-    "exposureUsd": 30,
-    "freeMargin": 290.61,
-    "marginUsedPct": 9.4,
-    "openPositions": 3,
-    "feesPaid": 199.398,
+    "exposureUsd": 0,
+    "freeMargin": 324.59,
+    "marginUsedPct": 0,
+    "openPositions": 0,
+    "feesPaid": 199.968,
     "closeAll": {
      "enabled": true,
      "targetUsd": 20,
@@ -80,103 +75,94 @@
     }
    },
    "window24h": {
-    "n": 11,
-    "wins": 3,
-    "winRatePct": 27.3,
-    "pnlUsd": -9.84
+    "n": 6,
+    "wins": 4,
+    "winRatePct": 66.7,
+    "pnlUsd": 4.54
    },
    "window7d": {
-    "n": 57,
-    "wins": 38,
+    "n": 60,
+    "wins": 40,
     "winRatePct": 66.7,
-    "pnlUsd": 70.78
+    "pnlUsd": 73.16
    },
    "byStrategy": [
     {
-     "strategy": "AI-SCALP",
-     "count": 5,
-     "wins": 0,
-     "pnl": -1.06,
-     "avgConfidence": 73
-    },
-    {
-     "strategy": "MOMENTUM",
-     "count": 4,
-     "wins": 1,
-     "pnl": -1.39,
-     "avgConfidence": 77
-    },
-    {
      "strategy": "AI-SWING",
-     "count": 98,
-     "wins": 28,
-     "pnl": 49.13,
+     "count": 84,
+     "wins": 24,
+     "pnl": 58.7,
      "avgConfidence": 75
     },
     {
      "strategy": "MEAN-REVERT",
-     "count": 4,
-     "wins": 1,
-     "pnl": 2.83,
-     "avgConfidence": 82
+     "count": 3,
+     "wins": 0,
+     "pnl": -2.98,
+     "avgConfidence": 81
     },
     {
      "strategy": "BREAKOUT",
-     "count": 4,
-     "wins": 1,
-     "pnl": 2.83,
+     "count": 3,
+     "wins": 0,
+     "pnl": 2.48,
      "avgConfidence": 82
     }
    ],
    "equityCurveTail": [
     {
      "date": "10-25",
-     "cum": -12.14,
-     "daily": -12.14
+     "cum": -10.71,
+     "daily": -10.71
     },
     {
      "date": "10-26",
-     "cum": -16.39,
+     "cum": -14.96,
      "daily": -4.25
     },
     {
      "date": "10-29",
-     "cum": 29.29,
+     "cum": 30.73,
      "daily": 45.69
     },
     {
      "date": "10-30",
-     "cum": 62.17,
+     "cum": 63.6,
      "daily": 32.88
     },
     {
      "date": "10-31",
-     "cum": 52.33,
+     "cum": 53.76,
      "daily": -9.84
+    },
+    {
+     "date": "11-01",
+     "cum": 58.2,
+     "daily": 4.44
     }
    ]
   },
   "rawcal": {
    "armed": true,
    "target": 3217,
-   "settledN": 2080,
-   "openRaw": 3,
+   "settledN": 2085,
+   "openRaw": 0,
    "rawWinRatePct": 22,
    "disarmReason": "",
-   "paceSettledE2": 2080,
-   "paceSettleRate3h": 0,
-   "paceNeeded": 1137,
-   "qualityInformativePct": 67,
-   "qualityHealthyPct": 92.4,
+   "paceSettledE2": 2085,
+   "paceSettleRate3h": 1,
+   "paceNeeded": 1132,
+   "qualityInformativePct": 66.5,
+   "qualityHealthyPct": 91.5,
    "qualityGate": {
     "verdict": "GREEN",
     "healthFloor": 85,
     "blockers": [],
     "window": {
      "since": "2026-09-15T11:30:00.000Z",
-     "settled": 197,
-     "healthyPct": 92.4,
-     "informativePct": 67
+     "settled": 200,
+     "healthyPct": 91.5,
+     "informativePct": 66.5
     }
    }
   },
@@ -194,7 +180,7 @@
     "n": 30,
     "target": 30,
     "fillPct": 100,
-    "winRatePct": 80,
+    "winRatePct": 73.3,
     "starved": false
    },
    {
@@ -203,7 +189,7 @@
     "target": 30,
     "fillPct": 100,
     "winRatePct": 40,
-    "starved": false
+    "starved": true
    },
    {
     "id": "paper-veto",
@@ -215,26 +201,62 @@
    }
   ],
   "shadowVetoStats": {
-   "total": 9313,
-   "passSide": 5427,
-   "rejectSide": 3886,
-   "vetoCount": 6322,
-   "tradeCount": 2991,
+   "total": 9329,
+   "passSide": 5433,
+   "rejectSide": 3896,
+   "vetoCount": 6337,
+   "tradeCount": 2992,
    "modelSharePct": 40.8,
    "modelGroundedPct": 100,
    "avgConfidence": 66.7,
-   "gateAgreement": 2494,
-   "paperOpen": 10,
-   "paperSettled": 1401,
+   "gateAgreement": 2504,
+   "paperOpen": 8,
+   "paperSettled": 1403,
    "recent24h": {
-    "n": 137,
-    "modelSharePct": 19,
-    "lastModelAgeH": 2.7,
+    "n": 78,
+    "modelSharePct": 16.7,
+    "lastModelAgeH": 10.5,
     "lastVerdictAgeH": 0.1
    }
   },
   "futures": {
-   "error": "unavailable"
+   "maturity": {
+    "settled": 13679,
+    "target": 720,
+    "progressPct": 100
+   },
+   "bestFilter": {
+    "filter": "BLOCK LONG in Q3_FRESH_SHORT",
+    "family": "D",
+    "rule": "LONG signals issued in Q3_FRESH_SHORT context averaged -2.16% levered net (n=56, win 44.6%)",
+    "edge": -2.16,
+    "n": 56,
+    "confidence": "MEDIUM",
+    "source": "BOOK-EDGE"
+   },
+   "counts": {
+    "total": 13687,
+    "live": 13687,
+    "backfill": 0,
+    "settled1h": 13679,
+    "last24h": 26
+   },
+   "tape": {
+    "reachable": true,
+    "connected": true,
+    "source": "SPOT-MIRROR",
+    "symbols": 2,
+    "trades": 36349,
+    "dataStalled": false
+   },
+   "taxonomyBackfill": {
+    "at": "2026-09-23T00:25:06.827Z",
+    "symbols": [
+     "BTCUSDT",
+     "ETHUSDT"
+    ],
+    "rows": 672
+   }
   },
   "tradeService": {
    "ok": true,
@@ -245,29 +267,29 @@
    "watch": 2,
    "lastFrameAt": null,
    "spotConnected": true,
-   "spotFrames": 37357,
-   "spotLastFrameAt": 1793487548838,
+   "spotFrames": 35349,
+   "spotLastFrameAt": 1793530749232,
    "spotStreams": 2,
    "spotReconnects": 0,
-   "restBannedUntil": null,
+   "restBannedUntil": 1793533413088,
    "restProbeConsecutiveFails": 1,
    "symbols": 2,
-   "trades": 37357,
-   "restPolls": 1,
+   "trades": 36349,
+   "restPolls": 2,
    "restErrors": 1,
    "reconnects": 0,
-   "uptimeMs": 7424420
+   "uptimeMs": 4601286
   },
   "lastSweepAnomalies": [
-   {
-    "class": "svc-down:tbt",
-    "sev": "warn",
-    "msg": "tbt :3021 DOWN (HTTP unreachable)"
-   },
    {
     "class": "sentinel-red",
     "sev": "crit",
     "msg": "sentinel :3030 verdict RED"
+   },
+   {
+    "class": "tbt-doctrine-violation",
+    "sev": "crit",
+    "msg": "toobit-bridge doctrine: 20 violation(s) — last=MIRROR-LAG: card=EXPIRED but intent still OPEN 34661s — pollCards transition should have fired"
    },
    {
     "class": "data-stale",
@@ -275,7 +297,7 @@
     "msg": "data-stale: newest SignalEvent UNREADABLE old (cap 15min) · no-rows"
    }
   ],
-  "lastReviewAt": "2026-10-31T10:59:10.864Z"
+  "lastReviewAt": "2026-10-31T22:59:11.053Z"
  },
- "deepSweepChars": 671
+ "deepSweepChars": 446
 }
