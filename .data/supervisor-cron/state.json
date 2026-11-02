@@ -2,15 +2,15 @@
  "ver": "supervisor-cron 1.6.0",
  "pid": 2088,
  "startedAt": "2026-11-01T18:46:51.326Z",
- "updatedAt": "2026-11-02T00:46:00.982Z",
+ "updatedAt": "2026-11-02T00:56:01.084Z",
  "jobs": {
   "sweep": {
-   "lastRunAt": 1793580360935,
-   "nextRunAt": 1793580360935,
+   "lastRunAt": 1793580960936,
+   "nextRunAt": 1793580960935,
    "lastStatus": "ok",
-   "lastDurationMs": 47,
+   "lastDurationMs": 148,
    "lastError": null,
-   "runs": 593,
+   "runs": 594,
    "failures": 0
   },
   "progress": {
@@ -41,52 +41,52 @@
    "failures": 0
   },
   "backup": {
-   "lastRunAt": 1793569701400,
-   "nextRunAt": 1793580501400,
+   "lastRunAt": 1793580501400,
+   "nextRunAt": 1793591301400,
    "lastStatus": "ok",
-   "lastDurationMs": 22939,
+   "lastDurationMs": 18723,
    "lastError": null,
-   "runs": 32,
+   "runs": 33,
    "failures": 0
   },
   "digest": {
-   "lastRunAt": 1793573343327,
-   "nextRunAt": 1793580543327,
+   "lastRunAt": 1793580543328,
+   "nextRunAt": 1793587743328,
    "lastStatus": "ok",
-   "lastDurationMs": 696,
+   "lastDurationMs": 630,
    "lastError": null,
-   "runs": 3,
+   "runs": 4,
    "failures": 0
   },
   "keepwarm": {
-   "lastRunAt": 1793580360935,
-   "nextRunAt": 1793580660935,
+   "lastRunAt": 1793580960936,
+   "nextRunAt": 1793581260935,
    "lastStatus": "ok",
-   "lastDurationMs": 44,
+   "lastDurationMs": 97,
    "lastError": null,
-   "runs": 1107,
+   "runs": 1109,
    "failures": 119
   }
  },
  "lastSweep": {
-  "at": "2026-11-02T00:46:00.982Z",
+  "at": "2026-11-02T00:56:01.083Z",
   "verdict": "RED",
   "reason": "sentinel verdict RED",
   "services": {
    "app": {
     "up": true,
     "status": 200,
-    "ms": 29
+    "ms": 100
    },
    "liq": {
     "up": true,
     "status": 200,
-    "ms": 0
+    "ms": 1
    },
    "trade": {
     "up": true,
     "status": 200,
-    "ms": 1
+    "ms": 0
    },
    "armor": {
     "up": true,
@@ -101,12 +101,12 @@
    "sentinel": {
     "up": true,
     "status": 200,
-    "ms": 1
+    "ms": 0
    },
    "ws": {
     "up": true,
     "status": 400,
-    "ms": 2
+    "ms": 0
    },
    "bridge": {
     "up": true,
@@ -141,7 +141,7 @@
   },
   "streaks": {
    "wsDown": 0,
-   "stale": 119
+   "stale": 120
   }
  },
  "lastReview": {
@@ -154,16 +154,16 @@
   "ok": true
  },
  "lastDigest": {
-  "at": "2026-11-01T22:49:04.023Z",
+  "at": "2026-11-02T00:49:03.958Z",
   "ok": true,
-  "newN": 1
+  "newN": 0
  },
  "lastKeepwarm": {
-  "at": "2026-11-02T00:46:00.979Z",
+  "at": "2026-11-02T00:56:01.033Z",
   "ok": true,
-  "ms": 44,
-  "bootAt": "2026-11-02T00:21:47.976Z",
-  "gitSha": "32f7ba5",
+  "ms": 96,
+  "bootAt": "2026-11-02T00:46:58.885Z",
+  "gitSha": "fcee22d",
   "coldStreak": 0
  },
  "coldStreak": 0,
@@ -175,43 +175,8 @@
   "tbt-doctrine-violation": 1793579161927
  },
  "wsDownStreak": 0,
- "staleStreak": 119,
+ "staleStreak": 120,
  "history": [
-  {
-   "id": "keepwarm",
-   "at": 1793571060935,
-   "status": "ok",
-   "durationMs": 21,
-   "detail": "HEARTBEAT OK 21ms boot=22:03:46Z sha=1ec9a64"
-  },
-  {
-   "id": "keepwarm",
-   "at": 1793571360936,
-   "status": "ok",
-   "durationMs": 91,
-   "detail": "HEARTBEAT OK 91ms boot=22:03:46Z sha=1ec9a64"
-  },
-  {
-   "id": "sweep",
-   "at": 1793571360935,
-   "status": "ok",
-   "durationMs": 172,
-   "detail": "RED: sentinel verdict RED"
-  },
-  {
-   "id": "keepwarm",
-   "at": 1793571660935,
-   "status": "ok",
-   "durationMs": 47,
-   "detail": "HEARTBEAT OK 47ms boot=22:03:46Z sha=b387524"
-  },
-  {
-   "id": "keepwarm",
-   "at": 1793571960935,
-   "status": "ok",
-   "durationMs": 39,
-   "detail": "HEARTBEAT OK 38ms boot=22:03:46Z sha=b387524"
-  },
   {
    "id": "sweep",
    "at": 1793571960935,
@@ -525,6 +490,41 @@
    "at": 1793580360935,
    "status": "ok",
    "durationMs": 47,
+   "detail": "RED: sentinel verdict RED"
+  },
+  {
+   "id": "backup",
+   "at": 1793580501400,
+   "status": "ok",
+   "durationMs": 18723,
+   "detail": "snapshot ok in 19s: SNAPSHOT OK — nexus-snapshot-20261102-004821.zip (47M) · 12 snapshots retained (max 12) · wal:VACUUM-COPY-CONSISTENT+CHECKPOINTED · cal:OK · enc:ENCRYPTED · off-site: DISABLED(oper"
+  },
+  {
+   "id": "digest",
+   "at": 1793580543328,
+   "status": "ok",
+   "durationMs": 630,
+   "detail": "digest new=0 settled=1 bridge=ok"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1793580660935,
+   "status": "ok",
+   "durationMs": 19,
+   "detail": "HEARTBEAT OK 19ms boot=00:46:58Z sha=fcee22d"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1793580960936,
+   "status": "ok",
+   "durationMs": 97,
+   "detail": "HEARTBEAT OK 96ms boot=00:46:58Z sha=fcee22d"
+  },
+  {
+   "id": "sweep",
+   "at": 1793580960936,
+   "status": "ok",
+   "durationMs": 148,
    "detail": "RED: sentinel verdict RED"
   }
  ],
