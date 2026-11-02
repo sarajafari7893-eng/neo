@@ -31,12 +31,24 @@ if echo "$health" | grep -q '"ok":true'; then
   # no longer implies keys-OK: restore the escrow .env on sight; KEYS-HOTRELOAD
   # (30s watcher inside the bridge) installs them at runtime — no restart needed.
   if echo "$health" | grep -q '"keysInstalled":false'; then
+    if [ ! -s "$ESCROW" ]; then
+      # v1.3 — escrow dies on every re-provision (11 wipes on 2026-11-02). Before the
+      # MANUAL dead-end, self-heal from the versioned tbenv backup (survives wipes).
+      # This retires the old MANUAL message that pointed at the wrong in-tree path.
+      if [ -s "$BASE/scripts/restore-keys.sh" ]; then
+        if bash "$BASE/scripts/restore-keys.sh" >> "$BASE/logs/watchdog-restore-keys.log" 2>&1 \
+           && [ -s "$BR/.env" ]; then
+          log "bridge UP but keys MISSING — restored L1+escrow from tbenv backup via restore-keys.sh; KEYS-HOTRELOAD installs in ≤30s"
+          exit 0
+        fi
+      fi
+    fi
     if [ -s "$ESCROW" ]; then
       cp "$ESCROW" "$BR/.env" && chmod 600 "$BR/.env"
       log "bridge UP but keys MISSING — .env restored from escrow ($(stat -c%s "$ESCROW") bytes); KEYS-HOTRELOAD installs in ≤30s"
       exit 0
     fi
-    log "keys MISSING and escrow absent ($ESCROW) — MANUAL: restore from backups/env/tbenv-*.enc (BACKUP_PASSPHRASE) or operator"
+    log "keys MISSING, escrow absent, tbenv self-heal failed ($ESCROW) — MANUAL: operator"
     exit 1
   fi
   # healthy — silent exit, no log spam

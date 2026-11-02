@@ -33330,3 +33330,25 @@ Stage Summary:
 - `RECON-UNKNOWN-POSITION`: **ENA-SWAP-USDT SHORT qty 89** روی صرافی زنده است؛ در DB هیچ کارت فعال ENA نیست (همه EXPIRED/SL) و در دفتر بریج هم intent ندارد → **بدون TPSL-آینه و بدون مدیریت**
 - کارت فعال DB فقط NEARUSDT SHORT است (3239) که در پنجرهٔ PAPER به‌صورت paper-open گرفت (protected) — هنگام LIVE شدن bridge آن را REAL نمی‌زند مگر doctrine باز-مسلح کند
 - LSK-3231 دیگر روی صرافی نیست (RECON فقط ENA را flagged کرد) — احتمالاً استاپِ سربه‌سرِ سمت صرافی آن را بسته (در پنجره‌های PAPER مدیریت سمت ما قطع بود ولی TPSL سمت صرافی زنده مانده بود)
+
+---
+
+## چهار مأموریت اپراتور پس از گزارش P0 (2026-11-02 ~09:00–09:15Z)
+### مأموریت ① و ② — «موتور متوقف» و «داده قدیمی» = فیک‌آلارم type-confusion (اصلاح شد)
+- ریشه: در SQLite ستون createdAt مخلوط‌نوع است (۸۰,۰۷۶ ردیف epoch-عددی + ۱ ردیف legacy ISO-متنی از Oct 31 19:19) — `MAX(createdAt)` لغت‌نامه‌ای ISO را برمی‌گرداند → `Number(iso)=NaN` → supervisor «UNREADABLE/no-rows» و sentinel «498214h+ engine stalled» تولید کرد
+- واقعیت: موتور کاملاً زنده — جدیدترین SignalEvent در لحظهٔ تشخیص ۶ ثانیه پیش، ۵۳۱ رویداد در ساعت اخیر، digest «new=2 settled=1 bridge=ok»
+- اصلاح (مجوز صریح اپراتور): `MAX(CAST(createdAt AS REAL))` در supervisor-cron:275 و sentinel:184 + `CAST` در فیلتر ev1h:181 — هر دو سرویس با --hot بازچرخانده شدند
+- **تأیید End-to-End**: sweep 09:06Z → «GREEN: all services up · sentinel not RED» (قبلاً: red-alert-sent class=data-stale) — FLAT-10 دست‌نخورده
+### مأموریت ③ — نقض‌های رویه: صفر
+- ۲۰ نقضِ گزارش‌شده متعلق به پنجرهٔ آشوب وایپ‌ها بود؛ doctrine-latest.json فعلی: **violations: 0** — MIRROR-LAG پس از بازگشت LIVE و reconcile خود-ترمیم شد
+- تنها باقی‌ماندهٔ سالم: intent 3239 NEARUSDT به‌صورت PAPER-protected (باز شده در پنجرهٔ PAPER) و منطبق با کارت ACTIVE — طبق دکترین paper می‌ماند؛ کارت‌های جدید واقعی شلیک می‌شوند
+### مأموریت ④ — چرایی ری‌سایکل‌ها + مهاجرت اسکرو
+- علت: next-server (dev) تا ~2.8GB RSS رفته و kernel آن را OOM-kill کرده (الگوی مستند در هدر mem-guard)؛ فشار تکرارشده → re-provision پلتفرم (وایپ کامل /home/z)؛ ۱۱ بار امروز (~هر ۱.۵-۲ ساعت)؛ mem-guard (cap 768MB V8 + restart پیشگیرانه ≤3/h) هست ولی پلتفرم مستقل عمل می‌کند
+- **مهاجرت اسکرو (اعمال شد)**: مسیر پایدار همان tbenv در /tmp است (۱۱ وایپ را بی‌ disobedience گذرانده) — کاری که کردیم رساندن خودکارِ آن به کلید است:
+  1. **boot-kit plane (0e) BRIDGE-KEYS**: خودکفا (فقط openssl + tbenv + BACKUP_PASSPHRASE از plane 0b)؛ حتی بعد از رول‌بک درخت کار می‌کند؛ fingerprint 36554c1a را وریفای می‌کند؛ در هر بوت ≤۱ دقیقه خودترمیم
+  2. **bridge-watchdog v1.3**: قبل از بن‌بست MANUAL، restore-keys.sh را اجرا می‌کند (رشتهٔ قدیمی MANUAL که به مسیر غلط اشاره می‌کرد بازنشسته شد)
+  3. **bridge v1.6.1-guard (pid-reuse)**: acquireSingletonLock حالا /proc/<pid>/cwd را چک می‌کند — pid بازیافت‌شدهٔ فرآیند نامربوط دیگر بریج را قفل نمی‌کند (دو حادثهٔ امروز)؛ import readlinkSync اضافه شد
+- تست‌ها: bash -n هر دو اسکریپت OK؛ throwaway boot تا Bun.serve کامپایل شد (EADDRINUSE = مورد انتظار، هیچ تداخلی با نمونهٔ زنده)؛ discriminator زنده: pid 3424 = مالک واقعی ✓
+### P1 ها (وضعیت رژیمی، نه حادثه)
+- winRate 26% vs 54.5%: واقعیت رژیم CHOP (تحلیل خشکسالی دیروز) — با کد امشب قابل حل نیست؛ کاندید: شبیه‌سازی shadow کف no-touch (منتظر فرمان)
+- strategyValidation FAIL-OPEN-GAPS OOS 2658/300: گیت اعتبارسنجی — نیازمند نشست اختصاصی

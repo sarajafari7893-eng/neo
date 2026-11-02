@@ -63,7 +63,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import { Database } from "bun:sqlite";
 import { createHmac } from "node:crypto";
-import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readlinkSync, readSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
 
 // v1.4.4 RISK-CAP (trace 1a17357988d00515 «حساب لایو داره از بین میره»):
 //   • notional = margin×cardLev is now a CEILING — scaled DOWN so that
@@ -696,8 +696,18 @@ function acquireSingletonLock(): boolean {
         if ((e as NodeJS.ErrnoException)?.code !== "EEXIST") throw e;
         const old = Number(readFileSync(PID_FILE, "utf8").trim());
         if (Number.isFinite(old) && old > 0 && old !== process.pid) {
-          try { process.kill(old, 0); log("crit", "another bridge instance is alive — refusing to boot", { pid: old }); return false; }
-          catch { /* pid gone — stale lock, unlink and retry once */ }
+          try {
+            process.kill(old, 0);
+            // v1.6.1 pid-reuse guard (incident 2026-11-02 ~07:33Z): after a sandbox
+            // re-provision the OS recycles pids — kill(,0) succeeded for warm-loop's
+            // bun holding OUR stale pid → every boot refused until a manual unlock.
+            // A genuine bridge owner has /proc/<pid>/cwd inside this dir; anything
+            // else (or a zombie) is a stale lock → fall through to unlink + retry.
+            const cwd = readlinkSync(`/proc/${old}/cwd`);
+            if (!cwd.endsWith("/mini-services/toobit-bridge")) throw new Error(`pid-recycled(${cwd})`);
+            log("crit", "another bridge instance is alive — refusing to boot", { pid: old });
+            return false;
+          } catch { /* pid gone / recycled / zombie — stale lock, unlink and retry once */ }
         }
         try { rmSync(PID_FILE); } catch { /* already removed by the owner */ }
       }
