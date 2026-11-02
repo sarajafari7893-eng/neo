@@ -2,15 +2,15 @@
  "ver": "supervisor-cron 1.6.0",
  "pid": 2624,
  "startedAt": "2026-11-02T07:30:22.819Z",
- "updatedAt": "2026-11-02T07:30:22.825Z",
+ "updatedAt": "2026-11-02T07:36:01.459Z",
  "jobs": {
   "sweep": {
-   "lastRunAt": 1793595360936,
-   "nextRunAt": 1793595360935,
+   "lastRunAt": 1793604960935,
+   "nextRunAt": 1793604960935,
    "lastStatus": "ok",
-   "lastDurationMs": 44,
+   "lastDurationMs": 524,
    "lastError": null,
-   "runs": 616,
+   "runs": 617,
    "failures": 0
   },
   "progress": {
@@ -41,42 +41,42 @@
    "failures": 0
   },
   "backup": {
-   "lastRunAt": 1793591301400,
-   "nextRunAt": 1793602101400,
+   "lastRunAt": 1793604712827,
+   "nextRunAt": 1793615512827,
    "lastStatus": "ok",
-   "lastDurationMs": 24432,
+   "lastDurationMs": 23591,
    "lastError": null,
-   "runs": 34,
+   "runs": 35,
    "failures": 0
   },
   "digest": {
-   "lastRunAt": null,
-   "nextRunAt": 1793604754819,
-   "lastStatus": null,
-   "lastDurationMs": null,
+   "lastRunAt": 1793604754819,
+   "nextRunAt": 1793611954819,
+   "lastStatus": "ok",
+   "lastDurationMs": 698,
    "lastError": null,
-   "runs": 0,
+   "runs": 1,
    "failures": 0
   },
   "keepwarm": {
-   "lastRunAt": 1793595360935,
-   "nextRunAt": 1793595660935,
+   "lastRunAt": 1793604960937,
+   "nextRunAt": 1793605260935,
    "lastStatus": "ok",
-   "lastDurationMs": 29,
+   "lastDurationMs": 26,
    "lastError": null,
-   "runs": 1153,
+   "runs": 1155,
    "failures": 119
   }
  },
  "lastSweep": {
-  "at": "2026-11-02T04:56:00.980Z",
+  "at": "2026-11-02T07:36:00.983Z",
   "verdict": "RED",
   "reason": "sentinel verdict RED",
   "services": {
    "app": {
     "up": true,
     "status": 200,
-    "ms": 25
+    "ms": 23
    },
    "liq": {
     "up": true,
@@ -91,44 +91,44 @@
    "armor": {
     "up": true,
     "status": 200,
-    "ms": 0
+    "ms": 1
    },
    "watchdog": {
     "up": true,
     "status": 200,
-    "ms": 2
+    "ms": 0
    },
    "sentinel": {
     "up": true,
     "status": 200,
-    "ms": 3
+    "ms": 1
    },
    "ws": {
     "up": true,
     "status": 400,
-    "ms": 1
+    "ms": 2
    },
    "bridge": {
     "up": true,
     "status": 200,
-    "ms": 1
+    "ms": 0
    },
    "tbt": {
-    "up": true,
-    "status": 200,
+    "up": false,
+    "status": null,
     "ms": 0
    }
   },
   "anomalies": [
    {
+    "class": "svc-down:tbt",
+    "sev": "warn",
+    "msg": "tbt :3021 DOWN (HTTP unreachable)"
+   },
+   {
     "class": "sentinel-red",
     "sev": "crit",
     "msg": "sentinel :3030 verdict RED"
-   },
-   {
-    "class": "tbt-doctrine-violation",
-    "sev": "crit",
-    "msg": "toobit-bridge doctrine: 20 violation(s) — last=MIRROR-LAG: card=SL but intent still OPEN 2433s — pollCards transition should have fired"
    },
    {
     "class": "data-stale",
@@ -141,7 +141,7 @@
   },
   "streaks": {
    "wsDown": 0,
-   "stale": 142
+   "stale": 143
   }
  },
  "lastReview": {
@@ -154,64 +154,29 @@
   "ok": true
  },
  "lastDigest": {
-  "at": "2026-11-02T03:38:17.389Z",
+  "at": "2026-11-02T07:32:35.517Z",
   "ok": true,
-  "newN": 0
+  "newN": 1
  },
  "lastKeepwarm": {
-  "at": "2026-11-02T04:56:00.964Z",
+  "at": "2026-11-02T07:36:00.963Z",
   "ok": true,
-  "ms": 29,
-  "bootAt": "2026-11-02T04:53:11.067Z",
-  "gitSha": "eb3f257",
+  "ms": 26,
+  "bootAt": "2026-11-02T07:30:48.347Z",
+  "gitSha": "dee2b16",
   "coldStreak": 0
  },
  "coldStreak": 0,
  "alertLedger": {
-  "sentinel-red": 1793593561605,
+  "sentinel-red": 1793604961221,
   "review-llm-unavailable": 1793530839871,
   "app-down": 1793475373369,
-  "data-stale": 1793593562153,
+  "data-stale": 1793604961459,
   "tbt-doctrine-violation": 1793593561833
  },
  "wsDownStreak": 0,
- "staleStreak": 142,
+ "staleStreak": 143,
  "history": [
-  {
-   "id": "keepwarm",
-   "at": 1793586360935,
-   "status": "ok",
-   "durationMs": 42,
-   "detail": "HEARTBEAT OK 42ms boot=02:16:11Z sha=b1c9fe1"
-  },
-  {
-   "id": "sweep",
-   "at": 1793586360936,
-   "status": "ok",
-   "durationMs": 1140,
-   "detail": "RED: sentinel verdict RED"
-  },
-  {
-   "id": "keepwarm",
-   "at": 1793586660935,
-   "status": "ok",
-   "durationMs": 347,
-   "detail": "HEARTBEAT OK 347ms boot=02:16:11Z sha=65ebffd"
-  },
-  {
-   "id": "keepwarm",
-   "at": 1793586960935,
-   "status": "ok",
-   "durationMs": 51,
-   "detail": "HEARTBEAT OK 50ms boot=02:31:59Z sha=dcb43cb"
-  },
-  {
-   "id": "sweep",
-   "at": 1793586960935,
-   "status": "ok",
-   "durationMs": 54,
-   "detail": "RED: sentinel verdict RED"
-  },
   {
    "id": "keepwarm",
    "at": 1793587260935,
@@ -525,6 +490,41 @@
    "at": 1793595360936,
    "status": "ok",
    "durationMs": 44,
+   "detail": "RED: sentinel verdict RED"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1793604660936,
+   "status": "ok",
+   "durationMs": 143,
+   "detail": "HEARTBEAT OK 143ms boot=07:30:48Z sha=dee2b16"
+  },
+  {
+   "id": "backup",
+   "at": 1793604712827,
+   "status": "ok",
+   "durationMs": 23591,
+   "detail": "snapshot ok in 24s: SNAPSHOT OK — nexus-snapshot-20261102-073152.zip (47M) · 12 snapshots retained (max 12) · wal:VACUUM-COPY-CONSISTENT+CHECKPOINTED · cal:OK · enc:ENCRYPTED · off-site: DISABLED(oper"
+  },
+  {
+   "id": "digest",
+   "at": 1793604754819,
+   "status": "ok",
+   "durationMs": 698,
+   "detail": "digest new=1 settled=0 bridge=ok"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1793604960937,
+   "status": "ok",
+   "durationMs": 26,
+   "detail": "HEARTBEAT OK 26ms boot=07:30:48Z sha=dee2b16"
+  },
+  {
+   "id": "sweep",
+   "at": 1793604960935,
+   "status": "ok",
+   "durationMs": 524,
    "detail": "RED: sentinel verdict RED"
   }
  ],
