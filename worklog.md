@@ -33390,3 +33390,25 @@ Task ID: MISSION-4ITEMS-20261102-COMPLETION (trace 1a19b7b9f0f4a63d ادامهٔ
 - «manual spawns die with their spawning session» دوباره تأیید شد: bun دستیِ من برای supervisor-cron بعد از بسته‌شدن نشست مُرد؛ لایه-۱ (p0-watchdog) پس از پایان pause خودش آن را با spawn مالک احیا کرد (12:55:29Z → pid 3112، ver 1.7.0، تک‌نمونه)
 ### راستی‌آزمایی پایانی
 - FLAT-10 md5 `36fa6a8d6fe85e4ac0d6b57a06df581a` ✓ · sentinel GREEN (0 anomaly) · بریج 1.6.2 LIVE uptime+ · ENA-SWAP-USDT SHORT qty 89 همچنان یتیم روی صرافی (RECON-UNKNOWN فعال) — **به فرمان اپراتور دست نمی‌زنم؛ GHOST-RECLAIM وقتی بسته شد money-truth را ژورنال می‌کند**
+
+---
+
+## مأموریت چهارتایی اپراتور ۲۰۲۶-۱۱-۰۳ — ممیزی استراتژی‌ها، ریشه‌یابی ضعف، گیت ۳۰۰تایی، شبیه‌ساز کف no-touch (trace 1a19e8f351a779ad)
+Task ID: MISSION-STRAT-AUDIT-20261103 (فرمان اپراتور: چهاربند رسمی)
+### [①] ممیزی الگوهای مثبت / غیرفعال‌سازی — تصمیم داده‌محور تفکیک‌شده
+- ممیزی کامل CLEAN ledger (خواندنی-فقط، bun:sqlite) در `scripts/strategy-audit-20261103.ts` → خروجی `.data/strategy-audit-20261103.txt` + گزارش فارسی `docs/research/strategy-audit-20261103.md`
+- **BREAKOUT: نگه‌داشته شد** — الگوی مثبت قابل‌استفاده دارد: TREND-UP|LONG +$57.37/30d (n=165)، تایم‌فریم 5m/15m مثبت (+$73.28/+$27.49)، FLOW-NEUTRAL +$82.16، conf 80+ +$62.62؛ کل 30d +$64.24. افت 14d (−$34.11) دو استاپ کامل پیشا-revert (ENA/IRYS) + رژیم TREND-DOWN بود؛ در دوران peak-tune مثبت (+$15.40). حصارهای فعلی (وتوی CHOP/SURROGATE + minScore 17) کافی است.
+- **MEAN-REVERT: متوقف شد** — از مسیر رسمی `POST /api/strat-pause` با کلید control-plane (رویداد ENGINE + پوش تلگرام؛ بازگشت‌پذیر). شواهد: همهٔ پنجره‌ها منفی (کل −$28.40 ن=522، TPwr 19.3%، 30d −$26.40، دوران peak-tune −$12.50)؛ هر سه فلو منفی؛ تنها سلول مثبت (CHOP|SHORT +$5.50/148) سطح کارمزد. ریشه: وارونگی R:R ساختاری (هدف کوتاه MR در برابر SL عریض 2.5×ATR) + CHOP|LONG −$30.01.
+- **تمرکز AI-SWING**: سلول طلایی CHOP|SHORT +$121.56 (ن=699)؛ 7d اخیر +$60.43 (avg +10.2%)؛ تایم‌فریم 15m +$108.93؛ ساعت تهران 03h بهترین (+$54.38). دم منفی ریشه‌یابی شد: استاپ کامل کوچک‌ها CHOP-SHORT (BTW/BR/IRYS/Q/JCT/MAGMA در −۶۱..−۶۳٪) چون آرم BE روی 0.5×SLdist با ATR بزرگ کوچک‌ها غیرقابل‌رسیدن است → پیشنهاد PENDING صف مشاور (cycle 181: beArmRMult 0.5→0.35).
+### [②] ریشه‌یابی ضعف — بالای همین رکورد (MEAN-REVERT: R:R وارونه + خرید چاقو CHOP-LONG؛ BREAKOUT: چیس TREND-UP پیشا-revert؛ AI-SWING: دم کوچک‌ها + آرم غیرقابل‌رسیدن)
+### [③] بار اپراتور ≥۳۰۰/استراتژی — ترکر v11.8
+- `src/lib/oos-tracker.ts`: ثابت `OPERATOR_PROMOTION_BAR_PER_STRATEGY=300` + فیلد افزودهٔ `operatorBar` (وضعیت/ETA هر پای) — حکم پروتکل §9 دست‌نخورده (افزودنی، هر دو حقیقت در یک خط)
+- وضعیت: AI-SWING 1501 ✓ · MEAN-REVERT 462 ✓ · AI-SCALP 380 ✓ · BREAKOUT 308 ✓ · **MOMENTUM 15/300 تنها پای باز (pace 0.3/روز → ~۹۸۰روز)** — جمع‌آوری ادامه دارد؛ تصمیم ساختاری MOMENTUM با اپراتور
+- `mini-services/supervisor-cron/index.ts` v1.7.1: خط OPERATOR-BAR در گزارش ۶ساعته (بازچرخش --hot خودکار)
+### [④] شبیه‌ساز سایهٔ کف no-touch — دوکرانه‌ای صادقانه (فقط‌سایه)
+- `scripts/no-touch-floor-sim-20261103.ts` → `.data/no-touch-floor-sim-20261103.json`؛ دفتر ۳۰روزهٔ CLEAN ن=1898 (پایه net +$39.79، pos 48.1%)
+- خوش‌بینانه (فقط ارتقای بازنده): کف +2% اهرمی **+$639.64** (pos→72.5%) · 0.25R +$448.85 · 0.5R +$268.82
+- بدبینانه (هر touch در کف — کوتاه‌شدن برندگان): +2% −$553.08 · 0.25R −$417.64 — واقعیت بین دو کرانه، وابسته به مسیر intra-trade که MFE حل نمی‌کند
+- جمع‌بندی: پیاده‌سازی کف بالاتر از BE نیازمند تغییر engine.ts است (زیر FLAT-10 ممنوع) → کاندید عملیاتی لایه-دیتایی «آرم زودتر» (beArmRMult 0.35) به‌صورت PENDING در صف مشاور + توصیهٔ ریپلی مسیر-محور 1m پیش از هر تغییر
+### راستی‌آزمایی
+- FLAT-10 md5 `36fa6a8d6fe85e4ac0d6b57a06df581a` ✓ · ترکر زنده: `/api/oos-tracker` operatorBar برمی‌گرداند · strat-pause: AI-SCALP + MEAN-REVERT فعال · MOMENTUM متوقف نشده (جمع‌آوری برای بار ۳۰۰تایی ادامه دارد)
