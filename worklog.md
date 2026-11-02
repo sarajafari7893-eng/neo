@@ -33313,3 +33313,20 @@ Stage Summary:
 - اسکرو + L1 وایپ؛ بریج PAPER ماند؛ واچ‌داگ v1.2 در همان دور کشف کرد (MANUAL + exit 1)
 - restore-keys.sh (وریفای 36554c1a ✓) → **KEYS-HOTRELOAD در 11:44:01Z نصب کرد بدون ری‌استارت** — «LIVE re-armed، stranded actions re-armed (0)» — پروژهٔ v1.2 دقیقاً طبق طراحی کار کرد؛ آپتایم بریج دست‌نخورده ماند
 - الگوی امروز: ری‌سایکل‌ها هر ~۱.۵-۲ ساعت و هر بار وایپِ /home/z secrets — tbenv همیشه در /tmp جان سالم به برده؛ ضریب اطمینان زنجیرهٔ چهارلایه تأیید مجدد
+
+---
+
+## حادثهٔ وایپ یازدهم + خرابی DB + پوزیشن یتیم ENA (2026-11-02 ~08:33–08:50Z)
+### ① وایپ و بازیابی
+- ری‌سایکل یازدهم (~08:33Z، آپتایم 1min): رول‌بک کامل درخت به Oct 29 (الگوی #8)؛ کامیت‌های d0a57548 و 53edde33 از object store هم حذف شدند (invalid)
+- بازیابی از nexus-snapshot-20261102-073152.zip (07:31Z): testzip OK → rsync → **FLAT-10 md5 `36fa6a8d…` ✓** → restore-keys.sh (36554c1a ✓) → بریج بوت شد
+### ② خرابی DB (نو)
+- rsync با نویسندهٔ زندهٔ app (بالا آمده توسط boot-kit) رقابت کرد → `SQLiteError: database disk image is malformed` در pollCards بریج
+- ترمیم: کشتن نمونه‌های با هندل فایل کهنه (1844 روی :3021) + تعویض تمیز db/custom.db از اسنپ‌شات (integrity: ok، 3238 Signal) → خطا صفر شد
+- **درس**: هنگام restore، همیشه اول نویسنده‌های DB را بکش بعد rsync — این دفعه ترتیب برعکس شد
+### ③ بازگردانی LIVE
+- بوت با کلید → mode PAPER: علت `liveApproved:false` در state (گیت اپراتور از طریق API) → `POST /approve-live {"approve":true}` با هدر x-nexus-key (مسیر رسمی، audit: CFG-LIVE-APPROVAL) → **LIVE ✓**
+### ④ ⚠️ پوزیشن یتیم واقعی — تصمیم اپراتور لازم است
+- `RECON-UNKNOWN-POSITION`: **ENA-SWAP-USDT SHORT qty 89** روی صرافی زنده است؛ در DB هیچ کارت فعال ENA نیست (همه EXPIRED/SL) و در دفتر بریج هم intent ندارد → **بدون TPSL-آینه و بدون مدیریت**
+- کارت فعال DB فقط NEARUSDT SHORT است (3239) که در پنجرهٔ PAPER به‌صورت paper-open گرفت (protected) — هنگام LIVE شدن bridge آن را REAL نمی‌زند مگر doctrine باز-مسلح کند
+- LSK-3231 دیگر روی صرافی نیست (RECON فقط ENA را flagged کرد) — احتمالاً استاپِ سربه‌سرِ سمت صرافی آن را بسته (در پنجره‌های PAPER مدیریت سمت ما قطع بود ولی TPSL سمت صرافی زنده مانده بود)
