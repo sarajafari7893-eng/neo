@@ -134,13 +134,14 @@ if (escrowRow && existsSync(PASS_PATH)) {
 }
 // newest tbenv backup decrypt (link ③)
 let tbenvOk: boolean | null = null;
-const envdir = existsSync("/tmp/my-project/backups") ? "/tmp/my-project/backups" : null;
+const envdir = existsSync("/tmp/my-project/backups/env") ? "/tmp/my-project/backups/env" : existsSync("/tmp/my-project/backups") ? "/tmp/my-project/backups" : null;
 let tbenvSha: string | null = null;
 if (envdir) {
   const proc = Bun.spawnSync(["bash", "-c", `ls -1t ${envdir}/tbenv-*.enc 2>/dev/null | head -1`]);
   const newest = proc.stdout.toString().trim();
   if (newest) {
-    const passFile = existsSync("/home/z/.nexus-secrets/backup.pass") ? "/home/z/.nexus-secrets/backup.pass" : null;
+    // v2 PolarFS-first: /tmp/my-project/secrets/backup.pass → legacy twin → env var
+    const passFile = existsSync("/tmp/my-project/secrets/backup.pass") ? "/tmp/my-project/secrets/backup.pass" : existsSync("/home/z/.nexus-secrets/backup.pass") ? "/home/z/.nexus-secrets/backup.pass" : null;
     const pp = passFile ? `file:${passFile}` : "env:BACKUP_PASSPHRASE";
     const dec = Bun.spawnSync(["bash", "-c", `openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -in "${newest}" -pass "${pp}" 2>/dev/null | sha256sum`]);
     tbenvSha = dec.stdout.toString().split(" ")[0] || null;

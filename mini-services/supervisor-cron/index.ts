@@ -50,7 +50,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSy
 import { Database } from "bun:sqlite";
 import ZAI from "z-ai-web-dev-sdk";
 
-const VER = "supervisor-cron 1.6.0"; // v1.6.0 trace-1a15f7d945d27ead: toobit exec-bridge :3021 joins the senior sweep — health probe + /doctrine violation feed (AMBER paper / crit live)
+const VER = "supervisor-cron 1.7.0"; // v1.7.0 mission-2026-11-02: PROMOTE-gate line leads with gating legs + ETA basis; dual-rate win-rate (TP-proven + pnl-positive) — honesty upgrade
 const ROOT = "/home/z/my-project";
 const DIR = `${ROOT}/.data/supervisor-cron`;
 const STATE = `${DIR}/state.json`;
@@ -466,7 +466,16 @@ async function jobProgress(): Promise<{ ok: boolean; detail: string }> {
     const balance = Number(acc.balance ?? 0);
     const pnl24 = Number(stats.pnl24hUsd ?? 0);
     const estPct24 = balance > 0 ? Math.round((pnl24 / balance) * 1000) / 10 : null;
-    lines.push(`▸ <b>وین‌ریت</b> — کل: <code>${Number(stats.winRate ?? 0)}%</code> (n=${Number(stats.totalSignals ?? 0)})`);
+    lines.push(`▸ <b>وین‌ریت</b> — کل (TP-proven): <code>${Number(stats.winRate ?? 0)}%</code> (n=${Number(stats.totalSignals ?? 0)})`);
+    // v11.7 dual-rate honesty (mission 2026-11-02): the TP-proven rate collapsed to
+    // ~27% in a BE-trail-heavy week while the pnl-positive rate held ~65% — 18/32
+    // SL rows closed POSITIVE (mid-ladder breakeven trails, reachedTp=0 by design,
+    // engine v6.5). Reporting only the TP-proven number made a healthy-PnL week
+    // read as a collapse. Both truths, one line:
+    const posN = signals.filter((s) => Number(s.pnlPercent ?? 0) > 0 && ["TP1", "TP2", "TP3", "SL", "EXPIRED", "CLOSED"].includes(String(s.status ?? ""))).length;
+    const settledN = signals.filter((s) => ["TP1", "TP2", "TP3", "SL", "EXPIRED", "CLOSED"].includes(String(s.status ?? ""))).length;
+    const posRate = settledN > 0 ? Math.round((posN / settledN) * 100) : 0;
+    lines.push(`  · نرخ مثبت-PnL (تسویه‌شده): <code>${posRate}%</code> (n=${settledN} — BE-trail exits مثبت را هم می‌شمارد)`);
     lines.push(`  · ۲۴س: <code>${w.h24.winRatePct}%</code> (n=${w.h24.n}) · ۷روز: <code>${w.d7.winRatePct}%</code> (n=${w.d7.n})`);
     lines.push(`  · PNL ۲۴س: <code>${pnl24 >= 0 ? "+" : ""}${pnl24.toFixed(2)}$</code> · EST PNL%≈ <code>${estPct24 ?? "?"}%</code> (بر پایه بالانس ${balance.toFixed(2)}$)`);
     lines.push(`  · اکوییتی کل: <code>${Number(stats.totalPnlUsd ?? 0).toFixed(2)}$</code> · بالانس: <code>${balance.toFixed(2)}$</code> · فی‌ها: <code>${Number(acc.feesPaid ?? 0).toFixed(2)}$</code>`);
@@ -705,10 +714,17 @@ async function jobReview(): Promise<{ status: string }> {
   // numbers from /api/oos-tracker (protocol §2/§9 bars), honest fallback if
   // the app is briefly down.
   const oosT = (oos.ok && oos.data && typeof oos.data === "object" ? oos.data : null) as
-    | { totalOosN?: number; totalTarget?: number; totalFillPct?: number; weakStrategies?: string[]; etaDaysToBar?: number | null; verdict?: string; settlePacePerDay14d?: number }
+    | { totalOosN?: number; totalTarget?: number; totalFillPct?: number; weakStrategies?: string[]; etaDaysToBar?: number | null; etaBasis?: string; verdict?: string; settlePacePerDay14d?: number }
     | null;
+  // v11.7 — the gate line leads with the GATING legs: «OOS 2662/300 (100%)» beside
+  // a FAIL verdict read as a units bug; the conjunction (total ≥300 AND every leg
+  // ≥60) is now explicit, and the ETA names its basis (slowest leg / stalled).
+  const weakLegs = (oosT?.weakStrategies ?? [])
+    .map((s) => (oosT ? (oosT as unknown as { perStrategy?: Array<{ strategy: string; oosN: number; target: number; fillPct: number }> }).perStrategy?.find((r) => r.strategy === s) : undefined))
+    .filter(Boolean)
+    .map((r) => `${r!.strategy} ${r!.oosN}/${r!.target} (${r!.fillPct}%)`);
   const strategyValidationStatus = oosT && typeof oosT.totalOosN === "number"
-    ? `PROMOTE gate = ${oosT.verdict ?? "FAIL-OPEN-GAPS"} — OOS ${oosT.totalOosN}/${oosT.totalTarget ?? 300} (${oosT.totalFillPct ?? 0}%) · weak per-strategy (<60): ${oosT.weakStrategies?.length ? oosT.weakStrategies.join(",") : "none"} · pace ${oosT.settlePacePerDay14d ?? "?"}/day · ETA ${oosT.etaDaysToBar != null ? `${oosT.etaDaysToBar}d` : "n/a"} (protocol STRATEGY-VALIDATION-PROTOCOL.md; sample-size leg only) — recommend only evidence-respecting actions`
+    ? `PROMOTE gate = ${oosT.verdict ?? "FAIL-OPEN-GAPS"}${weakLegs.length ? ` — gating leg(s): ${weakLegs.join(", ")}` : " — all per-strategy legs ≥60"} · total OOS ${oosT.totalOosN}/${oosT.totalTarget ?? 300} (${oosT.totalFillPct ?? 0}%) · pace ${oosT.settlePacePerDay14d ?? "?"}/day · ETA ${oosT.etaDaysToBar != null ? `${oosT.etaDaysToBar}d` : "n/a"}${oosT.etaBasis ? ` (${oosT.etaBasis})` : ""} (protocol STRATEGY-VALIDATION-PROTOCOL.md; sample-size leg only) — recommend only evidence-respecting actions`
     : "PROMOTE gate = FAIL (insufficient OOS n; re-validation protocol in STRATEGY-VALIDATION-PROTOCOL.md) — recommend only evidence-respecting actions";
 
   const telemetry = {
