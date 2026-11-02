@@ -714,7 +714,7 @@ async function jobReview(): Promise<{ status: string }> {
   // numbers from /api/oos-tracker (protocol §2/§9 bars), honest fallback if
   // the app is briefly down.
   const oosT = (oos.ok && oos.data && typeof oos.data === "object" ? oos.data : null) as
-    | { totalOosN?: number; totalTarget?: number; totalFillPct?: number; weakStrategies?: string[]; etaDaysToBar?: number | null; etaBasis?: string; verdict?: string; settlePacePerDay14d?: number }
+    | { totalOosN?: number; totalTarget?: number; totalFillPct?: number; weakStrategies?: string[]; etaDaysToBar?: number | null; etaBasis?: string; verdict?: string; settlePacePerDay14d?: number; operatorBar?: { perStrategyTarget?: number; blockedLegs?: string[]; legs?: Array<{ strategy: string; oosN: number; target: number; status: string; etaDays: number | null }> } }
     | null;
   // v11.7 — the gate line leads with the GATING legs: «OOS 2662/300 (100%)» beside
   // a FAIL verdict read as a units bug; the conjunction (total ≥300 AND every leg
@@ -724,7 +724,7 @@ async function jobReview(): Promise<{ status: string }> {
     .filter(Boolean)
     .map((r) => `${r!.strategy} ${r!.oosN}/${r!.target} (${r!.fillPct}%)`);
   const strategyValidationStatus = oosT && typeof oosT.totalOosN === "number"
-    ? `PROMOTE gate = ${oosT.verdict ?? "FAIL-OPEN-GAPS"}${weakLegs.length ? ` — gating leg(s): ${weakLegs.join(", ")}` : " — all per-strategy legs ≥60"} · total OOS ${oosT.totalOosN}/${oosT.totalTarget ?? 300} (${oosT.totalFillPct ?? 0}%) · pace ${oosT.settlePacePerDay14d ?? "?"}/day · ETA ${oosT.etaDaysToBar != null ? `${oosT.etaDaysToBar}d` : "n/a"}${oosT.etaBasis ? ` (${oosT.etaBasis})` : ""} (protocol STRATEGY-VALIDATION-PROTOCOL.md; sample-size leg only) — recommend only evidence-respecting actions`
+    ? `PROMOTE gate = ${oosT.verdict ?? "FAIL-OPEN-GAPS"}${weakLegs.length ? ` — gating leg(s): ${weakLegs.join(", ")}` : " — all per-strategy legs ≥60"} · total OOS ${oosT.totalOosN}/${oosT.totalTarget ?? 300} (${oosT.totalFillPct ?? 0}%) · pace ${oosT.settlePacePerDay14d ?? "?"}/day · ETA ${oosT.etaDaysToBar != null ? `${oosT.etaDaysToBar}d` : "n/a"}${oosT.etaBasis ? ` (${oosT.etaBasis})` : ""}${oosT.operatorBar ? ` · OPERATOR-BAR(300/leg): ${oosT.operatorBar.blockedLegs?.length ? `blocked: ${oosT.operatorBar.blockedLegs.join(", ")}` : "ALL LEGS ≥300 ✓"}` : ""} (protocol STRATEGY-VALIDATION-PROTOCOL.md; sample-size leg only) — recommend only evidence-respecting actions`
     : "PROMOTE gate = FAIL (insufficient OOS n; re-validation protocol in STRATEGY-VALIDATION-PROTOCOL.md) — recommend only evidence-respecting actions";
 
   const telemetry = {

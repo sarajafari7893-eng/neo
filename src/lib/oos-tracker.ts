@@ -16,6 +16,15 @@ import { db } from "./db";
 export const OOS_WINDOW_START_ISO = "2026-09-19T07:17:36.841Z"; // protocol §2 baseline freeze (evidence anchor)
 export const OOS_TOTAL_TARGET = 300; // protocol §9 / param-governance OOS_SAMPLE_TOO_SMALL gate
 export const OOS_PER_STRATEGY_TARGET = 60; // protocol §9 / PER_STRATEGY_SAMPLE_TOO_SMALL gate
+// v11.8 — OPERATOR PROMOTION BAR (mandate 2026-11-03, trace 1a19e8f351a779ad ③):
+// «ادامه جمع‌آوری داده تا رسیدن به حداقل 300 معامله برای هر استراتژی جهت ارتقای
+// اعتبارسنجی». This is the operator's own promotion bar, STRICTER than the
+// protocol §9 leg bar (60) and aligned with the supervisor honesty contract
+// ("ارتقای استراتژی نیازمند ≥300 معامله OOS + بوت‌استراپ CI-LB>0"). The
+// protocol verdict above is NOT redefined — this bar is additive reporting so
+// both truths are visible in one line. Bootstrap CI-LB>0 remains a separate
+// promotion leg measured elsewhere (param-governance).
+export const OPERATOR_PROMOTION_BAR_PER_STRATEGY = 300;
 const SETTLED = ["TP1", "TP2", "TP3", "SL", "EXPIRED", "CLOSED"] as const;
 
 export interface OosStrategyRow {
@@ -38,6 +47,12 @@ export interface OosTracker {
   etaIso: string | null;
   etaBasis: string; // v11.7 — what the ETA was computed against (honesty label)
   verdict: "PASS-ELIGIBLE" | "FAIL-OPEN-GAPS";
+  operatorBar: {
+    perStrategyTarget: number;
+    legs: Array<{ strategy: string; oosN: number; target: number; fillPct: number; pace14d: number; etaDays: number | null; status: "DONE" | "OPEN" | "STALLED" }>;
+    blockedLegs: string[];
+    note: string;
+  };
   note: string;
 }
 
@@ -105,6 +120,21 @@ export async function getOosTracker(): Promise<OosTracker> {
     etaDays = pace > 0 ? Number((totalRemaining / pace).toFixed(1)) : null;
     etaBasis = "total sample remaining at trailing 14d pace";
   }
+  // v11.8 operator bar — per-leg progress toward ≥300 settled OOS each
+  const opLegs = perStrategy.map((r) => {
+    const rem = Math.max(0, OPERATOR_PROMOTION_BAR_PER_STRATEGY - r.oosN);
+    const p = pace14d.get(r.strategy) ?? 0;
+    return {
+      strategy: r.strategy,
+      oosN: r.oosN,
+      target: OPERATOR_PROMOTION_BAR_PER_STRATEGY,
+      fillPct: Number(Math.min(100, (r.oosN / OPERATOR_PROMOTION_BAR_PER_STRATEGY) * 100).toFixed(1)),
+      pace14d: Number(p.toFixed(2)),
+      etaDays: rem === 0 ? 0 : p > 0 ? Number((rem / p).toFixed(0)) : null,
+      status: (rem === 0 ? "DONE" : p > 0 ? "OPEN" : "STALLED") as "DONE" | "OPEN" | "STALLED",
+    };
+  });
+  const blocked = opLegs.filter((l) => l.status !== "DONE");
   return {
     windowStart: OOS_WINDOW_START_ISO,
     totalOosN,
@@ -117,6 +147,14 @@ export async function getOosTracker(): Promise<OosTracker> {
     etaIso: etaDays !== null && etaDays > 0 ? new Date(Date.now() + etaDays * 86_400_000).toISOString() : etaDays === 0 ? new Date().toISOString() : null,
     etaBasis,
     verdict: totalOosN >= OOS_TOTAL_TARGET && weakStrategies.length === 0 ? "PASS-ELIGIBLE" : "FAIL-OPEN-GAPS",
+    operatorBar: {
+      perStrategyTarget: OPERATOR_PROMOTION_BAR_PER_STRATEGY,
+      legs: opLegs,
+      blockedLegs: blocked.map((l) => `${l.strategy} ${l.oosN}/300${l.status === "STALLED" ? " (stalled)" : ` (ETA ${l.etaDays}d)`}`),
+      note:
+        "Operator promotion bar (mandate 2026-11-03): ≥300 settled OOS per strategy + bootstrap CI-LB>0 — " +
+        "STRICTER than the protocol §9 leg bar (60) shown in the verdict above; paused strategies stop accumulating unless the operator un-pauses or forced/capture rows land.",
+    },
     note:
       "OOS = settled signals after the 2026-09-19 baseline freeze (STRATEGY-VALIDATION-PROTOCOL.md §2). " +
       "Promotion additionally requires evidence refs + frozen production config (param-governance.ts) — this tracker measures ONLY the sample-size leg. " +
