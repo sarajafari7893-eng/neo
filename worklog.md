@@ -33290,3 +33290,21 @@ Stage Summary:
 **درس ثبت‌شده (سومین تکرار الگو):** ترمیم پیش از بوت بریج > ترمیم پس از بوت (حذف پنجرهٔ PAPER). حلقهٔ ریشه‌ای همچنان مأموریت re-seal L3-escrow (trace معلق 1a196b17ed24be11).
 
 **دامنهٔ تغییر:** L1+L2 کلید (عملیاتی) + بازسازی scripts/restore-keys.sh. FLAT-10 ✓. صفر تغییر گیت/دیتای موتور.
+
+---
+
+## حادثهٔ وایپ نهم + کشف باگ pid-reuse در SINGLETON LOCK (2026-11-02 ~07:26–07:46Z)
+### ① زنجیرهٔ حادثه
+- ری‌سایکل نهم (~07:26Z): `/home/z/.nexus-secrets/` و `.env` بریج دوباره وایپ شدند (درخت پروژه سالم ماند — FLAT-10 md5 ✓ بازتأیید شد)
+- ترمیم کلیدها با restore-keys.sh ✓ (وریفای 36554c1a) — اما بریج همچنان بالا نمی‌آمد: هر بوت `exit(1)` بی‌صدا (stdout خالی — چون log() به logs/toobit-bridge.log می‌رود نه stdout)
+- p0-watchdog هم ۳ بار heal-spawn کرد و شکست خورد (heal-grace-expired)
+### ② ریشهٔ یابی (forensic)
+- audit.jsonl نشان داد بوت‌ها تا `audit("BOOT", hasKeys:true)` می‌رسند و بعدش هیچ — چون audit قبل از چک قفل است
+- `logs/toobit-bridge.log`: `CRIT another bridge instance is alive — refusing to boot {"pid":2215}`
+- **pid 2215 زنده است اما مالِ سرویس warm-loop** — `bridge.pid` کهنه از بوت قبل به pidی اشاره می‌کرد که بعد از ری‌بوت به فرآیند نامربوط بازیافت شده (PID REUSE) → `kill(pid,0)` موفق → بریج برای همیشه امتناع
+- اثبات: exit-code 1 در اجرای پیش‌رو + شبکه سالم (api.toobit.com → 200/0.14s)
+### ③ ترمیم
+- `rm .data/toobit-bridge/bridge.pid` (دقیقاً همان کاری که کد برای stale-lock انجام می‌داد اگر pid مرده بود) → واچ‌داگ → **EXIT=0 · LIVE · keysInstalled:true · armed 787 instruments · $25.07** ✓
+### ④ آیتم بهبود ثبت‌شده (نیازمند فرمان اپراتور — تغییر کد ممنوع در این نوبت)
+- **v1.6.1 candidate**: چک قفل باید zombie/pid-reuse-aware باشد — خواندن `/proc/<pid>/stat` (state != 'Z' + تطابق comm/cwd یا starttime) قبل از پذیرش «instance زنده»؛ وگرنه بعد از هر ری‌سایکل سندباکس همین بن‌بست تکرار می‌شود (این سومین بار بالقوه)
+- نکتهٔ دوم: p0's heal-spawn لاگ را به logs/toobit-bridge.log می‌فرستد درست است، ولی تشخیص FAIL آن به health است — پس از pid-reuse هیچ وقت recovered نمی‌شود؛ همان ریشه
