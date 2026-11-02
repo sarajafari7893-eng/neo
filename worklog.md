@@ -33352,3 +33352,41 @@ Stage Summary:
 ### P1 ها (وضعیت رژیمی، نه حادثه)
 - winRate 26% vs 54.5%: واقعیت رژیم CHOP (تحلیل خشکسالی دیروز) — با کد امشب قابل حل نیست؛ کاندید: شبیه‌سازی shadow کف no-touch (منتظر فرمان)
 - strategyValidation FAIL-OPEN-GAPS OOS 2658/300: گیت اعتبارسنجی — نیازمند نشست اختصاصی
+
+---
+
+## تکمیل مهندسی مأموریت چهارتایی — اجرای اقدامات باقی‌مانده (2026-11-02 ~12:10–13:00Z · فرمان اپراتور: «اقدامات پیشنهادی باقی مانده را کامل و مهندسی انجام بده»)
+Task ID: MISSION-4ITEMS-20261102-COMPLETION (trace 1a19b7b9f0f4a63d ادامهٔ نشست قبل)
+### [P0-B] بریج v1.6.2 «MIRROR INTEGRITY» — سه ترمیم ریشه‌ای روی کلاس MIRROR-LAG/stranding
+- شواهد audit.jsonl: MIRROR-LAG سریال‌های 3221/3222/3230 (lag 34–63k ثانیه، کارت EXPIRED) و 3234 (SL، lag 2433s)؛ 10× EXEC-RETRY-ABANDONED؛ 21× تکرار پشت‌سرهم NOTIONAL-DELTA 3225 در ژورنال
+- ریشهٔ ①: وقتی بسته‌شدن رد می‌شود و بودجهٔ ۲۰تایی retry تمام می‌شود (ABANDONED)، `c.status === prev` در pollCards هرگز اکشن را دوباره شلیک نمی‌کند → intent تا ابد OPEN می‌ماند
+- ریشهٔ ②: doClose «position not found» را خطای گذرا می‌گرفت و در برابر پوزیشنی که صرافی قبلاً مصرف کرده retry-طوفان می‌کرد
+- ریشهٔ ③: اسکن ۳۰ثانیه‌ای doctrine همان تخلف را هر بار به ژورنال می‌ریخت — بج داشبورد تکرار را می‌شمرد نه تخلف را
+- ترمیم‌ها (mini-services/toobit-bridge/index.ts):
+  1. **MIRROR-LAG-HEAL**: doctrineScan بعد از ۱۵دقیقه lag تأییدشده خودش close را یک‌بار دوباره شلیک می‌کند (latch `healPushedAt`؛ audit MIRROR-LAG-HEAL)
+  2. **ALREADY-CLOSED-RECON**: رد شدن هر دو مسیر close → یک قرائت /positions؛ غیبت ردیف (نه پاسخ خالی — درس v1.5.4) → بستن کتاب با money-truth واقعی (`EXEC-CLOSE-RECON`) به‌جای retry شبح
+  3. **DEDUP ژورنال**: همان (serial,kind,detail) در بازهٔ ۶۰دقیقه فقط یک‌بار؛ trail کامل در audit.jsonl می‌ماند
+- ری‌استارت کنترل‌شده: بوت تمیز 1.6.2، mode LIVE، keysInstalled، ZEC-3241 OPEN و protected از state.json بازگشت، violations=0
+### [P0-B] bridge-watchdog v1.3 — PID-REUSE LOCK HEAL
+- قبل از relaunch: مالک bridge.pid از `/proc/<pid>/cwd` راستی‌آزمایی می‌شود؛ pid بازیافت‌شده/زامبی → unlink + احیا (آینهٔ گارد v1.6.1 داخل بریج؛ حادثهٔ سکوت exit(1) ~07:33Z)
+- مالک واقعی زنده ولی health پایین → خروج صادقانهٔ «NOT relaunching over it» بدون دئلینگ
+### [P1-D] مهاجرت اسکرو به مسیر پایدار PolarFS — تکمیل + کشف حیاتی
+- **کشف**: هر دو گذرواژه (`escrow.pass` و `backup.pass`) در /home/z قربانی ۱۱ وایپ امروز شده بودند → پیوند ④ (DB-escrow) عملاً مرده و tbenv هم فقط از BACKUP_PASSPHRASE داخل .env زنده بود (حلقهٔ وابسته به درخت)
+- اقدام: `/tmp/my-project/secrets/` (0700) ساخته شد؛ `toobit-bridge.env` (sha 36554c1a ✓) + `backup.pass` (استخراج بی‌چاپ از .env) + **re-seal کامل**: escrow.pass جدید random-32B روی هر دو سطح نوشته و payload DB با آن دوباره مهر شد (self-test MATCH)
+- keychain-escrow.ts v2: PASS PolarFS-first با write-through دوسطحی؛ مسیر ③ اصلاح شد (env/ subdir)؛ باک‌آپ‌پس PolarFS-first
+- restore-keys.sh v2: انتخاب پویا newest tbenv-*.enc + L2 دوسطحی (PolarFS + legacy) + گذرواژهٔ fallback فایل-محور
+- watchdog.sh v3.4 (KEYS-GUARD): tb_sealed و tb_pass اول PolarFS می‌روند
+- **ماتریس نهایی: ۵/۵ PASS — RECOVERY-PROOF ✓** (① env ② sealed ③ tbenv ④ DB-escrow ⑤ bridge auth)
+### [P1-C] PROMOTE gate شفاف شد (oos-tracker v11.7 + supervisor-cron v1.7.0)
+- باگ روایت: «OOS 2662/300 = 100%» کنار verdict FAIL-OPEN-GAPS مثل باگ واحد خوانده می‌شد؛ ETA=0d هم با FAIL خود-تناقض بود
+- گیت یک عطف است (total ≥300 **و** هر leg ≥60): ETA حالا از کندترین پایِ باز محاسبه می‌شود → **157.5 روز** (MOMENTUM 45 مانده @ 0.3/روز — پای گیرنده) + فیلد `etaBasis` + خط گزارش با «gating leg(s): MOMENTUM 15/60 (25%)» شروع می‌شود
+- وین‌ریت دو-نرخی: تحلیل DB نشان داد سقوط 54.5→27% حسابداری TP-proven است نه فروپاشی — هفتهٔ اخیر 28/32 ردیف SL با pnl **مثبت** بسته شده (BE-trail میان‌نردبانی، reachedTp=0 طبق طراحی engine v6.5)؛ نرخ مثبت-PnL همان هفته ≈65% — خط «نرخ مثبت-PnL» به گزارش ۶ساعته اضافه شد (هر دو حقیقت، یک خط)
+### [P0-A] موتور سیگنال — بسته شد (احیا تأیید)
+- ۱۱ سیگنال/۲۴س، آخرین سیگنال ۱۱۶دقیقه پیش، 1179-1263 رویداد/ساعت، stuckActive=0، orphan=0 — فیک‌آلارم 498214h ریشه‌اش type-confusion بود که نشست قبل CAST شد؛ وضعیت فعلی پایدار
+### [P1-D] چرایی ری‌سایکل‌ها — جمع‌بندی نهایی
+- زنجیره: RSS بالای next-server → OOM-kill کرنل → re-provision پلتفرم → رول‌بک /home/z؛ پلتفرم مستقل از mem-guard عمل می‌کند و از داخل سندباکس ریشه‌کن نیست
+- دفاعِ مهندسی‌شدهٔ نهایی: اسرار و بکاپ‌ها روی PolarFS (+ بازسازی خودکار کلید سه‌مسیره) + اسنپ‌شات هر ۳ساعت + دو لایه واچ‌داگ + این جلسه: self-heal بریج و قفل pid-reuse — بازیابی اکنون تمام-خودکار است (اثبات: ۴ احیای امروز)
+### درس عملیاتی جدید
+- «manual spawns die with their spawning session» دوباره تأیید شد: bun دستیِ من برای supervisor-cron بعد از بسته‌شدن نشست مُرد؛ لایه-۱ (p0-watchdog) پس از پایان pause خودش آن را با spawn مالک احیا کرد (12:55:29Z → pid 3112، ver 1.7.0، تک‌نمونه)
+### راستی‌آزمایی پایانی
+- FLAT-10 md5 `36fa6a8d6fe85e4ac0d6b57a06df581a` ✓ · sentinel GREEN (0 anomaly) · بریج 1.6.2 LIVE uptime+ · ENA-SWAP-USDT SHORT qty 89 همچنان یتیم روی صرافی (RECON-UNKNOWN فعال) — **به فرمان اپراتور دست نمی‌زنم؛ GHOST-RECLAIM وقتی بسته شد money-truth را ژورنال می‌کند**
