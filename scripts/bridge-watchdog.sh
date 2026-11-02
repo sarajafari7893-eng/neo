@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ── NEXUS//SIGNALS bridge-watchdog (v1.2 — keys blind-spot fix, trace 1a196a30609a86ed) ──────────
+# ── NEXUS//SIGNALS bridge-watchdog (v1.3 — pid-reuse lock heal + PolarFS escrow, operator order 2026-11-02) ──────────
 # Operator mandate «مورد ۴»: the operator stays in this sandbox (no personal
 # server), so the Toobit bridge must SELF-REVIVE after any sandbox recycle /
 # process death instead of silently staying down for hours (the 2026-10-31
@@ -7,12 +7,26 @@
 # نیست" report). Doctrine: READ-ONLY infra revive — it never touches trading
 # behavior, gates, or the engine. Restores .env from the key escrow if the
 # sandbox wiped it (the known 4th-link failure mode), then relaunches.
+#   v1.3 (2026-11-02, مأموریت چهارتایی P0-B/P1-D):
+#   ① PID-REUSE LOCK HEAL — incident ~07:33Z: after a re-provision the OS
+#     recycled pids; bridge.pid pointed at warm-loop's bun, kill(,0) succeeded,
+#     and the bridge exited(1) SILENTLY on the singleton lock (CRIT only in
+#     logs/toobit-bridge.log). Before relaunching, verify the lock owner's
+#     /proc/<pid>/cwd actually is the bridge dir; a recycled/zombie owner is
+#     unlinked (mirror of the v1.6.1 in-bridge guard).
+#   ② POLARFS ESCROW — /home/z is the wipe surface (11 wipes on 2026-11-02);
+#     /tmp/my-project (PolarFS) survived every one of them. Escrow sources are
+#     now resolved PolarFS-first with the legacy path as fallback.
 #   log: .data/bridge-watchdog.log (rotated at 200KB)
 set -u
 BASE=/home/z/my-project
 BR="$BASE/mini-services/toobit-bridge"
 LOG="$BASE/.data/bridge-watchdog.log"
-ESCROW=/home/z/.nexus-secrets/toobit-bridge.env
+POLAR_SECRETS=/tmp/my-project/secrets
+LEGACY_ESCROW=/home/z/.nexus-secrets/toobit-bridge.env
+# PolarFS-first escrow resolution (① sealed copy lives on both surfaces)
+ESCROW="$LEGACY_ESCROW"
+if [ -s "$POLAR_SECRETS/toobit-bridge.env" ]; then ESCROW="$POLAR_SECRETS/toobit-bridge.env"; fi
 
 # keep the log bounded
 if [ -f "$LOG" ] && [ "$(stat -c%s "$LOG" 2>/dev/null || echo 0)" -gt 200000 ]; then
@@ -55,6 +69,24 @@ if echo "$health" | grep -q '"ok":true'; then
   exit 0
 fi
 log "bridge DOWN (health='${health:0:80}') — reviving"
+
+# 0) v1.3 PID-REUSE LOCK HEAL — a bridge.pid whose owner is not a bridge
+#    process (recycled pid / zombie) makes the new instance exit(1) silently
+#    on the singleton lock. Verify the owner's cwd; unlink stale locks.
+if [ -f "$BR/.data/bridge.pid" ] || [ -f "$BASE/.data/toobit-bridge/bridge.pid" ]; then
+  PIDF="$BASE/.data/toobit-bridge/bridge.pid"
+  [ -f "$BR/.data/bridge.pid" ] && PIDF="$BR/.data/bridge.pid"
+  PID=$(cat "$PIDF" 2>/dev/null || true)
+  if [ -n "$PID" ] && [ "$PID" != "0" ] && kill -0 "$PID" 2>/dev/null; then
+    CWD=$(readlink "/proc/$PID/cwd" 2>/dev/null || echo "?")
+    case "$CWD" in
+      */mini-services/toobit-bridge) log "lock owner pid=$PID is a live bridge ($CWD) — NOT relaunching over it; re-probe next cycle"; exit 1 ;;
+      *) log "stale lock pid=$PID owner cwd='$CWD' (pid-reuse/zombie) — unlinking $PIDF"; rm -f "$PIDF" ;;
+    esac
+  else
+    log "stale lock pid=${PID:-empty} (process gone) — unlinking $PIDF"; rm -f "$PIDF"
+  fi
+fi
 
 # 1) key escrow restore (link-4 self-heal — the .env is gitignored and dies on recycle)
 if [ ! -s "$BR/.env" ] && [ -s "$ESCROW" ]; then

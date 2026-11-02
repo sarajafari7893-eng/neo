@@ -30,17 +30,29 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, statSync, chmodSync
 
 const DB_PATH = "db/custom.db";
 const ENV_PATH = "mini-services/toobit-bridge/.env";
-const PASS_PATH = "/home/z/.nexus-secrets/escrow.pass";
+// v2 POLARFS-FIRST passphrase (operator order 2026-11-02 — «مهاجرت اسکرو به
+// مسیر پایدارتر»): /home/z was proven the wipe surface (escrow.pass died with
+// the 11-erase day, orphaning the DB payload); /tmp/my-project (PolarFS)
+// survived every wipe. Passphrase resolves PolarFS-first and ensurePass()
+// WRITE-THROUGHs to both surfaces so the shell-side fallbacks (watchdog.sh
+// KEYS-GUARD v3.4, bridge-watchdog v1.3) keep working from either path.
+const PASS_PRIMARY = "/tmp/my-project/secrets/escrow.pass";
+const PASS_LEGACY = "/home/z/.nexus-secrets/escrow.pass";
+const PASS_PATH = existsSync(PASS_PRIMARY) ? PASS_PRIMARY : PASS_LEGACY;
 const KEY_ESCROW = "toobit.key-escrow";
 const ITER = 200_000;
 
 function ensurePass(): Buffer {
   if (existsSync(PASS_PATH)) return readFileSync(PASS_PATH, "utf8").trim() as unknown as Buffer;
-  mkdirSync("/home/z/.nexus-secrets", { recursive: true });
   const pass = randomBytes(32).toString("hex");
-  writeFileSync(PASS_PATH, pass + "\n", { mode: 0o600 });
-  chmodSync(PASS_PATH, 0o600);
-  console.log(`[escrow] new passphrase created → ${PASS_PATH} (0600)`);
+  for (const p of [PASS_PRIMARY, PASS_LEGACY]) {
+    try {
+      mkdirSync(p.slice(0, p.lastIndexOf("/")), { recursive: true });
+      writeFileSync(p, pass + "\n", { mode: 0o600 });
+      chmodSync(p, 0o600);
+    } catch { /* best-effort twin — primary verdict below */ }
+  }
+  console.log(`[escrow] new passphrase created → ${PASS_PRIMARY} (+ legacy twin ${PASS_LEGACY}) (0600)`);
   return pass as unknown as Buffer;
 }
 
@@ -85,8 +97,8 @@ if (mode === "escrow") {
     sha256: createHash("sha256").update(envText).digest("hex"),
     payloadB64: payload.toString("base64"),
     at: new Date().toISOString(),
-    passphrase: PASS_PATH,
-    note: "P0 key escrow — 4th recovery link (trace 1a193604acd890f9); decrypt: openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -pass file:/home/z/.nexus-secrets/escrow.pass",
+    passphrase: `${PASS_PRIMARY} (legacy twin: ${PASS_LEGACY})`,
+    note: "P0 key escrow — 4th recovery link (trace 1a193604acd890f9; v2 PolarFS-first 2026-11-02); decrypt: openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -pass file:/tmp/my-project/secrets/escrow.pass",
   };
   db.query(
     `INSERT INTO EngineSetting (key, value, updatedAt) VALUES (?, ?, ?)

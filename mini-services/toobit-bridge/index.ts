@@ -162,7 +162,30 @@ import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSyn
 //   ③ RISK-CAP-DUST skip block removed; ENTRY-DELAY/DRIFT/STALE/BALANCE-CAP/
 //      MIN-FLOOR gates unchanged (pre-29/10 doctrine). maxRiskPct config field
 //      stays for client compatibility but is INERT — nothing reads it.
-const VER = "toobit-bridge 1.6.0";
+// v1.6.2 MIRROR INTEGRITY (operator order 2026-11-02 — «اقدامات پیشنهادی باقی
+//   مانده را کامل و مهندسی انجام بده» · P0-B از مأموریت چهارتایی):
+//   ① MIRROR-LAG SELF-HEAL — doctrineScan ①~③ proved the stranding class:
+//      an OPEN intent whose card reached a TERMINAL state (SL/EXPIRED/…) but
+//      whose close transition never completed (retry budget burned →
+//      EXEC-RETRY-ABANDONED, or state.json restored mid-close) stayed OPEN
+//      FOREVER: pollCards' `c.status === prev` skip never re-fires the action
+//      (serials 3221/3222/3230 lagged 34–63k sec, 3234 lagged 2433s). The
+//      card ledger is authoritative: after 15min of lag the doctrine scan
+//      itself re-fires the close (MIRROR-LAG-HEAL), once per intent until
+//      state changes.
+//   ② VIOLATION JOURNAL DEDUP — the 30s scan re-pushed the SAME violation
+//      every cycle (serial 3225 NOTIONAL-DELTA logged 21× in a row), so the
+//      dashboard badge counted repeats, not violations. Same (serial, kind,
+//      detail) within 60min now journals once; the full per-scan trail stays
+//      in audit.jsonl.
+//   ③ ALREADY-CLOSED-RECON — doClose treated “position not found” as a
+//      transient failure and burned its retry budget against a position the
+//      exchange had already consumed (exchange-side SL/TP). Now: both close
+//      paths failing triggers a positions read — absent row ⇒ the close is
+//      BOOKED (money-truth via fetchRealizedPnl), not retried.
+//   ④ bridge-watchdog v1.3 companion: stale-lock pid-reuse cleanup +
+//      PolarFS escrow fallback (scripts/bridge-watchdog.sh).
+const VER = "toobit-bridge 1.6.2";
 // v1.4.3 (operator order trace 1a172ca1af260c0d — «مارجین 5$/$0.5 به‌جای 10$، چرا هیچ سیگنالی در سود بسته نشده، وضعیت NX-3139 در لایو متفاوت است — اقدامات حیاتی فوری»):
 //   Forensics proved FOUR independent root causes, all fixed here:
 //   ① CONTRACT-MULTIPLIER SIZING BUG (the $0.5 margin) — exchangeInfo carries
@@ -373,6 +396,7 @@ interface Intent {
   entryAgeMs?: number;          // v1.3.0 doctrine — card age at entry (created → filled)
   protected?: boolean;          // v1.3.0 doctrine — protective TP/SL attached (LIVE) / sim active (PAPER)
   goneSince?: number;           // v1.5.4 — first recon miss of the position row (GONE-DOUBLE-CONFIRM arming)
+  healPushedAt?: number;        // v1.6.2 — MIRROR-LAG-HEAL latch (one heal close per stranding episode)
   events: Array<{ at: number; ev: string; note?: string }>;
 }
 interface MetricsRow {
@@ -408,7 +432,17 @@ function audit(ev: string, det: Record<string, unknown>): void {
 function countSkip(reason: string): void {
   S.doctrine.skipBy[reason] = (S.doctrine.skipBy[reason] ?? 0) + 1;
 }
+// v1.6.2 — journal dedup: the 30s doctrine scan re-pushed the same violation
+// every cycle (3225 NOTIONAL-DELTA 21× back-to-back), so the badge counted
+// repeats. Same (serial, kind, detail) within 60min journals once; the full
+// per-scan trail remains in audit.jsonl.
+const violationSeen = new Map<string, number>();
 function doctrineViolation(serial: number, kind: string, detail: string): void {
+  const key = `${serial}|${kind}|${detail}`;
+  const last = violationSeen.get(key) ?? 0;
+  if (Date.now() - last < 3_600_000) return; // unchanged condition — already journaled
+  violationSeen.set(key, Date.now());
+  if (violationSeen.size > 200) for (const [k, t] of violationSeen) if (Date.now() - t > 7_200_000) violationSeen.delete(k);
   S.doctrine.violations.push({ at: Date.now(), serial, kind, detail });
   if (S.doctrine.violations.length > 20) S.doctrine.violations = S.doctrine.violations.slice(-20);
   audit("DOCTRINE-VIOLATION", { serial, kind, detail });
@@ -762,6 +796,19 @@ async function flashClose(tbSymbol: string, side: "LONG" | "SHORT"): Promise<{ o
   return { ok: r.ok, err: r.ok ? null : (r.err ?? "flashClose failed") };
 }
 
+// v1.6.2 ALREADY-CLOSED-RECON — true ONLY when the exchange confirms the
+// position row is gone (fail-safe: any read error ⇒ false ⇒ keep the retry
+// path; a transient empty response is NOT trusted here — recon's
+// GONE-DOUBLE-CONFIRM owns that class for the bookkeeping sweep).
+async function positionAbsent(tbSymbol: string, side: "LONG" | "SHORT"): Promise<boolean> {
+  try {
+    const pos = await signed<Array<{ symbol: string; side: string; position: string }>>("GET", "/api/v1/futures/positions");
+    const rows = Array.isArray(pos.data) ? pos.data : [];
+    if (rows.length === 0) return false; // empty response = unproven (v1.5.4 lesson)
+    return !rows.some((p) => p.symbol === tbSymbol && p.side === side && Number(p.position) > 0);
+  } catch { return false; }
+}
+
 // ── action queue (sequential — order-rate guard) ────────────────────────────
 type Action = { kind: "open" | "bank" | "close"; cardId: string; frac?: number; reason: string };
 const actionQ: Action[] = [];
@@ -1073,6 +1120,25 @@ async function doClose(it: Intent, reason: string): Promise<void> {
       const r = await placeOrder(it.tbSymbol, side, it.qtyRemaining, { clientOrderId: `NX${it.serial}X${Date.now() % 100000}` });
       audit("EXEC-CLOSE-FALLBACK", { serial: it.serial, reason, ok: r.ok, err: r.err });
       if (!r.ok) {
+        // v1.6.2 ALREADY-CLOSED-RECON — both close paths rejected is the signature
+        // of a position the exchange ALREADY consumed (exchange-side SL/TP fired
+        // before the card mirrored). Burning the retry budget against an absent
+        // position produced the CLOSE_REJECTED→ABANDONED→MIRROR-LAG storm class.
+        // One positions read settles it: absent row ⇒ BOOK the close with the
+        // exchange's money-truth instead of retrying a ghost.
+        const absent = await positionAbsent(it.tbSymbol, it.direction);
+        if (absent) {
+          it.qtyRemaining = 0;
+          it.status = "CLOSED";
+          it.closedAt = Date.now();
+          it.closeReason = `ALREADY-CLOSED-RECON (${reason})`;
+          const pnl = await fetchRealizedPnl(it);
+          if (pnl !== null) it.realizedPnlUsdt = pnl;
+          it.events.push({ at: Date.now(), ev: "CLOSED", note: `${it.closeReason} — exchange-side exit consumed the position` });
+          audit("EXEC-CLOSE-RECON", { serial: it.serial, reason, realizedPnlUsdt: pnl });
+          persistState();
+          return;
+        }
         it.status = "OPEN";
         it.events.push({ at: Date.now(), ev: "CLOSE_REJECTED", note: (r.err ?? "").slice(0, 160) });
         revertTransition(it, "CLOSE", r.err ?? "close order rejected");
@@ -1544,6 +1610,18 @@ async function doctrineScan(): Promise<void> {
           const openedFor = it.openedAt ? now - it.openedAt : 0;
           if (TERMINAL.includes(c.status) && it.status === "OPEN" && openedFor > 90_000 && !TERMINAL.includes(it.lastStatusSeen)) {
             doctrineViolation(it.serial, "MIRROR-LAG", `card=${c.status} but intent still OPEN ${Math.round(openedFor / 1000)}s — pollCards transition should have fired`);
+          }
+          // v1.6.2 MIRROR-LAG SELF-HEAL — the stranding class: pollCards' transition
+          // was consumed by a failed close (EXEC-RETRY-ABANDONED) or lost in a
+          // state.json restore, so `c.status === prev` skips re-firing forever and
+          // the intent stays OPEN while the card ledger says terminal. The card
+          // ledger is authoritative: after 15min of confirmed lag the doctrine
+          // scan re-fires the close itself (once per episode — healPushedAt latch;
+          // doClose's own failure paths still own retry/revert semantics).
+          if (TERMINAL.includes(c.status) && it.status === "OPEN" && openedFor > 15 * 60_000 && !it.healPushedAt) {
+            it.healPushedAt = now;
+            audit("MIRROR-LAG-HEAL", { serial: it.serial, card: c.status, lagSec: Math.round(openedFor / 1000), mode: it.mode });
+            pushAction({ kind: "close", cardId: it.cardId, reason: `MIRROR-LAG-HEAL (card=${c.status}, lag ${Math.round(openedFor / 60_000)}min)` });
           }
         }
         // ④ protection: LIVE audited by recon (hasStop); PAPER sim always on

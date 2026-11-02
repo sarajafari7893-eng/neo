@@ -291,7 +291,11 @@ one_cycle() {
   # returns — no process restart needed. recovery-restore.sh + backup.sh tbenv-*
   # carry the same secret through the restore and offsite chains.
   local tb_env_f="/home/z/my-project/mini-services/toobit-bridge/.env"
+  # v3.4 POLARFS-FIRST escrow resolution (operator order 2026-11-02): /home/z is
+  # the wipe surface (11 wipes on 2026-11-02); /tmp/my-project (PolarFS) survived
+  # every one — secret sources resolve PolarFS-first, legacy path as fallback.
   local tb_sealed="/home/z/.nexus-secrets/toobit-bridge.env"
+  [ -s "/tmp/my-project/secrets/toobit-bridge.env" ] && tb_sealed="/tmp/my-project/secrets/toobit-bridge.env"
   if [ ! -s "$tb_env_f" ] && [ -s "$tb_sealed" ]; then
     mkdir -p "$(dirname "$tb_env_f")" 2>/dev/null
     if cp "$tb_sealed" "$tb_env_f" 2>/dev/null && chmod 600 "$tb_env_f" 2>/dev/null; then
@@ -303,6 +307,7 @@ one_cycle() {
   # AES-256-CBC/PBKDF2 escrow stored in EngineSetting "toobit.key-escrow" with
   # the off-tree passphrase. Last independent link before operator re-delivery.
   local tb_pass="/home/z/.nexus-secrets/escrow.pass"
+  [ -s "/tmp/my-project/secrets/escrow.pass" ] && tb_pass="/tmp/my-project/secrets/escrow.pass"
   local tb_db="/home/z/my-project/db/custom.db"
   if [ ! -s "$tb_env_f" ] && [ -s "$tb_pass" ] && [ -s "$tb_db" ]; then
     local tb_enc; tb_enc=$(mktemp /home/z/.nexus-secrets/.escrow-XXXXXX.enc)
