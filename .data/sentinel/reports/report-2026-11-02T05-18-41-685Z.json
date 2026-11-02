@@ -1,101 +1,107 @@
 {
  "schemaVersion": 1,
  "kind": "deep",
- "at": "2026-10-31T21:55:24.961Z",
- "tehran": "01/11/2026, 01:25:24",
+ "at": "2026-11-02T05:18:27.417Z",
+ "tehran": "02/11/2026, 08:48:27",
  "verdict": "RED",
  "anomalies": [
   {
+   "sev": "warn",
+   "area": "app",
+   "msg": "HTTP probe timeout but TCP port open — warming (dev compile storm), NOT down"
+  },
+  {
    "sev": "crit",
    "area": "engine",
-   "msg": "no SignalEvent for 498189h+55m — engine may be stalled"
+   "msg": "no SignalEvent for 498221h+18m — engine may be stalled"
   },
   {
    "sev": "warn",
    "area": "watchdog",
-   "msg": "layer-1 non-ok services: {\"app\":\"ok\",\"liq\":\"ok\",\"ws\":\"ok\",\"bridge\":\"ok\",\"trade\":\"ok\",\"sentinel\":\"ok\",\"armor\":\"ok\",\"cron\":\"ok\",\"stable\":\"ok\",\"kw\":\"ok\",\"mem\":\"ok\",\"warm\":\"ok\",\"tbt\":\"escalated\",\"cards\":\"ok\"}"
+   "msg": "layer-1 non-ok services: {\"app\":\"degraded\",\"liq\":\"ok\",\"ws\":\"ok\",\"bridge\":\"ok\",\"trade\":\"ok\",\"sentinel\":\"ok\",\"armor\":\"ok\",\"cron\":\"ok\",\"stable\":\"ok\",\"kw\":\"ok\",\"mem\":\"ok\",\"warm\":\"ok\",\"tbt\":\"ok\",\"cards\":\"ok\"}"
   }
  ],
  "services": [
   {
    "key": "app",
    "label": "app :3000",
-   "up": true,
-   "status": 200,
-   "ms": 50
+   "up": false,
+   "status": null,
+   "ms": 12010,
+   "tcpOpen": true
   },
   {
    "key": "ws",
    "label": "price-ws :3003",
    "up": true,
    "status": 400,
-   "ms": 26
+   "ms": 5
   },
   {
    "key": "bridge",
    "label": "telegram-bridge :3005",
    "up": true,
    "status": 200,
-   "ms": 26
+   "ms": 5
   },
   {
    "key": "liq",
    "label": "liq :3010",
    "up": true,
    "status": 200,
-   "ms": 26
+   "ms": 5
   },
   {
    "key": "trade",
    "label": "trade :3011",
    "up": true,
    "status": 200,
-   "ms": 26
+   "ms": 6
   },
   {
    "key": "watchdog",
    "label": "p0-watchdog :3020",
    "up": true,
    "status": 200,
-   "ms": 26
+   "ms": 6
   }
  ],
  "mem": {
-  "availableMb": 715
+  "availableMb": 2821
  },
  "disk": {
-  "rootFreeGb": 3.69,
-  "tmpFreeGb": 3.69
+  "rootFreeGb": 2.17,
+  "tmpFreeGb": 2.17
  },
  "db": {
   "ok": true,
-  "signals": 3225,
-  "events": 80247,
-  "prices": 116820,
-  "assets": 44,
+  "signals": 3237,
+  "events": 80049,
+  "prices": 103935,
+  "assets": 43,
   "pumps": 2307,
-  "events1h": 2098,
-  "lastEventAgeMs": 1793483722612,
+  "events1h": 1600,
+  "lastEventAgeMs": 1793596697359,
   "stuckActive": 0,
   "orphanEvents": 0,
   "stuckPumpTracks": 0,
   "dbBytes": 65732608,
-  "walBytes": 4136512
+  "walBytes": 0
  },
  "backup": {
   "ok": true,
   "dir": "/tmp/my-project/backups",
   "encCount": 12,
   "zipCount": 12,
-  "newestEncMs": 1793477270805.206,
-  "newestAnyMs": 1793477270805.206,
-  "encAgeMs": 6453851.7939453125
+  "newestEncMs": 1793591323295.142,
+  "newestAnyMs": 1793591323295.142,
+  "encAgeMs": 5376108.857910156
  },
  "watchdog": {
   "ok": true,
   "ver": "p0-watchdog 1.4.9",
   "modes": {
-   "app": "ok",
+   "app": "degraded",
    "liq": "ok",
    "ws": "ok",
    "bridge": "ok",
@@ -107,18 +113,18 @@
    "kw": "ok",
    "mem": "ok",
    "warm": "ok",
-   "tbt": "escalated",
+   "tbt": "ok",
    "cards": "ok"
   },
   "nonOk": 1,
   "memLevel": "ok",
-  "memAvailableMb": 733,
+  "memAvailableMb": 2825,
   "paused": false
  },
  "log": {
-  "windowLines": 850,
-  "errors": 19,
-  "http500": 1,
+  "windowLines": 39,
+  "errors": 1,
+  "http500": 0,
   "oom": 0,
   "enospc": 0,
   "hydration": 0,
@@ -128,26 +134,28 @@
  },
  "shadow": {
   "ok": true,
-  "source": "live-api",
-  "mode": "veto",
-  "generatedAt": "2026-10-31T21:55:24.684Z",
+  "source": "legacy-file",
+  "degraded": true,
+  "fileAgeH": 0,
+  "mode": "shadow",
+  "generatedAt": "2026-11-02T04:56:04.799Z",
   "stats": {
-   "total": 9305,
-   "passSide": 5420,
-   "rejectSide": 3885,
-   "vetoCount": 6314,
-   "tradeCount": 2991,
-   "modelSharePct": 40.8,
+   "total": 9442,
+   "passSide": 5478,
+   "rejectSide": 3964,
+   "vetoCount": 6448,
+   "tradeCount": 2994,
+   "modelSharePct": 41.2,
    "modelGroundedPct": 100,
-   "avgConfidence": 66.7,
-   "gateAgreement": 2493,
+   "avgConfidence": 66.9,
+   "gateAgreement": 2570,
    "paperOpen": 10,
-   "paperSettled": 1401,
+   "paperSettled": 1403,
    "recent24h": {
-    "n": 145,
-    "modelSharePct": 25.5,
-    "lastModelAgeH": 1.6,
-    "lastVerdictAgeH": 0.1
+    "n": 119,
+    "modelSharePct": 69.7,
+    "lastModelAgeH": 0.8,
+    "lastVerdictAgeH": 0.7
    }
   },
   "arms": [
@@ -157,8 +165,7 @@
     "target": 30,
     "pct": 100,
     "starved": false,
-    "reachable": true,
-    "fed": 1599,
+    "fed": null,
     "lastFedAgeH": null
    },
    {
@@ -167,8 +174,7 @@
     "target": 30,
     "pct": 100,
     "starved": false,
-    "reachable": true,
-    "fed": 3821,
+    "fed": null,
     "lastFedAgeH": null
    },
    {
@@ -177,8 +183,7 @@
     "target": 30,
     "pct": 100,
     "starved": false,
-    "reachable": true,
-    "fed": 1394,
+    "fed": null,
     "lastFedAgeH": null
    },
    {
@@ -187,61 +192,29 @@
     "target": 30,
     "pct": 57,
     "starved": false,
-    "reachable": true,
-    "fed": 17,
+    "fed": null,
     "lastFedAgeH": null
    }
   ],
   "fillPct": 89,
-  "fillPctReach": 89,
   "nSum": 107,
   "tSum": 120,
-  "nSumReach": 107,
-  "tSumReach": 120,
-  "fenceEntries24hFloor": 231
+  "fenceEntries24hFloor": 169
  },
  "rawcal": {
-  "armed": true,
-  "issued": 726,
-  "issuedTotal": 2144,
-  "target": 3217,
+  "armed": null,
+  "error": "api unreachable",
   "heartbeatAgeH": 0,
-  "heartbeatAt": "2026-10-31T2155Z ARMED issued=726/2137 target=3217"
+  "heartbeatAt": "2026-11-02T0455Z ARMED issued=732/2143 target=3217"
  },
  "cards": {
   "ok": true,
-  "sentinelAgeSec": 42,
-  "ticks": 80,
-  "refreshed1h": 8,
-  "failures1h": 196,
-  "staleHot": 6,
-  "worst": [
-   {
-    "symbol": "POWRUSDT",
-    "ageMin": 450,
-    "heat": "hot"
-   },
-   {
-    "symbol": "BEAMXUSDT",
-    "ageMin": 191,
-    "heat": "hot"
-   },
-   {
-    "symbol": "STXUSDT",
-    "ageMin": 130,
-    "heat": "warm"
-   },
-   {
-    "symbol": "LSKUSDT",
-    "ageMin": 127,
-    "heat": "warm"
-   },
-   {
-    "symbol": "PARTIUSDT",
-    "ageMin": 104,
-    "heat": "hot"
-   }
-  ]
+  "sentinelAgeSec": 51,
+  "ticks": 4,
+  "refreshed1h": 0,
+  "failures1h": 0,
+  "staleHot": 0,
+  "worst": []
  },
  "cures": {
   "armed": true,
@@ -252,6 +225,6 @@
   "failStreak": 0,
   "baselineMark": 0
  },
- "uptimeSec": 3600,
+ "uptimeSec": 24,
  "ver": "nexus-sentinel 1.3.2"
 }
