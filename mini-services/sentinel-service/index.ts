@@ -178,8 +178,10 @@ function dbVitals() {
     const c = (t: string) => Number(q(`SELECT COUNT(*) AS n FROM "${t}"`)?.n ?? -1);
     const signals = c("Signal"), events = c("SignalEvent"), prices = c("PricePoint"), assets = c("MarketAsset"), pumps = c("PumpTrack");
     const since1h = nowMs() - 3600_000;
-    const ev1h = Number(q("SELECT COUNT(*) AS n FROM SignalEvent WHERE createdAt > ?", since1h)?.n ?? -1);
-    const maxRow = q("SELECT MAX(createdAt) AS m FROM SignalEvent") as { m?: number | string } | null;
+    const ev1h = Number(q("SELECT COUNT(*) AS n FROM SignalEvent WHERE CAST(createdAt AS REAL) > ?", since1h)?.n ?? -1);
+    // v1.x type-safe fix (operator mandate 2026-11-02): mixed-type createdAt — bare MAX() picks the
+    // single legacy ISO-text row lexicographically → false "engine stalled" alarms. CAST normalizes.
+    const maxRow = q("SELECT MAX(CAST(createdAt AS REAL)) AS m FROM SignalEvent") as { m?: number | string } | null;
     let lastEvAgeMs: number | null = null;
     const m = maxRow?.m;
     if (m !== undefined && m !== null) lastEvAgeMs = nowMs() - (typeof m === "number" ? m : parseInt(String(m), 10) || 0);

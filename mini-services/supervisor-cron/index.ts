@@ -272,7 +272,11 @@ function eventFreshness(): { ageMin: number | null; lastAt: string | null; err?:
   try {
     const db = new Database(`${ROOT}/db/custom.db`, { readonly: true });
     db.exec("PRAGMA busy_timeout=2500");
-    const row = db.query("SELECT MAX(createdAt) mx, COUNT(*) n FROM SignalEvent").get() as { mx: number | string | null; n: number } | null;
+    // v1.x type-safe fix (operator mandate 2026-11-02): createdAt is mixed-type in SQLite
+    // (80k epoch-numeric rows + 1 legacy ISO-text row) — bare MAX() returns the ISO string
+    // lexicographically → Number() → NaN → false "no-rows / UNREADABLE" P0 alarms.
+    // CAST(AS REAL) compares numerically: ISO text casts to 2026.0 (harmless), epochs compare true.
+    const row = db.query("SELECT MAX(CAST(createdAt AS REAL)) mx, COUNT(*) n FROM SignalEvent").get() as { mx: number | string | null; n: number } | null;
     db.close();
     const mx = row?.mx != null ? Number(row.mx) : null;
     if (!mx || !Number.isFinite(mx)) return { ageMin: null, lastAt: null, err: "no-rows" };
