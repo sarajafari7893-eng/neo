@@ -2,15 +2,15 @@
  "ver": "supervisor-cron 1.7.0",
  "pid": 2223,
  "startedAt": "2026-11-02T16:37:00.944Z",
- "updatedAt": "2026-11-02T22:56:00.986Z",
+ "updatedAt": "2026-11-02T23:06:01.018Z",
  "jobs": {
   "sweep": {
-   "lastRunAt": 1793660160935,
+   "lastRunAt": 1793660760935,
    "nextRunAt": 1793660760935,
    "lastStatus": "ok",
-   "lastDurationMs": 49,
+   "lastDurationMs": 83,
    "lastError": null,
-   "runs": 703,
+   "runs": 704,
    "failures": 0
   },
   "progress": {
@@ -23,12 +23,12 @@
    "failures": 0
   },
   "review": {
-   "lastRunAt": 1793617149226,
-   "nextRunAt": 1793660349226,
+   "lastRunAt": 1793660349226,
+   "nextRunAt": 1793703549226,
    "lastStatus": "ok",
-   "lastDurationMs": 10253,
+   "lastDurationMs": 6117,
    "lastError": null,
-   "runs": 111,
+   "runs": 112,
    "failures": 0
   },
   "watch": {
@@ -59,24 +59,24 @@
    "failures": 0
   },
   "keepwarm": {
-   "lastRunAt": 1793660160935,
-   "nextRunAt": 1793660160935,
+   "lastRunAt": 1793660760935,
+   "nextRunAt": 1793661060935,
    "lastStatus": "ok",
-   "lastDurationMs": 51,
+   "lastDurationMs": 27,
    "lastError": null,
-   "runs": 1326,
+   "runs": 1328,
    "failures": 119
   }
  },
  "lastSweep": {
-  "at": "2026-11-02T22:56:00.984Z",
-  "verdict": "AMBER",
-  "reason": "sentinel :3030 verdict AMBER",
+  "at": "2026-11-02T23:06:01.018Z",
+  "verdict": "GREEN",
+  "reason": "all services up · sentinel not RED",
   "services": {
    "app": {
     "up": true,
     "status": 200,
-    "ms": 36
+    "ms": 30
    },
    "liq": {
     "up": true,
@@ -101,12 +101,12 @@
    "sentinel": {
     "up": true,
     "status": 200,
-    "ms": 0
+    "ms": 1
    },
    "ws": {
     "up": true,
     "status": 400,
-    "ms": 1
+    "ms": 7
    },
    "bridge": {
     "up": true,
@@ -119,13 +119,7 @@
     "ms": 0
    }
   },
-  "anomalies": [
-   {
-    "class": "sentinel-amber",
-    "sev": "warn",
-    "msg": "sentinel :3030 verdict AMBER"
-   }
-  ],
+  "anomalies": [],
   "data": {
    "lastEventAgeMin": 0
   },
@@ -135,9 +129,9 @@
   }
  },
  "lastReview": {
-  "at": "2026-11-02T10:59:18.804Z",
+  "at": "2026-11-02T22:59:14.695Z",
   "status": "ok",
-  "verdict": "GREEN"
+  "verdict": "AMBER"
  },
  "lastProgress": {
   "at": "2026-11-02T21:42:30.109Z",
@@ -149,11 +143,11 @@
   "newN": 0
  },
  "lastKeepwarm": {
-  "at": "2026-11-02T22:56:00.986Z",
+  "at": "2026-11-02T23:06:00.962Z",
   "ok": true,
-  "ms": 51,
-  "bootAt": "2026-11-02T22:55:15.920Z",
-  "gitSha": "6346536",
+  "ms": 27,
+  "bootAt": "2026-11-02T22:55:15.921Z",
+  "gitSha": "7a10517",
   "coldStreak": 0
  },
  "coldStreak": 0,
@@ -167,34 +161,6 @@
  "wsDownStreak": 0,
  "staleStreak": 0,
  "history": [
-  {
-   "id": "sweep",
-   "at": 1793651160935,
-   "status": "ok",
-   "durationMs": 197,
-   "detail": "AMBER: sentinel :3030 verdict AMBER"
-  },
-  {
-   "id": "keepwarm",
-   "at": 1793651460935,
-   "status": "ok",
-   "durationMs": 19,
-   "detail": "HEARTBEAT OK 19ms boot=20:27:08Z sha=4181393"
-  },
-  {
-   "id": "keepwarm",
-   "at": 1793651760935,
-   "status": "ok",
-   "durationMs": 49,
-   "detail": "HEARTBEAT OK 48ms boot=20:35:31Z sha=64974e4"
-  },
-  {
-   "id": "sweep",
-   "at": 1793651760935,
-   "status": "ok",
-   "durationMs": 63,
-   "detail": "AMBER: sentinel :3030 verdict AMBER"
-  },
   {
    "id": "digest",
    "at": 1793651952945,
@@ -516,6 +482,34 @@
    "status": "ok",
    "durationMs": 51,
    "detail": "HEARTBEAT OK 51ms boot=22:55:15Z sha=6346536"
+  },
+  {
+   "id": "review",
+   "at": 1793660349226,
+   "status": "ok",
+   "durationMs": 6117,
+   "detail": "llm=ok"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1793660460935,
+   "status": "ok",
+   "durationMs": 21,
+   "detail": "HEARTBEAT OK 21ms boot=22:55:15Z sha=7a10517"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1793660760935,
+   "status": "ok",
+   "durationMs": 27,
+   "detail": "HEARTBEAT OK 27ms boot=22:55:15Z sha=7a10517"
+  },
+  {
+   "id": "sweep",
+   "at": 1793660760935,
+   "status": "ok",
+   "durationMs": 83,
+   "detail": "GREEN: all services up · sentinel not RED"
   }
  ],
  "watchRuns": [
