@@ -1,80 +1,133 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""v14.2 SIGNAL-DELAY ring probe (read-only) — the engineering execution of the
-NX-3247 / LIVE-degradation investigation recommendations.
+# ── NEXUS//SIGNALS — SIGNAL-DELAY PROBE (P2.8 ring, v14.2 restore) ──────────
+# Recreated 2026-11-04 after sandbox rollback (original lost; contract from
+# mandate trace 1a1a15fb6bc0bd75). READ-ONLY telemetry, fail-open: any error
+# prints OK-line and exits 0 — must never block the watchdog cycle.
+#
+# Monitors the two-layer delay chain found on 2026-11-03:
+#   stage1 (engine): FillLedger.latencyMs = createdAt − detectedAt (radar path)
+#   stage2 (bridge): state.json intents lat.detectMs (card-detect gaps)
+#   stage3 (LIVE  ): 24h closed Signal quality (TP-family share)
+# Writes .data/p0-watchdog/signal-delay-ring.json (atomic tmp+rename).
+# Output: "SIGNAL-DELAY OK — ..." or "SIGNAL-DELAY ALERT — ..." (watchdog logs ALERT).
+import json
+import os
+import sqlite3
+import time
 
-Measures the TWO delay stages found in forensics:
-  stage-1 (engine): FillLedger.latencyMs = signal.createdAt - radar.detectedAt
-  stage-2 (bridge): toobit-bridge state.json intents lat.detectMs
-And the LIVE quality gate: closed signals 24h -> TP hits vs EXPIRED/SL.
+PROJECT = "/home/z/my-project"
+DB = os.path.join(PROJECT, "db", "custom.db")
+STATE = os.path.join(PROJECT, ".data", "toobit-bridge", "state.json")
+RING = os.path.join(PROJECT, ".data", "p0-watchdog", "signal-delay-ring.json")
 
-Writes .data/p0-watchdog/signal-delay-ring.json (atomic tmp+rename).
-Prints a single-line verdict for the watchdog to log/alert. Read-only: the
-SQLite URI uses mode=ro; nothing here writes to the DB or trading code.
-"""
-import json, sqlite3, time, os, sys
+DAY_MS = 86_400_000
+ENTRY_AGE_MS = 90_000          # bridge maxEntryAgeMs — the SKIP window
+ENGINE_AVG_ALERT_MS = 120_000  # v14.2 threshold (first alert fired at avg 529s)
+ENGINE_LATE_ALERT_N = 10       # >90s fills per 24h
+BRIDGE_MAX_ALERT_MS = 120_000  # detect gap beyond the 90s window = SKIP territory
+TP_SHARE_ALERT = 20            # % of TP-family among ≥5 closed in 24h
 
-PROJ = "/home/z/my-project"
-OUT = os.path.join(PROJ, ".data/p0-watchdog/signal-delay-ring.json")
-TMP = OUT + ".tmp"
 
-def main():
+def fail_open(msg: str) -> None:
+    print(f"SIGNAL-DELAY OK — probe degraded (fail-open): {msg}")
+    raise SystemExit(0)
+
+
+def main() -> None:
     now_ms = int(time.time() * 1000)
-    day_ago = now_ms - 86_400_000
-    ring = {"ver": "signal-delay-ring v1.0 (watchdog v14.2)", "at": now_ms,
-            "stage1_engine": None, "stage2_bridge": None, "live_quality": None,
-            "verdict": "OK", "notes": []}
+    since = now_ms - DAY_MS
+    out: dict = {"ts": now_ms, "stage1": None, "stage2": None, "stage3": None}
 
-    # ── stage-1: engine detection→issuance latency (24h)
+    # ── stage1: engine radar latency (FillLedger, 24h) ──
+    con = sqlite3.connect(f"file:{DB}?mode=ro", uri=True, timeout=3)
     try:
-        con = sqlite3.connect(f"file:{PROJ}/db/custom.db?mode=ro", uri=True, timeout=3)
-        cur = con.cursor()
-        row = cur.execute(
-            "SELECT COUNT(*), AVG(latencyMs), SUM(CASE WHEN latencyMs>90000 THEN 1 ELSE 0 END) "
-            "FROM FillLedger WHERE createdAt >= ?", (day_ago,)).fetchone()
-        if row and row[0]:
-            ring["stage1_engine"] = {"n": row[0], "avgMs": int(row[1] or 0), "over90s": row[2] or 0}
-            if row[0] >= 5 and (row[1] or 0) > 120_000:
-                ring["notes"].append(f"ENGINE-DELAY avg={int(row[1]//1000)}s (n={row[0]}) — radar→signal window degraded")
-        # LIVE quality: closed signals last 24h
-        row2 = cur.execute(
-            "SELECT COUNT(*), SUM(CASE WHEN reachedTp>0 THEN 1 ELSE 0 END), "
-            "SUM(CASE WHEN status='EXPIRED' THEN 1 ELSE 0 END), SUM(CASE WHEN status='SL' THEN 1 ELSE 0 END) "
-            "FROM Signal WHERE createdAt >= ? AND status NOT IN ('OPEN','ACTIVE')", (day_ago,)).fetchone()
-        if row2 and row2[0]:
-            ring["live_quality"] = {"closed": row2[0], "tpHits": row2[1] or 0,
-                                    "expired": row2[2] or 0, "sl": row2[3] or 0}
-            if row2[0] >= 5 and not row2[1]:
-                ring["notes"].append(f"LIVE-NO-TP: {row2[0]} closed/24h, 0 TP hits ({row2[2]} EXP/{row2[3]} SL)")
+        rows = con.execute(
+            "SELECT latencyMs, symbol FROM FillLedger "
+            "WHERE createdAt >= ? AND latencyMs IS NOT NULL",
+            (since,),
+        ).fetchall()
+    finally:
         con.close()
-    except Exception as e:
-        ring["notes"].append(f"db-probe-error: {type(e).__name__}")
+    lat = [r[0] for r in rows]
+    stage1 = {
+        "n": len(lat),
+        "avgMs": int(sum(lat) / len(lat)) if lat else 0,
+        "maxMs": max(lat) if lat else 0,
+        "over90s": sum(1 for v in lat if v > ENTRY_AGE_MS),
+        "worst": max(rows, key=lambda r: r[0])[1] if rows else None,
+    }
+    out["stage1"] = stage1
 
-    # ── stage-2: bridge detection latency (latest intents)
+    # ── stage2: bridge detect gaps (state.json intents, 24h) ──
     try:
-        sp = os.path.join(PROJ, ".data/toobit-bridge/state.json")
-        with open(sp) as f:
-            st = json.load(f)
-        dms = [i.get("lat", {}).get("detectMs") for i in st.get("intents", {}).values()
-               if isinstance(i.get("lat"), dict)]
-        dms = [d for d in dms if isinstance(d, (int, float))]
-        if dms:
-            ring["stage2_bridge"] = {"intents": len(dms), "maxDetectMs": int(max(dms)),
-                                     "over90s": sum(1 for d in dms if d > 90_000)}
-            if max(dms) > 300_000:
-                ring["notes"].append(f"BRIDGE-DETECT max={max(dms)//1000}s — poll gap/bridge-down window")
-    except Exception as e:
-        ring["notes"].append(f"bridge-probe-error: {type(e).__name__}")
+        with open(STATE, "r", encoding="utf-8") as f:
+            intents = (json.load(f) or {}).get("intents", {}) or {}
+        det = [
+            (v.get("lat") or {}).get("detectMs")
+            for v in intents.values()
+            if (v.get("createdAt0") or 0) >= since
+        ]
+        det = [d for d in det if isinstance(d, (int, float))]
+        stage2 = {
+            "n": len(det),
+            "maxMs": int(max(det)) if det else 0,
+            "over90s": sum(1 for v in det if v > ENTRY_AGE_MS),
+        }
+    except Exception as e:  # bridge state unreadable → stage2 blind, not fatal
+        stage2 = {"n": 0, "maxMs": 0, "over90s": 0, "err": str(e)[:80]}
+    out["stage2"] = stage2
 
-    ring["verdict"] = "ALERT" if ring["notes"] else "OK"
+    # ── stage3: LIVE close quality (Signal, 24h) ──
+    con = sqlite3.connect(f"file:{DB}?mode=ro", uri=True, timeout=3)
     try:
-        with open(TMP, "w") as f:
-            json.dump(ring, f, ensure_ascii=False)
-        os.replace(TMP, OUT)
-    except Exception:
-        pass
-    print(f"SIGNAL-DELAY {ring['verdict']}" + ((" — " + " | ".join(ring["notes"])) if ring["notes"] else ""))
-    return 0 if ring["verdict"] == "OK" else 0  # telemetry-only: never fails the cycle
+        rows = con.execute(
+            "SELECT status, COUNT(*) FROM Signal "
+            "WHERE createdAt >= ? AND status != 'ACTIVE' GROUP BY status",
+            (since,),
+        ).fetchall()
+    finally:
+        con.close()
+    closed = sum(n for _, n in rows)
+    tp = sum(n for s, n in rows if s.startswith("TP"))
+    stage3 = {
+        "closed24h": closed,
+        "tpFamily": tp,
+        "tpSharePct": round(100 * tp / closed) if closed else None,
+        "byStatus": {s: n for s, n in rows},
+    }
+    out["stage3"] = stage3
+
+    # ── verdict ──
+    alerts = []
+    if stage1["n"] and stage1["avgMs"] > ENGINE_AVG_ALERT_MS:
+        alerts.append(f"ENGINE-DELAY avg={stage1['avgMs']}s n={stage1['n']} over90s={stage1['over90s']}")
+    if stage1["over90s"] > ENGINE_LATE_ALERT_N:
+        alerts.append(f"ENGINE-LATE n>90s={stage1['over90s']}")
+    if stage2["maxMs"] > BRIDGE_MAX_ALERT_MS:
+        alerts.append(f"BRIDGE-DETECT max={stage2['maxMs']}s over90s={stage2['over90s']}")
+    if stage3["closed24h"] and stage3["tpSharePct"] is not None and stage3["tpSharePct"] < TP_SHARE_ALERT:
+        alerts.append(f"LIVE-QUALITY tp={stage3['tpSharePct']}% closed={stage3['closed24h']}")
+
+    tmp = RING + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(out, f, ensure_ascii=False)
+    os.replace(tmp, RING)
+
+    if alerts:
+        print("SIGNAL-DELAY ALERT — " + " | ".join(alerts))
+    else:
+        print(
+            "SIGNAL-DELAY OK — "
+            f"engine avg={stage1['avgMs']}s(n={stage1['n']}) "
+            f"bridge max={stage2['maxMs']}s "
+            f"live24h={stage3['closed24h']} tp={stage3['tpSharePct']}%"
+        )
+
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        main()
+    except SystemExit:
+        raise
+    except Exception as e:  # fail-open contract
+        fail_open(repr(e)[:160])
