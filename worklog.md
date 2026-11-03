@@ -33437,3 +33437,24 @@ Task ID: STRAT-AUDIT-20261103 · اسکریپت‌ها: strategy-audit-20261103.
 - **تصمیم مهندسی: استقرار کف سخت روی همین شواهد تأیید نمی‌شود**؛ ابزارسازی shadow واقعی (ثبت مسیر/trail زنده) نیازمند تغییر کد است — برای فرمان بعدی اپراتور مستند شد
 ### وضعیت پایانی
 - EngineSetting strategy.weights: {AI-SCALP 0.25, MEAN-REVERT 0.25, MOMENTUM 1.0, BREAKOUT 1.25, AI-SWING 1.0} · probation MEAN-REVERT فعال · FLAT-10 ✓ · هیچ پوزیشن/کارت واقعی دست نخورد
+
+---
+
+## سلامت Event Stream + تشخیص خشکسالی + اعمال beArmRMult + تعمیر fundingByb (2026-11-03 ~00:07–00:16Z · فرمان اپراتور: trace 1a19eb7354d6db79)
+Task ID: ESTREAM-ARM-20261103
+### ① تشخیص Event Stream Health — خشکسالی، اما نه از جنس قطعی دیتا
+- ماژول داشبورد (TerminalSection v4.8/v13.5) تله‌متری واقعی می‌خواند: `getFutwsStatus()` از `.data/futws-quotes.json` — **رویدادها زنده‌اند**: ~۱۴۷۰/ساعت (40.8k/24h؛ Confluence sweep 00:12:50 — best 66، ۱۷ کاندید، ۳۲ مارکت)
+- خشکسالی واقعی = خشکسالی استقرار (CREATED=7/24h؛ آخرین استقرار SOLUSDT 2026-11-02T20:36Z) — علت تأییدشده: **تخریب صفحهٔ فیوچرز بایننس از سمت صرافی**:
+  - REST `fapi.binance.com` → **HTTP 418** (بن خودکار IP؛ اسپات 200 سالم) — دوبار تست ✓
+  - حلقهٔ WS bookTicker فیوچرز از ~20:28Z ساکت (futws-quotes.json 3.6h کهنه؛ ۴۳ نماد منجمد) — price-ws :3003 زنده، اسپات-WS و onsetها جاری
+  - نتیجه در موتور: گارد **STALE-ANCHOR (RESET-0929) fail-closed** استقرار بدون تیکر تازهٔ فیوچرز را رد می‌کند + Memory gate نمادهای −3% (WLD/XMR) را می‌بندد → سیستم صادقانه از استقرار خودداری می‌کند
+  - پاسخ به فرضیهٔ اپراتور: «بله — تا حد زیادی بخاطر دیتای فیوچرز بایننس است (بن REST + سکوت WS)، نه قطعی اتصال داخلی»؛ بن سمت بایننس است و خودش برطرف می‌شود؛ price-ws ری‌کانکت خودکار دارد
+### ② اعمال پیشنهاد مشاور — beArmRMult 0.5→0.35 (تأیید و اجرا شد)
+- پروپوزال PENDING cycle 181 (`cmvzwdquo0000sz4wqhku0mvf`، شواهد: no-touch-floor-sim-20261103.json — ریشه: آرم 0.5×SLdist با ATR بزرگ کوچک‌ها غیرقابل‌رسیدن)
+- از **کانال رسمی اپراتور**: `POST /api/advisor {action:approve}` (همان قرارداد Q3 دکمهٔ AI CORE) — APPLY-GUARD پاس (live 0.5 == base 0.5) → **APPLIED 2026-11-03T00:10:46Z** · رویداد audit ثبت شد
+- زندهٔ فعلی: `beArmRMult=0.35` · beBankFrac 0.25 · beArmMovePct 1.5 (دست‌نخورده) — بقیهٔ پروپوزال‌های PENDING (minScore، riskPerTrade) بدون فرمان باقی ماندند
+### ③ تعمیر خطای تکراری `FuturesSnapshot.fundingByb` (P2022)
+- ریشه: drift اسکیما — کلاینت تولیدشدهٔ Prisma فیلد فانتوم `fundingByb Float?` داشت ولی schema.prisma و DB هر دو نداشتند و `src/` هیچ ارجاعی ندارد (بازگشت ناآگاهانهٔ اسکیما بعد از تولید)
+- تعمیر: `prisma generate` از اسکیمای فعلی + ری‌استارت کنترل‌شدهٔ next dev — watchdog خودکار بالا آورد (pulse 200 در ~8s)؛ **خطا صفر در لاگ تازه**؛ خط لولهٔ settle فیوچرز (fwd15m/1h/4h) دوباره شارژ می‌شود
+### راستی‌آزمایی
+- FLAT-10 md5 `36fa6a8d6fe85e4ac0d6b57a06df581a` ✓ · بریج تووبیت LIVE (pid 2278، revive 2026-11-02T16:34Z، زنجیرهٔ EXIT=0) · پوزیشن ENA و FLAT-10 دست‌نخورده · ردیف TEXT-ای منفرد createdAt در SignalEvent (2026-10-31T19:19Z CHOP-SHORT-OPEN) صرفاً آرتیفکت نمایش است — بی‌اثر
