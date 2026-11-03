@@ -458,6 +458,18 @@ except Exception: sys.exit(2)
     fi
   fi
 
+  # ── P2.8 · SIGNAL-DELAY ring (v14.2, forensics trace 1a1a14ec5bac1945 + mandate 1a1a15fb6bc0bd75 «توصیه‌ها کامل و مهندسی») ──
+  # Root causes found 2026-11-03: (a) engine radar→signal issuance delay
+  # (FillLedger.latencyMs, weekly avg 167s→205s→310s, NX-3246 = 39min) and
+  # (b) bridge card-detect gaps (detectMs 570s/3989s across sandbox recycles)
+  # → LIVE entries chase tops, TTL expiry kills positions before TP
+  # (25/25 LIVE closes EXPIRED-or-SL until NX-3247's 47min-late MIRROR-LAG-HEAL).
+  # This ring is READ-ONLY telemetry (fail-open, never blocks the cycle): it
+  # turns any recurrence of the "signal-at-the-top" / "no-TP-in-LIVE" class
+  # into an ALERT line here instead of a silent performance bleed.
+  local dline; dline=$(python3 "$PROJECT/scripts/signal-delay-probe.py" 2>/dev/null)
+  case "$dline" in *ALERT*) say "$dline" ;; esac
+
   setk last_cycle_epoch "$now"
   [ $(( cyc % HEARTBEAT_EVERY )) -eq 0 ] && say "heartbeat: green cycles=$cyc rss=${rss}MB avail=${avail:-?}MB liq=$liq ws=$ws breaker=$(breaker_count)/$BREAKER_MAX"
   trim_log
