@@ -15,10 +15,10 @@
 //            readings fire contrarian context triggers; unreachable source
 //            keeps the honest OBSERVING declaration, never fabricated.
 
-import { gateFetch } from "./fapi-gate";
+import { gateFetch, fapiBanActivity } from "./fapi-gate"; // v14.2 — live ban probe backs the SURROGATE-FLOW hard gate
 import { bridgeTape, bridgeDepth } from "./flow-bridge"; // v12.3 TASK-52 — tape/depth ladders
 import { getLiquidationSnapshot } from "./liquidations";
-import { fetchFlowMetrics, getFlowHistory } from "./flow";
+import { fetchFlowMetrics, getFlowHistory, getFlowSource } from "./flow";
 import { peekRegime } from "./regime";
 import { getMacroSnapshot, peekMacro } from "./macro";
 import { peekLiqHeat } from "./liq-heatmap";
@@ -286,8 +286,42 @@ async function measureDepth(symbol: string): Promise<DepthMeasure | null> {
 // ── trigger firing ──────────────────────────────────────────────
 // v9.3: fire() stamps the event-instant mid price so the engine's ANTI-LATE-
 // ENTRY guard can measure how far price ran between the TRIGGER and the deploy.
+//
+// v14.2 SURROGATE-FLOW HARD GATE (operator order «توصیه‌ها را کامل و مهندسی
+// انجام بده», trace 1a1a15fb6bc0bd75 — audit rec #2 «قانون سخت: بدون deploy
+// EVENT-TRIGGER با منبع جریان سورگت», NX-3247 forensics fc143950) ───────────
+// NX-3247 was born EVENT-TRIGGER while its flow evidence was SPOT-MIRROR
+// surrogate (fapi starved): the trigger plane measured the RIGHT microstructure
+// (bridge tape/depth) but the deploy evaluation consumed CONFLICTS −9 flow
+// measured on the WRONG venue, and the record spawned straight into the top of
+// a markup leg. Law from this audit: an ACTED trigger (spawn-eligible, L1/L2)
+// is downgraded to fuel (acted=false) whenever the symbol's flow bundle source
+// is not BINANCE (SPOT-MIRROR / MIXED). The event stays in the ring with an
+// honest block note (ring is persisted → fully auditable), the engine's
+// actionable picker (requires acted) can never select it, and NO engine.ts
+// change is needed. When flow is BINANCE or unknown (null — deploy-path gates
+// own that case), the gate is a no-op.
 function fire(layer: TriggerLayer, symbol: string, side: "LONG" | "SHORT" | "NEUTRAL", strength: number, detail: string, acted = false, price?: number | null): TriggerEvent {
-  const ev: TriggerEvent = { at: Date.now(), layer, symbol, side, strength: Number(strength.toFixed(2)), detail, acted, regime: peekRegime(symbol)?.label ?? null, price: typeof price === "number" && Number.isFinite(price) && price > 0 ? price : null };
+  let actedFinal = acted;
+  let detailFinal = detail;
+  if (actedFinal && symbol) {
+    // v14.2 hardening: the bundle tag can lag reality by up to one flow sweep
+    // (~19min over the 48-perp domain) — a ban that started minutes ago would
+    // still read a fresh "BINANCE" tag. The LIVE fapiBanActivity() probe
+    // closes that gap: while a global window is live or the pool is in
+    // distress (≥2 named IPs banned), spawn-eligible triggers stand down
+    // regardless of the tag. Both probes fail-safe: tag unknown + no ban →
+    // deploy-path gates own the residual case (SURROGATE-BREAKOUT / SURR-CAP).
+    const src = getFlowSource(symbol);
+    const surrogate = src !== null && src !== "BINANCE";
+    const ban = fapiBanActivity();
+    if (surrogate || ban.active) {
+      const why = ban.active ? `fapi ban ACTIVE (${ban.reason})` : `flow plane ${src} ≠ BINANCE (fapi starved)`;
+      actedFinal = false;
+      detailFinal += ` — SURROGATE-FLOW BLOCK: EVENT-TRIGGER spawn denied (${why}; hard rule «no EVENT-TRIGGER deploy on surrogate flow», NX-3247 forensics)`;
+    }
+  }
+  const ev: TriggerEvent = { at: Date.now(), layer, symbol, side, strength: Number(strength.toFixed(2)), detail: detailFinal, acted: actedFinal, regime: peekRegime(symbol)?.label ?? null, price: typeof price === "number" && Number.isFinite(price) && price > 0 ? price : null };
   ring.unshift(ev);
   if (ring.length > RING_CAP) ring.pop();
   counts[layer]++;

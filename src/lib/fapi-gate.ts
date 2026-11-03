@@ -73,6 +73,24 @@
 // Default stays the canonical host. Downstream replaceability ladder is
 // already layered: fapi-gate (this) → SPOT-MIRROR aggTrade WS → spot REST
 // klines/price fallback → Binance-only liq lanes (v14.0).
+//
+// ── v14.2 BAN-AWARE RECOVERY PACER (operator order «توصیه‌ها را کامل و مهندسی
+// انجام بده», trace 1a1a15fb6bc0bd75 — audit rec #3 «throttle REST بن-آگاه»,
+// NX-3247 forensics fc143950) ───────────────────────────────────────────────
+// WHY: the old budget was FLAT — the instant a ban window expired the full
+// 1100 weight/min came back at once, every starved scanner refilled its
+// rotation in the same minute, and the pool re-saturated into a fresh 418
+// spiral (measured 10-19: 11:58Z→12:34Z→13:09Z pause spiral). The pacer:
+//   · RECOVERY RAMP — for 10min after a global ban window ends, the effective
+//     budget ramps 25%→100% linearly. Early recovery minutes carry the
+//     CRITICAL lane first (engine price feed / triggers), telemetry scanners
+//     stretch back out gradually instead of stampeding.
+//   · POOL-DISTRESS CAP — while ≥2 named egress IPs sit inside live ban
+//     windows (the 10-18 measurement: 3 named IPs banned simultaneously),
+//     the effective budget is capped at 50% — fewer lottery draws, less ban
+//     pressure, named-IP evidence stays intel-shaped.
+// CRITICAL lane keeps its negative retry; the floor (200/min) is the same
+// clamp configureFapiGate enforces, so the pacer can never zero the plane.
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 
 const FAPI_HOST = process.env.NEXUS_FAPI_HOST?.trim().replace(/\/+$/, "") || "https://fapi.binance.com";
@@ -109,6 +127,11 @@ const PROBE_COOLDOWN_MS = 120_000; // one early-probe attempt per 2min while a w
 const BAN_PERSIST_DIR = `${process.cwd()}/.data/fapi-gate`;
 const BAN_PERSIST_PATH = `${BAN_PERSIST_DIR}/bans.json`;
 const BAN_PERSIST_DEBOUNCE_MS = 30_000;
+// v14.2 ban-aware recovery pacer
+const PACER_RECOVERY_MS = 10 * 60_000; // post-ban ramp window (25%→100%)
+const PACER_RAMP_FLOOR = 0.25; // budget fraction at the first recovery minute
+const PACER_DISTRESS_CAP = 0.5; // budget cap while ≥2 named IPs are banned live
+const PACER_MIN_BUDGET = 200; // same clamp floor as configureFapiGate
 
 export type FapiGatePriority = "critical" | "telemetry";
 
@@ -136,6 +159,7 @@ export interface FapiGateStats {
   // v12.0 egress manager
   probesIssued: number; // rotation-aware early probes attempted during a ban window
   probeLifts: number; // windows lifted early because a clean draw succeeded
+  effectiveBudgetPer60s: number; // v14.2 pacer view of the budget (≤ budgetPer60s)
 }
 
 interface SpendEntry { at: number; w: number }
@@ -164,6 +188,7 @@ interface GateState {
     retriesAfterBan: number;
     probesIssued: number;
     probeLifts: number;
+    effectiveBudgetPer60s: number;
   };
 }
 
@@ -184,7 +209,7 @@ const state: GateState =
     sampledAt: 0,
     lastBannedIp: null,
     lastProbeAt: 0,
-    stats: { attempted: 0, allowed: 0, droppedBudget: 0, droppedBan: 0, lastBanUntil: 0, singleFlightShared: 0, retriesAfterBan: 0, probesIssued: 0, probeLifts: 0 },
+    stats: { attempted: 0, allowed: 0, droppedBudget: 0, droppedBan: 0, lastBanUntil: 0, singleFlightShared: 0, retriesAfterBan: 0, probesIssued: 0, probeLifts: 0, effectiveBudgetPer60s: DEFAULT_BUDGET },
   });
 
 // ── v12.0 ban-ledger persistence (survive restarts without re-probing) ──
@@ -332,6 +357,35 @@ export function fapiBanRemainingMs(): number {
   return Math.max(0, state.banUntil - Date.now());
 }
 
+// ── v14.2 BAN-ACTIVITY PROBE (operator order «توصیه‌ها را کامل و مهندسی انجام
+// بده» — audit rec #1 «تعلیق issue خودکار RAW-CAL هنگام بن فعال fapi») ─────
+// ONE honest answer to «is the fapi plane ban-degraded right now?», shared by
+// the RAW-CAL issuer and any future consumer. Active when EITHER the global
+// zero-network window is live (unknown-scope / pool-wide evidence) OR the pool
+// shows distress (≥2 named egress IPs banned simultaneously — the 10-18/10-19
+// storm shape). A SINGLE named-IP ban is NOT distress (v12.6 majority-clean
+// pool policy — flow keeps riding the ladder there).
+export interface FapiBanActivity {
+  active: boolean;
+  reason: string | null;
+  globalRemainingMs: number;
+  namedLiveIps: number;
+  effectiveBudgetPer60s: number;
+}
+
+export function fapiBanActivity(): FapiBanActivity {
+  const now = Date.now();
+  const globalRemainingMs = Math.max(0, state.banUntil - now);
+  const namedLiveIps = namedLiveBanCount(now);
+  if (globalRemainingMs > 0) {
+    return { active: true, reason: `fapi GLOBAL ban window live — ${Math.round(globalRemainingMs / 1000)}s left`, globalRemainingMs, namedLiveIps, effectiveBudgetPer60s: effectiveBudgetPer60s() };
+  }
+  if (namedLiveIps >= 2) {
+    return { active: true, reason: `fapi pool distress — ${namedLiveIps} named egress IPs inside live ban windows`, globalRemainingMs, namedLiveIps, effectiveBudgetPer60s: effectiveBudgetPer60s() };
+  }
+  return { active: false, reason: null, globalRemainingMs, namedLiveIps, effectiveBudgetPer60s: effectiveBudgetPer60s() };
+}
+
 export function fapiGateStats(): FapiGateStats {
   const now = Date.now();
   pruneWindow(now);
@@ -351,6 +405,7 @@ export function fapiGateStats(): FapiGateStats {
     retriesAfterBan: state.stats.retriesAfterBan,
     probesIssued: state.stats.probesIssued,
     probeLifts: state.stats.probeLifts,
+    effectiveBudgetPer60s: effectiveBudgetPer60s(),
   };
 }
 
@@ -410,10 +465,38 @@ function pruneWindow(now: number): void {
 }
 
 /** Reserve `weight` from the rolling window. Returns the spend entry (for refunds) or null. */
+// ── v14.2 BAN-AWARE RECOVERY PACER ────────────────────────────────────────
+// The ONLY budget the rolling window spends against. A flat budget after a
+// ban ended = instant re-saturation stampede (the 10-19 spiral); the pacer
+// gives the pool a 10min ramp and caps telemetry while the pool shows live
+// distress. Global-window minutes are NOT handled here (gateFetch drops
+// everything while the window is live) — the pacer shapes the BEFORE
+// (distress) and AFTER (recovery) of each ban episode.
+function namedLiveBanCount(now: number): number {
+  let n = 0;
+  for (const [, until] of state.ipBans) if (until > now) n++;
+  return n;
+}
+
+export function effectiveBudgetPer60s(): number {
+  const now = Date.now();
+  let factor = 1;
+  // POOL DISTRESS — ≥2 named egress IPs inside live ban windows: cap telemetry.
+  if (namedLiveBanCount(now) >= 2) factor = Math.min(factor, PACER_DISTRESS_CAP);
+  // RECOVERY RAMP — 10min linear 25%→100% after the last global window ends.
+  if (state.banUntil > 0) {
+    const sinceBan = now - state.banUntil;
+    if (sinceBan >= 0 && sinceBan < PACER_RECOVERY_MS) {
+      factor = Math.min(factor, PACER_RAMP_FLOOR + (1 - PACER_RAMP_FLOOR) * (sinceBan / PACER_RECOVERY_MS));
+    }
+  }
+  return Math.max(PACER_MIN_BUDGET, Math.round(state.budgetPer60s * factor));
+}
+
 function takeWeight(weight: number): SpendEntry | null {
   const now = Date.now();
   pruneWindow(now);
-  if (state.windowSum + weight > state.budgetPer60s) return null;
+  if (state.windowSum + weight > effectiveBudgetPer60s()) return null;
   const entry: SpendEntry = { at: now, w: weight };
   state.spend.push(entry);
   state.windowSum += weight;

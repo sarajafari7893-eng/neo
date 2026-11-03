@@ -1,0 +1,589 @@
+     1→// ── FlowRadar Neo trigger hierarchy + event-driven bus (server-only, v5.0) ──
+     2→// Replaces "scan every 15 minutes" with REACTION: the fastest movers (taker
+     3→// sweeps, book imbalance) are millisecond-to-second phenomena — a periodic scan
+     4→// always arrives late. The bus measures the trigger-hierarchy layers on real
+     5→// exchange data and, when a trigger fires WITH fuel confirmed, hands the engine
+     6→// an immediate candidate (which still passes EVERY deployment gate).
+     7→//
+     8→// Layer  1   AGGRESSIVE TAKER SWEEP   — aggTrades same-side burst (seconds)
+     9→// Layer  1.5 ORDER-BOOK IMBALANCE     — depth top-band OBI, spoof-guarded (seconds)
+    10→// Layer  2   LIQUIDITY VACUUM / WALL  — ±2% depth map gaps & clusters (seconds-minutes)
+    11→// Layer  3   LIQUIDATION CASCADE      — REAL forceOrder stream + OI (minutes)
+    12→// Layer  3.5 LEVERAGE CROWDING        — funding extreme + OI z-jump (hours)
+    13→// Layer  4   MACRO FLOWS              — v6.2: key-less measurable source found
+    14→//            (Crypto Fear & Greed Index, alternative.me — no API key). Extreme
+    15→//            readings fire contrarian context triggers; unreachable source
+    16→//            keeps the honest OBSERVING declaration, never fabricated.
+    17→
+    18→import { gateFetch } from "./fapi-gate";
+    19→import { bridgeTape, bridgeDepth } from "./flow-bridge"; // v12.3 TASK-52 — tape/depth ladders
+    20→import { getLiquidationSnapshot } from "./liquidations";
+    21→import { fetchFlowMetrics, getFlowHistory } from "./flow";
+    22→import { peekRegime } from "./regime";
+    23→import { getMacroSnapshot, peekMacro } from "./macro";
+    24→import { peekLiqHeat } from "./liq-heatmap";
+    25→import { peekOiFund } from "./oi-funding";
+    26→import { peekVolForecast } from "./vol-forecast";
+    27→import { db } from "@/lib/db";
+    28→
+    29→export type TriggerLayer = "L1_TAKER_SWEEP" | "L15_OBI_IMBALANCE" | "L2_VACUUM" | "L3_LIQ_CASCADE" | "L3P_LIQ_PRE" | "L35_CROWD_JUMP" | "L4_MACRO";
+    30→
+    31→export interface TriggerEvent {
+    32→  at: number;
+    33→  layer: TriggerLayer;
+    34→  symbol: string;
+    35→  side: "LONG" | "SHORT" | "NEUTRAL";
+    36→  strength: number; // 0..1
+    37→  detail: string;
+    38→  acted: boolean;
+    39→  regime: string | null;
+    40→  price?: number | null; // v9.3 — event-instant mid price (anti-late-entry chase reference)
+    41→}
+    42→
+    43→export interface TriggerBusSummary {
+    44→  counts: Record<TriggerLayer, number>;
+    45→  last: TriggerEvent[];
+    46→  rotation: number;
+    47→  rotationSize: number;
+    48→  lastCycleAt: number | null;
+    49→  lastSpawnAt: number | null;
+    50→  suppressed: string[];
+    51→  crowdCut: string[];
+    52→  macroNote: string;
+    53→  // v5.2 observability + wedge armor
+    54→  cyclesStarted: number;
+    55→  cyclesCompleted: number;
+    56→  cycleInFlight: boolean;
+    57→  lastCycleMs: number | null;
+    58→  lastCycleError: string | null;
+    59→}
+    60→
+    61→export const LAYER_LABEL: Record<TriggerLayer, string> = {
+    62→  L1_TAKER_SWEEP: "L1 · TAKER SWEEP",
+    63→  L15_OBI_IMBALANCE: "L1.5 · OBI",
+    64→  L2_VACUUM: "L2 · VACUUM",
+    65→  L3_LIQ_CASCADE: "L3 · LIQ CASCADE",
+    66→  L3P_LIQ_PRE: "L3P · LIQ PRE",
+    67→  L35_CROWD_JUMP: "L3.5 · CROWDING",
+    68→  L4_MACRO: "L4 · MACRO",
+    69→};
+    70→
+    71→const RING_CAP = 40;
+    72→const PERSIST_KEY = "triggerbus";
+    73→const SPAWN_COOLDOWN_MS = 8 * 60_000; // max 1 trigger-spawned deploy / 8min
+    74→const COUNTER_CASCADE_SUPPRESS_MS = 10 * 60_000;
+    75→const CROWD_CUT_MS = 30 * 60_000;
+    76→
+    77→// ── module state ────────────────────────────────────────────────
+    78→// TASK-40 (2026-09-27, operator bug report «Trigger Bus داده‌ها را از دست می‌دهد»):
+    79→// GENERATION-PROOF STATE. Next dev bundles one module instance per route, so
+    80→// module-scoped state forks per bundle (the v10.16 serial-mutex lesson in
+    81→// engine.ts). The old code was doubly broken:
+    82→//   1. A fresh generation restored NOTHING (its `restored` flag was private)
+    83→//      and its first fire()/markTriggerSpawn() persisted ALL-ZERO counts over
+    84→//      the good EngineSetting row — permanent destruction, observed live
+    85→//      2026-09-27 09:50 (row zeroed while lastCycleAt stayed fresh).
+    86→//   2. restore() latched `restored = true` even on a TRANSIENT DB error, so a
+    87→//      hiccup under memory pressure froze a zeroed generation that then
+    88→//      faithfully overwrote every later persist.
+    89→// Counters/ring now live on globalThis (shared by every generation in the
+    90→// process), restore() merges with MAX (monotonic counters) + deduped ring,
+    91→// and persist() is DENIED until a successful restore (or a confirmed-fresh
+    92→// row) — the zero-overwrite destroyer is structurally impossible now.
+    93→interface NexusTriggerState {
+    94→  counts: Record<TriggerLayer, number>;
+    95→  ring: TriggerEvent[];
+    96→  lastCycleAt: number | null;
+    97→  lastSpawnAt: number;
+    98→}
+    99→const gState = globalThis as { __nexusTriggerState?: NexusTriggerState };
+   100→const S: NexusTriggerState = gState.__nexusTriggerState ?? {
+   101→  counts: {
+   102→    L1_TAKER_SWEEP: 0,
+   103→    L15_OBI_IMBALANCE: 0,
+   104→    L2_VACUUM: 0,
+   105→    L3_LIQ_CASCADE: 0,
+   106→    L3P_LIQ_PRE: 0,
+   107→    L35_CROWD_JUMP: 0,
+   108→    L4_MACRO: 0,
+   109→  },
+   110→  ring: [],
+   111→  lastCycleAt: null,
+   112→  lastSpawnAt: 0,
+   113→};
+   114→gState.__nexusTriggerState = S;
+   115→const { counts, ring } = S; // shared references — mutations flow through S
+   116→let cursor = 0;
+   117→let rotationSize = 40;
+   118→let cycleInFlight = false;
+   119→let macroAnnounced = false;
+   120→
+   121→const cascadeUntil = new Map<string, number>(); // counter-cascade suppression
+   122→const crowdCutUntil = new Map<string, number>(); // size-cut windows
+   123→const lastOBI = new Map<string, { at: number; obi: number }>(); // spoof guard
+   124→const lastTriggerAt = new Map<string, number>(); // per-symbol+layer cooldown
+   125→
+   126→const measCache = new Map<string, { at: number; v: unknown }>();
+   127→const MEAS_TTL = 35_000;
+   128→
+   129→// ── measurement primitives (all real endpoints, cached) ────────
+   130→// v10.24 Task 34-a: through the central fapi-gate, CRITICAL lane — the
+   131→// reaction layer rides ahead of the telemetry scanners when the weight
+   132→// budget tightens (one 250ms negative retry, then an honest null).
+   133→async function fapi<T>(path: string, timeoutMs = 5500): Promise<T | null> {
+   134→  return gateFetch<T>(path, { priority: "critical", timeoutMs });
+   135→}
+   136→
+   137→interface AggTrade {
+   138→  p: number;
+   139→  q: number;
+   140→  T: number;
+   141→  m: boolean; // isBuyerMaker → m=false means the TAKER bought
+   142→}
+   143→
+   144→interface TakerSweep {
+   145→  buyUsd: number;
+   146→  sellUsd: number;
+   147→  sweepSide: "LONG" | "SHORT" | null;
+   148→  sweepUsd: number;
+   149→  dominance: number;
+   150→}
+   151→
+   152→/** L1 — aggressive taker sweep over the last 60s of real aggTrades. */
+   153→async function measureTakerSweep(symbol: string): Promise<TakerSweep | null> {
+   154→  const ck = `agg:${symbol}`;
+   155→  const hit = measCache.get(ck);
+   156→  if (hit && Date.now() - hit.at < MEAS_TTL) return hit.v as TakerSweep | null;
+   157→  // v12.3 TASK-52: fapi aggTrades (w20) is rung 1 — during fapi starvation the
+   158→  // sweep survives on the bridge ladder (fapi → SPOT-MIRROR, honest plane tag).
+   159→  let trades = await fapi<AggTrade[]>(`/fapi/v1/aggTrades?symbol=${symbol}&limit=1000`);
+   160→  if (!trades || trades.length < 10) {
+   161→    const b = await bridgeTape(symbol).catch(() => null);
+   162→    if (b && b.trades.length >= 10) trades = b.trades.map((t) => ({ p: t.price, q: t.qty, T: t.time, m: t.isBuyerMaker }));
+   163→  }
+   164→  if (!trades || trades.length < 10) {
+   165→    measCache.set(ck, { at: Date.now(), v: null });
+   166→    return null;
+   167→  }
+   168→  const cutoff = Date.now() - 60_000;
+   169→  let buyUsd = 0;
+   170→  let sellUsd = 0;
+   171→  for (const t of trades) {
+   172→    if (t.T < cutoff) continue;
+   173→    const usd = t.p * t.q;
+   174→    if (t.m) sellUsd += usd;
+   175→    else buyUsd += usd;
+   176→  }
+   177→  const total = buyUsd + sellUsd;
+   178→  const dominant = Math.max(buyUsd, sellUsd);
+   179→  const res = {
+   180→    buyUsd: Math.round(buyUsd),
+   181→    sellUsd: Math.round(sellUsd),
+   182→    sweepSide: total >= 250_000 && dominant >= 250_000 && dominant >= total * 0.62 ? ((buyUsd > sellUsd ? "LONG" : "SHORT") as "LONG" | "SHORT") : null,
+   183→    sweepUsd: Math.round(dominant),
+   184→    dominance: total > 0 ? dominant / total : 0,
+   185→  };
+   186→  measCache.set(ck, { at: Date.now(), v: res });
+   187→  return res;
+   188→}
+   189→
+   190→interface DepthLevel {
+   191→  price: number;
+   192→  qty: number;
+   193→}
+   194→
+   195→interface DepthMeasure {
+   196→  mid: number;
+   197→  obi: number;
+   198→  vacuum: { side: "ABOVE" | "BELOW"; widthPct: number; edgeDistPct: number } | null;
+   199→  wall: { side: "BID" | "ASK"; priceDistPct: number; usd: number } | null;
+   200→}
+   201→
+   202→/** L1.5 + L2 — order-book imbalance + ±2% vacuum/wall map from one depth snapshot. */
+   203→async function measureDepth(symbol: string): Promise<DepthMeasure | null> {
+   204→  const ck = `depth:${symbol}`;
+   205→  const hit = measCache.get(ck);
+   206→  if (hit && Date.now() - hit.at < MEAS_TTL) return hit.v as DepthMeasure | null;
+   207→  // v12.3 TASK-52 (v14.0): depth rides the ladder — fapi (w5) → SPOT-MIRROR book →
+   208→  // SPOT-MIRROR book; OBI/vacuum math is venue-shape-agnostic (bids DESC / asks ASC).
+   209→  const d = await bridgeDepth(symbol, 500);
+   210→  if (!d || d.bids.length === 0 || d.asks.length === 0) {
+   211→    measCache.set(ck, { at: Date.now(), v: null });
+   212→    return null;
+   213→  }
+   214→  const bids: DepthLevel[] = d.bids.map(([p, q]) => ({ price: p, qty: q }));
+   215→  const asks: DepthLevel[] = d.asks.map(([p, q]) => ({ price: p, qty: q }));
+   216→  const mid = (bids[0]!.price + asks[0]!.price) / 2;
+   217→
+   218→  // OBI over the top ±0.5% band
+   219→  let bidNot = 0;
+   220→  let askNot = 0;
+   221→  for (const b of bids) if (b.price >= mid * 0.995) bidNot += b.price * b.qty; else break;
+   222→  for (const a of asks) if (a.price <= mid * 1.005) askNot += a.price * a.qty; else break;
+   223→  const obi = askNot > 0 ? bidNot / askNot : 1;
+   224→
+   225→  // ±2% map: find the widest liquidity gap (vacuum) and the biggest single wall
+   226→  const band = 0.02;
+   227→  const buckets = 40;
+   228→  const bucketUsd = new Array<number>(buckets).fill(0);
+   229→  const push = (price: number, qty: number) => {
+   230→    const dev = (price - mid) / mid;
+   231→    if (Math.abs(dev) > band) return;
+   232→    const idx = Math.min(buckets - 1, Math.max(0, Math.floor(((dev + band) / (2 * band)) * buckets)));
+   233→    bucketUsd[idx]! += price * qty;
+   234→  };
+   235→  for (const b of bids) push(b.price, b.qty);
+   236→  for (const a of asks) push(a.price, a.qty);
+   237→
+   238→  const nonZero = bucketUsd.filter((v) => v > 0);
+   239→  const median = nonZero.length ? [...nonZero].sort((a, b) => a - b)[Math.floor(nonZero.length / 2)]! : 0;
+   240→
+   241→  let vacuum: { side: "ABOVE" | "BELOW"; widthPct: number; edgeDistPct: number } | null = null;
+   242→  if (median > 0) {
+   243→    let bestStart = -1;
+   244→    let bestLen = 0;
+   245→    let curStart = -1;
+   246→    for (let i = 0; i < buckets; i++) {
+   247→      const empty = bucketUsd[i]! < median * 0.15;
+   248→      if (empty && curStart < 0) curStart = i;
+   249→      if ((!empty || i === buckets - 1) && curStart >= 0) {
+   250→        const len = (empty ? i + 1 : i) - curStart;
+   251→        if (len > bestLen) {
+   252→          bestLen = len;
+   253→          bestStart = curStart;
+   254→        }
+   255→        curStart = -1;
+   256→      }
+   257→    }
+   258→    if (bestLen >= 4) {
+   259→      const midIdx = bestStart + bestLen / 2;
+   260→      const devMid = (midIdx / buckets) * 2 * band - band;
+   261→      const edgeDev = (bestStart / buckets) * 2 * band - band;
+   262→      vacuum = {
+   263→        side: devMid >= 0 ? "ABOVE" : "BELOW",
+   264→        widthPct: Number(((bestLen / buckets) * 2 * band * 100).toFixed(2)),
+   265→        edgeDistPct: Number((Math.abs(edgeDev) * 100).toFixed(2)),
+   266→      };
+   267→    }
+   268→  }
+   269→
+   270→  // wall: biggest single level within ±2%
+   271→  let wall: { side: "BID" | "ASK"; priceDistPct: number; usd: number } | null = null;
+   272→  for (const b of bids) {
+   273→    const usd = b.price * b.qty;
+   274→    if (!wall || usd > wall.usd) wall = { side: "BID", priceDistPct: Number((((mid - b.price) / mid) * 100).toFixed(2)), usd: Math.round(usd) };
+   275→  }
+   276→  for (const a of asks) {
+   277→    const usd = a.price * a.qty;
+   278→    if (!wall || usd > wall.usd) wall = { side: "ASK", priceDistPct: Number((((a.price - mid) / mid) * 100).toFixed(2)), usd: Math.round(usd) };
+   279→  }
+   280→
+   281→  const res = { mid: Number(mid.toFixed(mid > 100 ? 2 : 6)), obi: Number(obi.toFixed(3)), vacuum, wall };
+   282→  measCache.set(ck, { at: Date.now(), v: res });
+   283→  return res;
+   284→}
+   285→
+   286→// ── trigger firing ──────────────────────────────────────────────
+   287→// v9.3: fire() stamps the event-instant mid price so the engine's ANTI-LATE-
+   288→// ENTRY guard can measure how far price ran between the TRIGGER and the deploy.
+   289→function fire(layer: TriggerLayer, symbol: string, side: "LONG" | "SHORT" | "NEUTRAL", strength: number, detail: string, acted = false, price?: number | null): TriggerEvent {
+   290→  const ev: TriggerEvent = { at: Date.now(), layer, symbol, side, strength: Number(strength.toFixed(2)), detail, acted, regime: peekRegime(symbol)?.label ?? null, price: typeof price === "number" && Number.isFinite(price) && price > 0 ? price : null };
+   291→  ring.unshift(ev);
+   292→  if (ring.length > RING_CAP) ring.pop();
+   293→  counts[layer]++;
+   294→  lastTriggerAt.set(`${layer}:${symbol}`, ev.at);
+   295→  void persist();
+   296→  return ev;
+   297→}
+   298→
+   299→function cooled(layer: TriggerLayer, symbol: string, ms = 4 * 60_000): boolean {
+   300→  const t = lastTriggerAt.get(`${layer}:${symbol}`);
+   301→  return !t || Date.now() - t > ms;
+   302→}
+   303→
+   304→export function isCounterCascadeSuppressed(symbol: string): boolean {
+   305→  const t = cascadeUntil.get(symbol);
+   306→  return !!t && Date.now() < t;
+   307→}
+   308→
+   309→export function isCrowdCut(symbol: string): boolean {
+   310→  const t = crowdCutUntil.get(symbol);
+   311→  return !!t && Date.now() < t;
+   312→}
+   313→
+   314→async function persist(): Promise<void> {
+   315→  if (!restoreOk) return; // TASK-40: never overwrite an unrestored (possibly good) row with cold state
+   316→  try {
+   317→    const value = JSON.stringify({ counts: S.counts, last: S.ring.slice(0, RING_CAP), lastCycleAt: S.lastCycleAt, lastSpawnAt: S.lastSpawnAt });
+   318→    await db.engineSetting.upsert({ where: { key: PERSIST_KEY }, create: { key: PERSIST_KEY, value }, update: { value } });
+   319→  } catch {
+   320→    /* non-fatal */
+   321→  }
+   322→}
+   323→
+   324→/** Restore counters/ring after a dev-server restart.
+   325→ * TASK-40 hardening: a TRANSIENT DB error no longer latches the restore —
+   326→ * failed restores retry on the next cycle and persist() stays denied until
+   327→ * this succeeds. Counters merge MAX (they are monotonic), the ring merges
+   328→ * deduped by at|layer|symbol: a double-restore or a racing generation can
+   329→ * never move the visible numbers backwards. */
+   330→let restoreOk = false;
+   331→async function restore(): Promise<void> {
+   332→  if (restoreOk) return;
+   333→  try {
+   334→    const row = await db.engineSetting.findUnique({ where: { key: PERSIST_KEY } });
+   335→    if (!row) {
+   336→      restoreOk = true; // confirmed fresh — first persist may create the row
+   337→      return;
+   338→    }
+   339→    const v = JSON.parse(row.value) as { counts?: Record<TriggerLayer, number>; last?: TriggerEvent[]; lastCycleAt?: number | null; lastSpawnAt?: number };
+   340→    // layer-set evolution guard + MAX-merge — a layer added after the persist
+   341→    // was written would otherwise sit at undefined and NaN on the first ++
+   342→    for (const k of Object.keys(S.counts) as TriggerLayer[]) {
+   343→      const disk = Number(v.counts?.[k] ?? 0);
+   344→      S.counts[k] = Math.max(S.counts[k] ?? 0, Number.isFinite(disk) ? disk : 0);
+   345→    }
+   346→    const seen = new Set(S.ring.map((e) => `${e?.at}|${e?.layer}|${e?.symbol}`));
+   347→    for (const e of (v.last ?? []).slice(0, RING_CAP)) {
+   348→      if (!e || typeof e.at !== "number") continue;
+   349→      const k = `${e.at}|${e.layer}|${e.symbol}`;
+   350→      if (seen.has(k)) continue;
+   351→      seen.add(k);
+   352→      S.ring.push(e);
+   353→    }
+   354→    S.ring.sort((a, b) => b.at - a.at);
+   355→    if (S.ring.length > RING_CAP) S.ring.length = RING_CAP;
+   356→    if (typeof v.lastCycleAt === "number") S.lastCycleAt = Math.max(S.lastCycleAt ?? 0, v.lastCycleAt);
+   357→    S.lastSpawnAt = Math.max(S.lastSpawnAt, v.lastSpawnAt ?? 0);
+   358→    restoreOk = true;
+   359→  } catch {
+   360→    /* transient DB hiccup — NOT latched; next cycle retries; persist stays denied */
+   361→  }
+   362→}
+   363→
+   364→/** Scan ONE symbol through the whole hierarchy; returns acted triggers. */
+   365→export async function scanSymbolTriggers(symbol: string): Promise<TriggerEvent[]> {
+   366→  const fired: TriggerEvent[] = [];
+   367→
+   368→  const depth = await measureDepth(symbol);
+   369→  if (!depth) return fired;
+   370→  const px = depth.mid; // v9.3 — event-instant reference price for every layer below
+   371→
+   372→  // L1.5 — persistent OBI extreme (spoof guard: needs 2 consecutive extreme reads)
+   373→  // v6.7 FIX (dead-layer root cause): the guard window was 90s, but the bus
+   374→  // rotates 3 symbols/cycle over a ≤64-symbol domain — each symbol is re-scanned
+   375→  // every ~10-20min, so `prev.at` was ALWAYS older than 90s and L15 could never
+   376→  // fire (count stuck at 0 since launch). A spoofed wall must now survive one
+   377→  // full rotation (~10-20min of real depth) — a STRICTER guard, not a looser one.
+   378→  const prev = lastOBI.get(symbol);
+   379→  lastOBI.set(symbol, { at: Date.now(), obi: depth.obi });
+   380→  if (cooled("L15_OBI_IMBALANCE", symbol) && prev && Date.now() - prev.at < 30 * 60_000) {
+   381→    const extreme = depth.obi >= 2.5 || depth.obi <= 0.4;
+   382→    const sameDir = Math.sign(depth.obi - 1) === Math.sign(prev.obi - 1);
+   383→    if (extreme && sameDir) {
+   384→      const side = depth.obi > 1 ? "LONG" : "SHORT";
+   385→      fired.push(fire("L15_OBI_IMBALANCE", symbol, side, Math.min(1, Math.abs(depth.obi - 1) / 1.5), `book imbalance ${depth.obi.toFixed(2)}× (bid/ask notional, ±0.5% band) held across 2 snapshots — ${side === "LONG" ? "bids" : "asks"} stacked`, false, px));
+   386→    }
+   387→  }
+   388→
+   389→  // L1 — taker sweep, with OBI alignment check (the money combo)
+   390→  const sweep = await measureTakerSweep(symbol);
+   391→  if (sweep && sweep.sweepSide && cooled("L1_TAKER_SWEEP", symbol)) {
+   392→    const obiAligned = sweep.sweepSide === "LONG" ? depth.obi >= 1.3 : depth.obi <= 0.77;
+   393→    if (obiAligned) {
+   394→      const strength = Math.min(1, (sweep.dominance - 0.62) / 0.38 * 0.5 + Math.min(1, sweep.sweepUsd / 1_500_000) * 0.5);
+   395→      const ev = fire("L1_TAKER_SWEEP", symbol, sweep.sweepSide, strength, `aggressive ${sweep.sweepSide === "LONG" ? "buy" : "sell"} sweep $${(sweep.sweepUsd / 1000).toFixed(0)}K/60s (${Math.round(sweep.dominance * 100)}% dominant) + OBI ${depth.obi.toFixed(2)} aligned — liquidity consumed toward the thin side`, true, px);
+   396→      fired.push(ev);
+   397→    } else {
+   398→      fired.push(fire("L1_TAKER_SWEEP", symbol, sweep.sweepSide, strength0(sweep.dominance), `sweep $${(sweep.sweepUsd / 1000).toFixed(0)}K/60s but OBI ${depth.obi.toFixed(2)} NOT aligned — recorded as fuel, no spawn`, false, px));
+   399→    }
+   400→  }
+   401→
+   402→  // L2 — vacuum edge within reach (fuel for the move INTO the gap)
+   403→  if (depth.vacuum && cooled("L2_VACUUM", symbol)) {
+   404→    const v = depth.vacuum;
+   405→    if (v.edgeDistPct <= 0.35 && v.widthPct >= 0.4) {
+   406→      const side = v.side === "ABOVE" ? "LONG" : "SHORT";
+   407→      const sweptIntoIt = sweep && sweep.sweepSide === side;
+   408→      fired.push(fire("L2_VACUUM", symbol, side, Math.min(1, v.widthPct / 1.2), `liquidity vacuum ${v.widthPct}% wide ${v.side.toLowerCase()} mid (edge ${v.edgeDistPct}% away) — ${sweptIntoIt ? "sweep already filling it: momentum fuel with open path" : "air pocket ahead; sweep into it accelerates"}`, !!sweptIntoIt, px));
+   409→    }
+   410→  }
+   411→
+   412→  // wall opposite the vacuum path is reported inside detail when relevant (wall data feeds flow display)
+   413→
+   414→  // L3 — REAL liquidation cascade (forceOrder stream) + anti-cascade veto window
+   415→  const snap = await getLiquidationSnapshot();
+   416→  if (snap && snap.status.connected && !snap.status.dataStalled && cooled("L3_LIQ_CASCADE", symbol)) {
+   417→    const row = snap.bySymbol[symbol];
+   418→    if (row && row.usd10m >= 1_500_000) {
+   419→      const dom = Math.max(row.longsUsd10m, row.shortsUsd10m) / Math.max(1, row.usd10m);
+   420→      if (dom >= 0.6) {
+   421→        const wreckedSide = row.longsUsd10m > row.shortsUsd10m ? "LONG" : "SHORT";
+   422→        cascadeUntil.set(symbol, Date.now() + COUNTER_CASCADE_SUPPRESS_MS);
+   423→        fired.push(fire("L3_LIQ_CASCADE", symbol, wreckedSide === "LONG" ? "SHORT" : "LONG", Math.min(1, row.usd10m / 5_000_000), `cascade: $${(row.usd10m / 1e6).toFixed(2)}M ${wreckedSide.toLowerCase()}s liquidated in 10m (${Math.round(dom * 100)}% one-sided) — counter-cascade entries suppressed 10min; exhaustion setup armed`, false, px));
+   424→      }
+   425→    }
+   426→  }
+   427→
+   428→  // L3P — v8.1 P1 PREDICTIVE PRE-CASCADE (engineering opinion, operator-approved):
+   429→  // L3 only reacts once a cascade is ALREADY flowing through the forceOrder
+   430→  // stream. This layer watches the LIQUIDATION HEATMAP estimate + the OI board:
+   431→  // price drifting within reach of a dense cluster WHILE positions are still
+   432→  // piling in (OI Δ1h ≥ +1% or OI z ≥ +1) is the cascade BEFORE it happens —
+   433→  // the magnet warning. Zero extra fetches: both caches are warm from the
+   434→  // tick rotation. Telemetry fuel (acted=false) — deploys still pass the gates.
+   435→  if (cooled("L3P_LIQ_PRE", symbol, 8 * 60_000)) {
+   436→    const heat = peekLiqHeat(symbol);
+   437→    const oif = peekOiFund(symbol);
+   438→    if (heat && oif) {
+   439→      const nearest = heat.nearestBelow && heat.nearestAbove
+   440→        ? (Math.abs(heat.nearestBelow.distPct) <= Math.abs(heat.nearestAbove.distPct) ? heat.nearestBelow : heat.nearestAbove)
+   441→        : (heat.nearestBelow ?? heat.nearestAbove);
+   442→      const volRow = peekVolForecast(symbol);
+   443→      const reachPct = Math.max(0.35, (volRow?.atr15mPct ?? 1) * 0.35); // 0.35×ATR band, 0.35% floor
+   444→      const oiPiling = (oif.oiDelta1h !== null && oif.oiDelta1h >= 1) || (oif.oiZ1h !== null && oif.oiZ1h >= 1);
+   445→      if (nearest && Math.abs(nearest.distPct) <= reachPct && oiPiling) {
+   446→        const cascadeSide: "LONG" | "SHORT" = nearest.side === "LONGS_BELOW" ? "SHORT" : "LONG";
+   447→        fired.push(fire("L3P_LIQ_PRE", symbol, cascadeSide, Math.min(1, nearest.sharePct / 25), `PRE-CASCADE: est. ${nearest.estUsdM}${heat.oiScaled ? "M OI-scaled" : "M (unscaled est.)"} ${nearest.side === "LONGS_BELOW" ? "long" : "short"} liq cluster ${Math.abs(nearest.distPct).toFixed(2)}% ${nearest.distPct < 0 ? "below" : "above"} price (reach ${reachPct.toFixed(2)}%) + OI ${oif.oiDelta1h !== null ? `${oif.oiDelta1h >= 0 ? "+" : ""}${oif.oiDelta1h.toFixed(2)}%/1h` : `z ${oif.oiZ1h}`} still piling — cascade magnet armed ${cascadeSide === "SHORT" ? "down" : "up"}`, false, px));
+   448→      }
+   449→    }
+   450→  }
+   451→
+   452→  // L3.5 — leverage crowding: funding extreme + OI acceleration
+   453→  if (cooled("L35_CROWD_JUMP", symbol)) {
+   454→    const m = await fetchFlowMetrics(symbol);
+   455→    if (m && m.funding8h !== null && m.oiDelta1h !== null) {
+   456→      const hist = getFlowHistory(symbol);
+   457→      const mean = hist.length >= 5 ? hist.reduce((a, h) => a + h.oiDelta1h, 0) / hist.length : 0;
+   458→      const jump = m.oiDelta1h >= Math.max(1.5, mean * 2 + 1);
+   459→      if (Math.abs(m.funding8h) >= 0.06 && jump) {
+   460→        crowdCutUntil.set(symbol, Date.now() + CROWD_CUT_MS);
+   461→        const side = m.funding8h > 0 ? "SHORT" : "LONG"; // crowded side gets punished
+   462→        fired.push(fire("L35_CROWD_JUMP", symbol, side, Math.min(1, Math.abs(m.funding8h) / 0.15), `leverage crowded: funding ${m.funding8h.toFixed(4)}%/8h + OI ${m.oiDelta1h >= 0 ? "+" : ""}${m.oiDelta1h.toFixed(2)}%/1h (≥2× recent mean) — same-direction size cut 30min`, false, px));
+   463→      }
+   464→    }
+   465→  }
+   466→
+   467→  // L4 — macro flows (v6.2): the key-less Fear & Greed feed gives the layer a
+   468→  // REAL measurable source. Extremes (≤20 EXTREME FEAR / ≥80 EXTREME GREED)
+   469→  // fire a contrarian context trigger — recorded as fuel, never an auto-spawn
+   470→  // (macro context informs, the deployment gates still decide). While the
+   471→  // source is unreachable the honest OBSERVING declaration remains.
+   472→  if (cooled("L4_MACRO", "MACRO")) {
+   473→    const macro = await getMacroSnapshot();
+   474→    if (macro && (macro.value <= 20 || macro.value >= 80)) {
+   475→      const extremeFear = macro.value <= 20;
+   476→      fired.push(fire("L4_MACRO", "MACRO", extremeFear ? "LONG" : "SHORT", Math.min(1, Math.abs(macro.value - 50) / 50), `macro sentiment extreme: Fear & Greed ${macro.value}/100 (${macro.classification}) — contrarian ${extremeFear ? "LONG" : "SHORT"} context fuel (source: alternative.me, key-less, 30min cache)`));
+   477→    } else if (!macro && !macroAnnounced && fired.length === 0) {
+   478→      macroAnnounced = true;
+   479→      counts.L4_MACRO++; // count the honest declaration itself
+   480→      fired.push(fire("L4_MACRO", "—", "NEUTRAL", 0, "macro layer — Fear & Greed feed unreachable, no key-less measurable source right now: layer stays OBSERVING, never fabricated"));
+   481→    }
+   482→  }
+   483→
+   484→  return fired;
+   485→}
+   486→
+   487→function strength0(d: number): number {
+   488→  return Number(Math.min(1, Math.max(0, (d - 0.62) / 0.38)).toFixed(2));
+   489→}
+   490→
+   491→// ── bus cycle: rotate the FULL scan domain, 3 per cycle (v5.1: domain up to 64) ──
+   492→// v5.2 WEDGE ARMOR: a cycle is wrapped in a hard timeout — a single hung probe
+   493→// (socket that never settles, DB write lock) previously wedged `cycleInFlight`
+   494→// forever and silently killed the whole event-driven layer (observed live:
+   495→// counts frozen at 0, lastCycleAt null while regimes kept refreshing). Now the
+   496→// bus can stall at most one cycle, then self-heals with an audited error.
+   497→const CYCLE_TIMEOUT_MS = 60_000;
+   498→const SYMBOL_TIMEOUT_MS = 15_000;
+   499→
+   500→function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+   501→  return new Promise<T>((resolve, reject) => {
+   502→    const t = setTimeout(() => reject(new Error(`${label} timeout ${ms}ms`)), ms);
+   503→    p.then((v) => {
+   504→      clearTimeout(t);
+   505→      resolve(v);
+   506→    }).catch((e) => {
+   507→      clearTimeout(t);
+   508→      reject(e);
+   509→    });
+   510→  });
+   511→}
+   512→
+   513→let cyclesStarted = 0;
+   514→let cyclesCompleted = 0;
+   515→let lastCycleMs: number | null = null;
+   516→let lastCycleError: string | null = null;
+   517→
+   518→async function runTriggerCycleInner(symbols: string[]): Promise<void> {
+   519→  await restore();
+   520→  rotationSize = Math.max(6, Math.min(64, symbols.length));
+   521→  const batch = [symbols[cursor % symbols.length], symbols[(cursor + 1) % symbols.length], symbols[(cursor + 2) % symbols.length]].filter(Boolean) as string[];
+   522→  cursor = (cursor + 3) % symbols.length;
+   523→  for (const s of batch) {
+   524→    await withTimeout(scanSymbolTriggers(s), SYMBOL_TIMEOUT_MS, `trigger scan ${s}`);
+   525→  }
+   526→  S.lastCycleAt = Date.now();
+   527→}
+   528→
+   529→export async function runTriggerCycle(symbols: string[]): Promise<void> {
+   530→  if (cycleInFlight || symbols.length === 0) return;
+   531→  cycleInFlight = true;
+   532→  cyclesStarted++;
+   533→  const t0 = Date.now();
+   534→  try {
+   535→    await withTimeout(runTriggerCycleInner(symbols), CYCLE_TIMEOUT_MS, "trigger cycle");
+   536→    cyclesCompleted++;
+   537→    lastCycleMs = Date.now() - t0;
+   538→    lastCycleError = null;
+   539→  } catch (err) {
+   540→    lastCycleError = String(err);
+   541→    console.error("[trigger-bus] cycle failed:", err);
+   542→  } finally {
+   543→    cycleInFlight = false;
+   544→  }
+   545→}
+   546→
+   547→export function canTriggerSpawn(): boolean {
+   548→  return Date.now() - S.lastSpawnAt > SPAWN_COOLDOWN_MS;
+   549→}
+   550→
+   551→export function markTriggerSpawn(): void {
+   552→  S.lastSpawnAt = Date.now();
+   553→  void persist();
+   554→}
+   555→
+   556→export function getTriggerBusSummary(): TriggerBusSummary {
+   557→  // TASK-40: kick the restore on the READ path too — a fresh process used to
+   558→  // report zero counts until the first bus cycle ran (a seconds-wide window
+   559→  // that reads exactly like "the data was wiped again"). The kick is
+   560→  // fire-and-forget; the first poll may still be cold, the next one (≤5s) is
+   561→  // already MAX-merged from EngineSetting.
+   562→  void restore();
+   563→  return {
+   564→    counts: { ...S.counts },
+   565→    last: S.ring.slice(0, 12),
+   566→    rotation: cursor,
+   567→    rotationSize,
+   568→    lastCycleAt: S.lastCycleAt,
+   569→    lastSpawnAt: S.lastSpawnAt || null,
+   570→    suppressed: [...cascadeUntil.entries()].filter(([, t]) => Date.now() < t).map(([s]) => s),
+   571→    crowdCut: [...crowdCutUntil.entries()].filter(([, t]) => Date.now() < t).map(([s]) => s),
+   572→    macroNote: (() => {
+   573→      const m = peekMacro();
+   574→      return m ? `L4 macro: Fear & Greed ${m.value}/100 (${m.classification}) — key-less source live, 30min cache` : "L4 macro flows: Fear & Greed feed not yet reachable — OBSERVING, never fabricated";
+   575→    })(),
+   576→    cyclesStarted,
+   577→    cyclesCompleted,
+   578→    cycleInFlight,
+   579→    lastCycleMs,
+   580→    lastCycleError,
+   581→  };
+   582→}
+   583→
+   584→// TASK-40: module-load self-restore — every Turbopack per-route module instance
+   585→// pulls its persisted counters/ring the moment it is imported, so even the
+   586→// FIRST dashboard poll after a restart/recompile serves real state (the
+   587→// getTriggerBusSummary read-path kick is the second line of defense).
+   588→void restore().catch(() => undefined);
+   589→

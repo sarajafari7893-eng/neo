@@ -32,6 +32,7 @@
 import { db } from "./db";
 import { recordRawcalSnapshot } from "./rawcal-telemetry"; // v9.2 pace monitor (no cycle: telemetry imports raw-cal only dynamically)
 import { touchRawcalHeartbeat } from "./rawcal-heartbeat"; // v10.20 engine-native run heartbeat (sentinel-compatible)
+import { fapiBanActivity } from "./fapi-gate"; // v14.2 — ban-aware issuer suspension (audit rec #1)
 
 export const RAWCAL_KEY = "rawcal.state";
 export const RAWCAL_TARGET = 100; // the R6 calibration-lift bar (calibration.ts)
@@ -242,6 +243,26 @@ export async function maybeRawCalDeploy(): Promise<{ issued: boolean; serial?: n
   if (!state.armed) {
     noteRawCalBlock("not armed");
     return { issued: false, note: "not armed" };
+  }
+
+  // 0) v14.2 FAPI-BAN ISSUER SUSPENSION (operator order «توصیه‌ها را کامل و
+  //    مهندسی انجام بده», trace 1a1a15fb6bc0bd75 — audit rec #1 «تعلیق issue
+  //    خودکار RAW-CAL هنگام بن فعال fapi», NX-3247 forensics fc143950) ────────
+  //    WHY: the 10-30→11-03 collapse cohort was born inside the fapi famine —
+  //    unfiltered capture rows whose flow evidence was SPOT-MIRROR surrogate
+  //    (NX-3247: flowJson CONFLICTS −9 measured on the wrong venue) poison the
+  //    calibration book they exist to fill. While the fapi plane is ban-active
+  //    (global window live OR ≥2 named egress IPs banned — fapiBanActivity()),
+  //    the AUTO-issuer stands down completely: same data-capture doctrine, but
+  //    a capture row born from the wrong venue's tape is worse than no row.
+  //    Arms/heartbeat stay alive (the mode does NOT disarm — it pauses), so
+  //    the instant the ban lifts, capture resumes with zero operator action.
+  //    The pause reason lands in the pace-monitor block ring + heartbeat.
+  const ban = fapiBanActivity();
+  if (ban.active) {
+    noteRawCalBlock(`fapi ban pause — ${ban.reason?.slice(0, 60)}`);
+    touchRawcalHeartbeat(`PAUSED fapi ban active (${ban.reason?.slice(0, 60)}) — issuer stands down, auto-resumes on lift`);
+    return { issued: false, note: `fapi ban pause — ${ban.reason ?? "ban active"}` };
   }
 
   // 1) progress check FIRST — Task 34-2 ARMS-COUPLED AUTO-CANCEL (2026-09-26
