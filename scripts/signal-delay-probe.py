@@ -100,11 +100,11 @@ def main() -> None:
     # ── verdict ──
     alerts = []
     if stage1["n"] and stage1["avgMs"] > ENGINE_AVG_ALERT_MS:
-        alerts.append(f"ENGINE-DELAY avg={stage1['avgMs']}s n={stage1['n']} over90s={stage1['over90s']}")
+        alerts.append(f"ENGINE-DELAY avg={stage1['avgMs'] / 1000:.0f}s n={stage1['n']} over90s={stage1['over90s']}")
     if stage1["over90s"] > ENGINE_LATE_ALERT_N:
         alerts.append(f"ENGINE-LATE n>90s={stage1['over90s']}")
     if stage2["maxMs"] > BRIDGE_MAX_ALERT_MS:
-        alerts.append(f"BRIDGE-DETECT max={stage2['maxMs']}s over90s={stage2['over90s']}")
+        alerts.append(f"BRIDGE-DETECT max={stage2['maxMs'] / 1000:.0f}s over90s={stage2['over90s']}")
     if stage3["closed24h"] and stage3["tpSharePct"] is not None and stage3["tpSharePct"] < TP_SHARE_ALERT:
         alerts.append(f"LIVE-QUALITY tp={stage3['tpSharePct']}% closed={stage3['closed24h']}")
 
@@ -118,8 +118,8 @@ def main() -> None:
     else:
         print(
             "SIGNAL-DELAY OK — "
-            f"engine avg={stage1['avgMs']}s(n={stage1['n']}) "
-            f"bridge max={stage2['maxMs']}s "
+            f"engine avg={stage1['avgMs'] / 1000:.0f}s(n={stage1['n']}) "
+            f"bridge max={stage2['maxMs'] / 1000:.0f}s "
             f"live24h={stage3['closed24h']} tp={stage3['tpSharePct']}%"
         )
 
