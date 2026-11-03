@@ -307,30 +307,61 @@ fi
 # closed on BOTH layers: dev-up arms both here, /api/pulse re-arms both
 # (src/lib/watchdog-arm.ts), and layer-2's P3 block revives layer-1.
 
-# (1) layer-2 arm — idempotent via pidfile liveness
+# (1) layer-2 arm — pidfile liveness + v14.2 GENERATION FRESHNESS recycle
 WD_DIR="/home/z/my-project/.data/watchdog"
 WD_PIDF="$WD_DIR/pid"
 WD_SH="/home/z/my-project/scripts/watchdog.sh"
-WD_ALIVE=0
-if [ -f "$WD_PIDF" ]; then
-  WD_PID=$(cat "$WD_PIDF" 2>/dev/null)
-  [ -n "$WD_PID" ] && kill -0 "$WD_PID" 2>/dev/null && WD_ALIVE=1
+WD_SH_MTIME=$(stat -c %Y "$WD_SH" 2>/dev/null || echo 0)
+# v14.2 GENERATION-FRESHNESS recycle (operator mandate 2026-11-03
+# «بازچرخانی نسل وچ‌داگ در پنجرهٔ dev-up بعدی», trace 1a19ed5c66db714d):
+# a live --loop whose PROCESS START predates the current watchdog.sh mtime is
+# executing a stale in-memory copy — the sandbox repo restore swaps files under
+# live processes (2026-11-03: gen 1337 parsed 16:35:47Z, file rewritten
+# 16:36:17Z → the v14.1 RING-FRESHNESS deaf-ring heal never existed in that
+# process and a dead price-ws ring stayed invisible ~4h). The restore also
+# rewrote the PIDFILE (stale pid 3498) and PID-REUSE kept that pid looking
+# alive for hours → a second phantom loop was spawned by the pulse armer at
+# 00:24:16 (two healers racing). So: enumerate live loops by CMDLINE (never
+# trust a bare pidfile pid — reuse makes it a stranger), and when ANY of them
+# started before the current file mtime → kill ALL and spawn ONE from the
+# current code. Process start = now − ps etimes (seconds) — /proc stat %Y is
+# NOT the start time on this kernel. State counters survive (WD/state).
+WD_LIVE_PIDS=$(pgrep -f "watchdog.sh --loop" 2>/dev/null || true)
+if [ -z "$WD_LIVE_PIDS" ] && [ -f "$WD_PIDF" ]; then
+  # pidfile fallback — accepted ONLY when the cmdline really is the loop
+  _pf=$(cat "$WD_PIDF" 2>/dev/null)
+  if [ -n "$_pf" ] && kill -0 "$_pf" 2>/dev/null && ps -o cmd= -p "$_pf" 2>/dev/null | grep -q "watchdog.sh --loop"; then
+    WD_LIVE_PIDS="$_pf"
+  fi
 fi
-if [ "$WD_ALIVE" = "0" ]; then
+WD_STALE=0
+for p in $WD_LIVE_PIDS; do
+  _et=$(ps -o etimes= -p "$p" 2>/dev/null | tr -d ' ')
+  if [ -n "${_et:-}" ] && [ "${WD_SH_MTIME:-0}" -gt 0 ]; then
+    [ $(( $(date +%s) - _et )) -lt "$WD_SH_MTIME" ] && WD_STALE=1
+  fi
+done
+if [ -n "$WD_LIVE_PIDS" ] && [ "$WD_STALE" = "1" ]; then
+  echo "[dev-up] watchdog generation STALE (pids:$WD_LIVE_PIDS start < watchdog.sh mtime $(date -u -d @$WD_SH_MTIME '+%H:%M:%SZ' 2>/dev/null)) — recycling to current code"
+  for p in $WD_LIVE_PIDS; do kill "$p" 2>/dev/null; done
+  sleep 2
+  for p in $WD_LIVE_PIDS; do kill -9 "$p" 2>/dev/null; done
+  rm -f "$WD_PIDF"
+  WD_LIVE_PIDS=""
+fi
+if [ -z "$WD_LIVE_PIDS" ]; then
   mkdir -p "$WD_DIR"
-  # v8.5 (STAB-20261022-a): pgrep singleton guard — the pidfile liveness check
-  # above can miss live instances spawned via another path (stale pidfile),
-  # and every dev-up run used to add ANOTHER --loop (duplicates accumulate →
-  # parallel kill/heal races). Never spawn when a live one already exists.
+  # v8.5 re-check inside the spawn branch — closes the recycle race window
+  # (an instance spawned between the kill and this point must not double-arm)
   if pgrep -f "watchdog.sh --loop" >/dev/null 2>&1; then
     echo "[dev-up] watchdog --loop already running (singleton guard) — skip spawn"
   else
     nohup bash "$WD_SH" --loop >> "$WD_DIR/loop.out" 2>&1 &
     echo "$!" > "$WD_PIDF"   # pre-write so the same-run layer-1 call sees it
-    echo "[dev-up] P0 watchdog layer-2 ARMED (pid $!)"
+    echo "[dev-up] P0 watchdog layer-2 ARMED on current code (pid $!)"
   fi
 else
-  echo "[dev-up] P0 watchdog layer-2 already armed (pid $(cat "$WD_PIDF"))"
+  echo "[dev-up] P0 watchdog layer-2 already armed (current-generation pids:$WD_LIVE_PIDS)"
 fi
 
 # (2) layer-1 guardian — idempotent
