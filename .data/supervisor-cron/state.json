@@ -2,15 +2,15 @@
  "ver": "supervisor-cron 1.7.0",
  "pid": 2220,
  "startedAt": "2026-11-03T09:37:12.902Z",
- "updatedAt": "2026-11-03T11:36:00.975Z",
+ "updatedAt": "2026-11-03T11:46:00.998Z",
  "jobs": {
   "sweep": {
-   "lastRunAt": 1793705760935,
+   "lastRunAt": 1793706360935,
    "nextRunAt": 1793706360935,
    "lastStatus": "ok",
-   "lastDurationMs": 38,
+   "lastDurationMs": 63,
    "lastError": null,
-   "runs": 772,
+   "runs": 773,
    "failures": 0
   },
   "progress": {
@@ -50,33 +50,33 @@
    "failures": 0
   },
   "digest": {
-   "lastRunAt": 1793698764903,
-   "nextRunAt": 1793705964903,
+   "lastRunAt": 1793705964904,
+   "nextRunAt": 1793713164904,
    "lastStatus": "ok",
-   "lastDurationMs": 246,
+   "lastDurationMs": 270,
    "lastError": null,
-   "runs": 1,
+   "runs": 2,
    "failures": 0
   },
   "keepwarm": {
-   "lastRunAt": 1793705760935,
-   "nextRunAt": 1793705760935,
+   "lastRunAt": 1793706360935,
+   "nextRunAt": 1793706660935,
    "lastStatus": "ok",
-   "lastDurationMs": 40,
+   "lastDurationMs": 48,
    "lastError": null,
-   "runs": 1464,
+   "runs": 1466,
    "failures": 119
   }
  },
  "lastSweep": {
-  "at": "2026-11-03T11:36:00.973Z",
-  "verdict": "AMBER",
-  "reason": "sentinel :3030 verdict AMBER",
+  "at": "2026-11-03T11:46:00.998Z",
+  "verdict": "GREEN",
+  "reason": "all services up · sentinel not RED",
   "services": {
    "app": {
     "up": true,
     "status": 200,
-    "ms": 23
+    "ms": 43
    },
    "liq": {
     "up": true,
@@ -96,17 +96,17 @@
    "watchdog": {
     "up": true,
     "status": 200,
-    "ms": 1
+    "ms": 3
    },
    "sentinel": {
     "up": true,
     "status": 200,
-    "ms": 1
+    "ms": 2
    },
    "ws": {
     "up": true,
     "status": 400,
-    "ms": 0
+    "ms": 2
    },
    "bridge": {
     "up": true,
@@ -116,16 +116,10 @@
    "tbt": {
     "up": true,
     "status": 200,
-    "ms": 1
+    "ms": 0
    }
   },
-  "anomalies": [
-   {
-    "class": "sentinel-amber",
-    "sev": "warn",
-    "msg": "sentinel :3030 verdict AMBER"
-   }
-  ],
+  "anomalies": [],
   "data": {
    "lastEventAgeMin": 0
   },
@@ -144,16 +138,16 @@
   "ok": true
  },
  "lastDigest": {
-  "at": "2026-11-03T09:39:25.149Z",
+  "at": "2026-11-03T11:39:25.174Z",
   "ok": true,
   "newN": 0
  },
  "lastKeepwarm": {
-  "at": "2026-11-03T11:36:00.975Z",
+  "at": "2026-11-03T11:46:00.983Z",
   "ok": true,
-  "ms": 40,
-  "bootAt": "2026-11-03T11:14:51.461Z",
-  "gitSha": "af098db",
+  "ms": 48,
+  "bootAt": "2026-11-03T11:37:23.187Z",
+  "gitSha": "98fac87",
   "coldStreak": 0
  },
  "coldStreak": 0,
@@ -167,34 +161,6 @@
  "wsDownStreak": 0,
  "staleStreak": 0,
  "history": [
-  {
-   "id": "sweep",
-   "at": 1793695560936,
-   "status": "ok",
-   "durationMs": 43,
-   "detail": "GREEN: all services up · sentinel not RED"
-  },
-  {
-   "id": "keepwarm",
-   "at": 1793695860935,
-   "status": "ok",
-   "durationMs": 22,
-   "detail": "HEARTBEAT OK 22ms boot=08:35:05Z sha=ad80778"
-  },
-  {
-   "id": "keepwarm",
-   "at": 1793696160935,
-   "status": "ok",
-   "durationMs": 27,
-   "detail": "HEARTBEAT OK 27ms boot=08:55:34Z sha=2d0f6d1"
-  },
-  {
-   "id": "sweep",
-   "at": 1793696160935,
-   "status": "ok",
-   "durationMs": 42,
-   "detail": "AMBER: sentinel :3030 verdict AMBER"
-  },
   {
    "id": "keepwarm",
    "at": 1793696460936,
@@ -516,6 +482,34 @@
    "status": "ok",
    "durationMs": 40,
    "detail": "HEARTBEAT OK 40ms boot=11:14:51Z sha=af098db"
+  },
+  {
+   "id": "digest",
+   "at": 1793705964904,
+   "status": "ok",
+   "durationMs": 270,
+   "detail": "digest new=0 settled=0 bridge=ok"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1793706060935,
+   "status": "ok",
+   "durationMs": 18,
+   "detail": "HEARTBEAT OK 18ms boot=11:37:23Z sha=98fac87"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1793706360935,
+   "status": "ok",
+   "durationMs": 48,
+   "detail": "HEARTBEAT OK 48ms boot=11:37:23Z sha=98fac87"
+  },
+  {
+   "id": "sweep",
+   "at": 1793706360935,
+   "status": "ok",
+   "durationMs": 63,
+   "detail": "GREEN: all services up · sentinel not RED"
   }
  ],
  "watchRuns": [
