@@ -1,17 +1,23 @@
 {
  "schemaVersion": 1,
  "kind": "deep",
- "at": "2026-11-02T20:37:01.107Z",
- "tehran": "03/11/2026, 00:07:01",
- "verdict": "GREEN",
- "anomalies": [],
+ "at": "2026-11-03T20:17:27.812Z",
+ "tehran": "03/11/2026, 23:47:27",
+ "verdict": "RED",
+ "anomalies": [
+  {
+   "sev": "crit",
+   "area": "engine",
+   "msg": "no SignalEvent for 498260h+17m — engine may be stalled"
+  }
+ ],
  "services": [
   {
    "key": "app",
    "label": "app :3000",
    "up": true,
    "status": 200,
-   "ms": 24
+   "ms": 70
   },
   {
    "key": "ws",
@@ -46,43 +52,43 @@
    "label": "p0-watchdog :3020",
    "up": true,
    "status": 200,
-   "ms": 2
+   "ms": 3
   }
  ],
  "mem": {
-  "availableMb": 1868
+  "availableMb": 656
  },
  "disk": {
-  "rootFreeGb": 2.84,
-  "tmpFreeGb": 2.84
+  "rootFreeGb": 2.49,
+  "tmpFreeGb": 2.49
  },
  "db": {
   "ok": true,
-  "signals": 3244,
-  "events": 80078,
-  "prices": 91193,
-  "assets": 35,
+  "signals": 3247,
+  "events": 80332,
+  "prices": 93702,
+  "assets": 29,
   "pumps": 2307,
-  "events1h": 2823,
-  "lastEventAgeMs": 2468,
+  "events1h": 1434,
+  "lastEventAgeMs": 1793737045457,
   "stuckActive": 0,
   "orphanEvents": 0,
   "stuckPumpTracks": 0,
-  "dbBytes": 55242752,
-  "walBytes": 4190072
+  "dbBytes": 57462784,
+  "walBytes": 4128272
  },
  "backup": {
   "ok": true,
   "dir": "/tmp/my-project/backups",
   "encCount": 12,
   "zipCount": 12,
-  "newestEncMs": 1793648334694.562,
-  "newestAnyMs": 1793648334694.562,
-  "encAgeMs": 3486173.4379882812
+  "newestEncMs": 1793733495969.5928,
+  "newestAnyMs": 1793733495969.5928,
+  "encAgeMs": 3551528.4072265625
  },
  "watchdog": {
   "ok": true,
-  "ver": "p0-watchdog 1.4.9",
+  "ver": "p0-watchdog 1.5.0",
   "modes": {
    "app": "ok",
    "liq": "ok",
@@ -101,13 +107,13 @@
   },
   "nonOk": 0,
   "memLevel": "ok",
-  "memAvailableMb": 1877,
-  "paused": true
+  "memAvailableMb": 657,
+  "paused": false
  },
  "log": {
-  "windowLines": 142,
-  "errors": 4,
-  "http500": 0,
+  "windowLines": 1165,
+  "errors": 13,
+  "http500": 1,
   "oom": 0,
   "enospc": 0,
   "hydration": 0,
@@ -119,22 +125,22 @@
   "ok": true,
   "source": "live-api",
   "mode": "shadow",
-  "generatedAt": "2026-11-02T20:37:00.879Z",
+  "generatedAt": "2026-11-03T20:17:27.531Z",
   "stats": {
-   "total": 9555,
-   "passSide": 5545,
-   "rejectSide": 4010,
-   "vetoCount": 6556,
-   "tradeCount": 2999,
-   "modelSharePct": 41.8,
+   "total": 600,
+   "passSide": 320,
+   "rejectSide": 280,
+   "vetoCount": 534,
+   "tradeCount": 66,
+   "modelSharePct": 70.8,
    "modelGroundedPct": 100,
-   "avgConfidence": 67.2,
-   "gateAgreement": 2615,
+   "avgConfidence": 80.5,
+   "gateAgreement": 244,
    "paperOpen": 11,
-   "paperSettled": 1403,
+   "paperSettled": 1433,
    "recent24h": {
-    "n": 179,
-    "modelSharePct": 96.6,
+    "n": 140,
+    "modelSharePct": 95.7,
     "lastModelAgeH": 0,
     "lastVerdictAgeH": 0
    }
@@ -147,7 +153,7 @@
     "pct": 100,
     "starved": false,
     "reachable": true,
-    "fed": 1604,
+    "fed": 30,
     "lastFedAgeH": null
    },
    {
@@ -157,7 +163,7 @@
     "pct": 100,
     "starved": false,
     "reachable": true,
-    "fed": 3941,
+    "fed": 290,
     "lastFedAgeH": null
    },
    {
@@ -167,7 +173,7 @@
     "pct": 100,
     "starved": false,
     "reachable": true,
-    "fed": 1397,
+    "fed": 1427,
     "lastFedAgeH": null
    },
    {
@@ -187,48 +193,48 @@
   "tSum": 120,
   "nSumReach": 107,
   "tSumReach": 120,
-  "fenceEntries24hFloor": 274
+  "fenceEntries24hFloor": 232
  },
  "rawcal": {
   "armed": true,
-  "issued": 737,
-  "issuedTotal": 2155,
+  "issued": 740,
+  "issuedTotal": 2158,
   "target": 3217,
   "heartbeatAgeH": 0,
-  "heartbeatAt": "2026-11-02T2036Z ISSUE NX-3244 raw open 1/8"
+  "heartbeatAt": "2026-11-03T2017Z PAUSED fapi ban active (fapi GLOBAL ban window live — 52s left) — issuer stands down, auto-resumes on lift"
  },
  "cards": {
   "ok": true,
-  "sentinelAgeSec": 27,
-  "ticks": 316,
-  "refreshed1h": 9,
-  "failures1h": 95,
-  "staleHot": 5,
+  "sentinelAgeSec": 8,
+  "ticks": 310,
+  "refreshed1h": 15,
+  "failures1h": 80,
+  "staleHot": 2,
   "worst": [
    {
-    "symbol": "RUNEUSDT",
-    "ageMin": 59,
+    "symbol": "HUMAUSDT",
+    "ageMin": 54,
     "heat": "warm"
    },
    {
-    "symbol": "QUSDT",
-    "ageMin": 58,
-    "heat": "hot"
-   },
-   {
-    "symbol": "LSKUSDT",
-    "ageMin": 53,
+    "symbol": "SAGAUSDT",
+    "ageMin": 46,
     "heat": "warm"
    },
    {
     "symbol": "EVAAUSDT",
-    "ageMin": 34,
+    "ageMin": 36,
     "heat": "hot"
    },
    {
     "symbol": "HOTUSDT",
-    "ageMin": 1,
-    "heat": "hot"
+    "ageMin": 27,
+    "heat": "warm"
+   },
+   {
+    "symbol": "HYPEUSDT",
+    "ageMin": 26,
+    "heat": "warm"
    }
   ]
  },
