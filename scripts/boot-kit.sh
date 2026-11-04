@@ -61,34 +61,12 @@ if [ -n "$ENV_MISSING" ]; then
   fi
 fi
 
-# ── (0e) BRIDGE-KEYS plane — escrow dies on every re-provision ─────────────
-# 2026-11-02 saw 11 recycles; each wiped /home/z/.nexus-secrets + bridge .env while
-# the tree sometimes rolled back wholesale (so scripts/restore-keys.sh itself could
-# be gone at boot). This plane is therefore SELF-CONTAINED: needs only the tbenv
-# .enc (in /tmp/my-project/backups/env/ — survived all 11 wipes), openssl, and
-# BACKUP_PASSPHRASE from the root .env (restored by plane 0b above). Verifies the
-# known fingerprint prefix before installing; never prints key material.
-TB_ENV="$ROOT/mini-services/toobit-bridge/.env"
-if [ ! -s "$TB_ENV" ] && [ -s "$ROOT/.env" ]; then
-  TB_BAK="$(ls -t /tmp/my-project/backups/env/tbenv-*.enc 2>/dev/null | head -1)"
-  if [ -n "$TB_BAK" ]; then
-    set -a; . "$ROOT/.env"; set +a
-    DEC="$(mktemp)"
-    if openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -in "$TB_BAK" -pass "env:BACKUP_PASSPHRASE" -out "$DEC" 2>/dev/null \
-       && [ "$(sha256sum "$DEC" | cut -c1-8)" = "36554c1a" ]; then
-      mkdir -p /home/z/.nexus-secrets && chmod 700 /home/z/.nexus-secrets
-      mkdir -p "$(dirname "$TB_ENV")"
-      cp "$DEC" "$TB_ENV" && chmod 600 "$TB_ENV"
-      cp "$DEC" /home/z/.nexus-secrets/toobit-bridge.env && chmod 600 /home/z/.nexus-secrets/toobit-bridge.env
-      ENV_STATUS="$ENV_STATUS+keys"; ACTIONS="$ACTIONS bridge-keys:restored($(basename "$TB_BAK"))"
-    else
-      ACTIONS="$ACTIONS bridge-keys:RESTORE-FAILED"
-    fi
-    rm -f "$DEC"
-  else
-    ACTIONS="$ACTIONS bridge-keys:no-backup"
-  fi
-fi
+# ── (0e) BRIDGE-KEYS plane — RETIRED 2026-11-05 ────────────────────────────
+# TOOBIT EXEC BRIDGE decommissioned by operator mandate (trace 1a1a8ea4186c6571):
+# live trades flattened (XAU closed, 0 positions / 0 orders, exchange-verified),
+# module + watchdog + cron 491600 removed. Key-restore plane intentionally gone —
+# the remaining tbenv-*.enc escrow in /tmp/my-project/backups/env/ is dead weight;
+# the API key itself should be revoked in the Toobit panel.
 
 # ── (0c) NEXTCACHE plane — warm .next restore (P1 spike-cut) ───────────────
 NC_STATUS="cold"

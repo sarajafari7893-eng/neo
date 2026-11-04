@@ -1,0 +1,773 @@
+     1→// ── NEXUS//SIGNALS FAPI GATE (server-only, v10.24 — Task 34-a) ──────────────
+     2→// Process-wide WEIGHT-BASED token bucket for Binance USDT-M futures REST
+     3→// (fapi.binance.com). WHY: 9+ modules in the Next.js process each did their own
+     4→// uncoordinated fetch() to the same host and the trade mini-service added
+     5→// ~1800 weight/min on top → Binance answered with HTTP 418 IP-bans carrying
+     6→// stacked multi-hour "banned until <ms>" windows. This gate is the single
+     7→// choke-point every futures-REST call in THIS process must pass:
+     8→//
+     9→//   · WEIGHT BUDGET — rolling-60s sliding window, default 1100 weight/min
+    10→//     (fapi real limit is 2400/min per IP; ~2× headroom absorbs drift between
+    11→//     weight estimates and the ungated mini-service until Task 34-b).
+    12→//   · LANES — "critical" (engine price feed, trigger measurements) executes
+    13→//     immediately when tokens exist, with ONE small negative retry after
+    14→//     250ms when momentarily empty; "telemetry" (every rotating scanner/
+    15→//     sampler/board) is DROPPED (returns null) when tokens are missing —
+    16→//     no unbounded queues, no storm amplification. All callers are
+    17→//     null-tolerant by contract.
+    18→//   · GLOBAL BAN AWARENESS (refined for the multi-IP egress pool — measured
+    19→//     2026-09-26: the sandbox egress rotates across several IPs and Binance's
+    20→//     418 body NAMES the banned one: «IP(47.57.x.x) banned until <ms>», with
+    21→//     different pool IPs banned in different windows):
+    22→//       – 418/429 body naming an IP → PER-IP ban record (capped now+35min),
+    23→//         the request's weight is REFUNDED (ban responses carry no weight
+    24→//         cost) and the call RETRIES (≤2, 120ms apart) — the pool usually
+    25→//         rotates onto a clean IP, so one unlucky draw never starves the app.
+    26→//       – ALL retries land on banned IPs → one unlucky draw too many: arm a
+    27→//         SHORT 60s global block, and only when that happens 3 times IN A ROW
+    28→//         (no successful call between) treat the pool as saturated and arm the
+    29→//         full zero-network window min(worst ban end, now+35min). A single
+    30→//         clean 2xx resets the streak — self-healing probes.
+    31→//       – 418/429 body WITHOUT a parseable IP (unknown scope — the classic
+    32→//         single-IP case): arm the global zero-network window immediately —
+    33→//         "banned until X" → min(X, now+35min); unparseable 418 → 10min;
+    34→//         unparseable 429 → 2min.
+    35→//       – While the global window is live, gateFetch returns null INSTANTLY —
+    36→//         zero network calls, so a live ban can never be extended by us.
+    37→//   · SINGLE-FLIGHT — one shared request per (host,path) while in flight and
+    38→//     for a 2s result window, so multiple modules asking the same endpoint
+    39→//     inside one tick share one weight spend.
+    40→//   · HOST AWARENESS — default host fapi.binance.com, optional alt host
+    41→//     (fapi1) for the market-feed availability ladder; bans/weight are
+    42→//     per-IP so both hosts share the SAME budget and ban state.
+    43→//
+    44→// NEVER THROWS: gateFetch returns parsed JSON or null on any failure.
+    45→// State lives on globalThis so Turbopack's dev module-graph duplication
+    46→// (route graph vs engine graph) still shares ONE process-wide bucket.
+    47→//
+    48→// SPOT (api.binance.com) and mirror-plane hosts (v14.0 Binance-only) must
+    49→// NOT pass through here — futures fapi host only.
+    50→//
+    51→// ── v12.0 EGRESS/IP MANAGER (Task 44-②, operator order «مدیریت egress/IP
+    52→// برای رفع بن fapi») ──────────────────────────────────────────────────────────
+    53→// Measured 2026-10-18: the sandbox egress is a rotating NAT pool and Binance
+    54→// bans POOL IPs with LONG windows (three named IPs banned until 10-18 19:47Z /
+    55→// 22:37Z / 10-19 13:26Z — each plain request is a lottery draw). Three new
+    56→// weapons:
+    57→//   1. EGRESS SAMPLER — api.ipify.org probe (3.5s timeout, 120s cache,
+    58→//      single-flight, never throws) tells us WHICH pool IP a draw exited from.
+    59→//   2. ROTATION-AWARE EARLY PROBE — while a global ban window is live, ONE
+    60→//      critical-lane call per 120s may bypass the silence IF the sampled IP is
+    61→//      clean: the moment the pool rotates, the window LIFTS instantly instead
+    62→//      of waiting out the 35min cap. A failed probe costs nothing (banned
+    63→//      responses carry no weight) and keeps the window armed.
+    64→//   3. BAN-LEDGER PERSISTENCE — named-IP ban records survive process
+    65→//      restarts (.data/fapi-gate/bans.json, 30s debounced) so a recycle no
+    66→//      longer re-learns the minefield by burning fresh probes.
+    67→//
+    68→
+    69→// v10.25 (Task 41, operator order «بایننس ای پی را بلاک نکرده باشد و قابل
+    70→// جایگزینی باشد»): the host is env-swappable WITHOUT a code change — if fapi
+    71→// is ever hard-blocked (451/region/grey-list, not just a timed 418), set
+    72→// NEXUS_FAPI_HOST in .env to a reachable futures-mirror and restart the app.
+    73→// Default stays the canonical host. Downstream replaceability ladder is
+    74→// already layered: fapi-gate (this) → SPOT-MIRROR aggTrade WS → spot REST
+    75→// klines/price fallback → Binance-only liq lanes (v14.0).
+    76→//
+    77→// ── v14.2 BAN-AWARE RECOVERY PACER (operator order «توصیه‌ها را کامل و مهندسی
+    78→// انجام بده», trace 1a1a15fb6bc0bd75 — audit rec #3 «throttle REST بن-آگاه»,
+    79→// NX-3247 forensics fc143950) ───────────────────────────────────────────────
+    80→// WHY: the old budget was FLAT — the instant a ban window expired the full
+    81→// 1100 weight/min came back at once, every starved scanner refilled its
+    82→// rotation in the same minute, and the pool re-saturated into a fresh 418
+    83→// spiral (measured 10-19: 11:58Z→12:34Z→13:09Z pause spiral). The pacer:
+    84→//   · RECOVERY RAMP — for 10min after a global ban window ends, the effective
+    85→//     budget ramps 25%→100% linearly. Early recovery minutes carry the
+    86→//     CRITICAL lane first (engine price feed / triggers), telemetry scanners
+    87→//     stretch back out gradually instead of stampeding.
+    88→//   · POOL-DISTRESS CAP — while ≥2 named egress IPs sit inside live ban
+    89→//     windows (the 10-18 measurement: 3 named IPs banned simultaneously),
+    90→//     the effective budget is capped at 50% — fewer lottery draws, less ban
+    91→//     pressure, named-IP evidence stays intel-shaped.
+    92→// CRITICAL lane keeps its negative retry; the floor (200/min) is the same
+    93→// clamp configureFapiGate enforces, so the pacer can never zero the plane.
+    94→import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+    95→
+    96→const FAPI_HOST = process.env.NEXUS_FAPI_HOST?.trim().replace(/\/+$/, "") || "https://fapi.binance.com";
+    97→const DEFAULT_TIMEOUT_MS = 6500;
+    98→const WINDOW_MS = 60_000;
+    99→const DEFAULT_BUDGET = 1100; // real fapi limit 2400/min per IP — headroom by design
+   100→const BAN_CAP_MS = 35 * 60_000; // never record a ban window longer than 35min even if Binance claims hours
+   101→// v12.6.1 — mixed-pool era: an UNPARSEABLE 418 is evidence of ONE banned draw,
+   102→// not a pool-wide ban (measured 2026-10-20 19:32Z: boot's first draw 418'd
+   103→// unparseable while 6/10 fresh connections succeeded — the old 10min arm
+   104→// locked the whole app out of a majority-clean pool). 2min + the streak
+   105→// escalation ladder covers true saturation.
+   106→const BAN_418_DEFAULT_MS = 2 * 60_000; // unparseable 418 → short backoff (was 10min — pool-starvation lesson)
+   107→const BAN_429_DEFAULT_MS = 2 * 60_000; // unparseable 429 → short warning backoff
+   108→const CRITICAL_RETRY_MS = 250; // the "small negative retry" for the critical lane
+   109→const SF_RESULT_MS = 2_000; // single-flight result sharing window
+   110→const SF_MAP_CAP = 512;
+   111→const SPEND_CAP = 4096; // defensive cap on window entries (~worst-case small-weight bursts)
+   112→const BAN_RETRIES = 3; // extra attempts after a named-IP ban (pool rotation)
+   113→// v12.6.2 ESCALATING RETRY CADENCE: the NAT egress mapping rotates over ~30s
+   114→// (measured 2026-10-20 19:41Z: keep-alive 6×418 → 30s later 6×200), so three
+   115→// retries 120ms apart shared ONE doomed mapping. Spacing the retries across
+   116→// it (120ms → 2s → 8s) lets draws 2-4 land on a rotated mapping — higher
+   117→// per-call success, fewer 60s short blocks. Worst added latency ~10s on a
+   118→// banned stretch; the ladder still escalates to the 60s block on failure.
+   119→const BAN_RETRY_DELAYS_MS = [120, 2_000, 8_000];
+   120→const POOL_BLOCK_SHORT_MS = 60_000; // all-retries-banned → short block, let the pool rotate
+   121→const POOL_STREAK_FOR_LONG_BLOCK = 3; // consecutive all-banned calls ⇒ pool saturated
+   122→const IP_BAN_MAP_CAP = 16;
+   123→// ── v12.0 egress manager constants ──
+   124→const EGRESS_SAMPLE_TTL_MS = 120_000; // ipify cache — one draw sample per 2min
+   125→const EGRESS_TIMEOUT_MS = 3_500;
+   126→const PROBE_COOLDOWN_MS = 120_000; // one early-probe attempt per 2min while a window is live
+   127→const BAN_PERSIST_DIR = `${process.cwd()}/.data/fapi-gate`;
+   128→const BAN_PERSIST_PATH = `${BAN_PERSIST_DIR}/bans.json`;
+   129→const BAN_PERSIST_DEBOUNCE_MS = 30_000;
+   130→// v14.2 ban-aware recovery pacer
+   131→const PACER_RECOVERY_MS = 10 * 60_000; // post-ban ramp window (25%→100%)
+   132→const PACER_RAMP_FLOOR = 0.25; // budget fraction at the first recovery minute
+   133→const PACER_DISTRESS_CAP = 0.5; // budget cap while ≥2 named IPs are banned live
+   134→const PACER_MIN_BUDGET = 200; // same clamp floor as configureFapiGate
+   135→
+   136→export type FapiGatePriority = "critical" | "telemetry";
+   137→
+   138→export interface GateFetchOpts {
+   139→  weight?: number; // explicit weight; default resolved from the path
+   140→  priority?: FapiGatePriority; // default "telemetry"
+   141→  timeoutMs?: number; // default 6500
+   142→  host?: string; // default fapi.binance.com (alt: fapi1 — same IP pool, same budget)
+   143→  /** v12.0 internal — rotation-aware early probe: single attempt, no ban retries */
+   144→  singleProbe?: boolean;
+   145→}
+   146→
+   147→export interface FapiGateStats {
+   148→  attempted: number; // every gateFetch call
+   149→  allowed: number; // actual HTTP requests issued that returned 2xx JSON
+   150→  droppedBudget: number; // shed by the weight bucket (telemetry drop / critical post-retry)
+   151→  droppedBan: number; // shed instantly because a global ban window is live
+   152→  lastBanUntil: number; // epoch ms of the last armed GLOBAL ban end (0 = never)
+   153→  budgetPer60s: number;
+   154→  usedLast60s: number;
+   155→  singleFlightShared: number; // calls served by an in-flight/2s-window shared request
+   156→  banRemainingMs: number;
+   157→  bannedPoolIps: number; // named egress IPs currently inside a ban window (observability)
+   158→  retriesAfterBan: number; // requests re-attempted after a named-IP 418/429
+   159→  // v12.0 egress manager
+   160→  probesIssued: number; // rotation-aware early probes attempted during a ban window
+   161→  probeLifts: number; // windows lifted early because a clean draw succeeded
+   162→  effectiveBudgetPer60s: number; // v14.2 pacer view of the budget (≤ budgetPer60s)
+   163→}
+   164→
+   165→interface SpendEntry { at: number; w: number }
+   166→
+   167→interface GateState {
+   168→  budgetPer60s: number;
+   169→  banUntil: number; // GLOBAL zero-network window (unknown-scope / pool-wide bans only)
+   170→  spend: SpendEntry[]; // weight spends inside the rolling window (time-ordered)
+   171→  windowSum: number;
+   172→  inflight: Map<string, { startedAt: number; settled: boolean; promise: Promise<unknown> }>;
+   173→  ipBans: Map<string, number>; // named egress IP → ban end (observability + pool evidence)
+   174→  recentBanEvents: Array<{ at: number; ip: string }>; // named-IP ban events (observability)
+   175→  allBanStreak: number; // consecutive gateFetch calls where EVERY attempt was banned
+   176→  // v12.0 egress manager
+   177→  sampledIp: string | null;
+   178→  sampledAt: number;
+   179→  lastBannedIp: string | null;
+   180→  lastProbeAt: number;
+   181→  stats: {
+   182→    attempted: number;
+   183→    allowed: number;
+   184→    droppedBudget: number;
+   185→    droppedBan: number;
+   186→    lastBanUntil: number;
+   187→    singleFlightShared: number;
+   188→    retriesAfterBan: number;
+   189→    probesIssued: number;
+   190→    probeLifts: number;
+   191→    effectiveBudgetPer60s: number;
+   192→  };
+   193→}
+   194→
+   195→// globalThis singleton — survives Turbopack dev module-graph duplication
+   196→const g = globalThis as unknown as { __nexusFapiGate?: GateState };
+   197→const state: GateState =
+   198→  g.__nexusFapiGate ??
+   199→  (g.__nexusFapiGate = {
+   200→    budgetPer60s: DEFAULT_BUDGET,
+   201→    banUntil: 0,
+   202→    spend: [],
+   203→    windowSum: 0,
+   204→    inflight: new Map(),
+   205→    ipBans: new Map(),
+   206→    recentBanEvents: [],
+   207→    allBanStreak: 0,
+   208→    sampledIp: null,
+   209→    sampledAt: 0,
+   210→    lastBannedIp: null,
+   211→    lastProbeAt: 0,
+   212→    stats: { attempted: 0, allowed: 0, droppedBudget: 0, droppedBan: 0, lastBanUntil: 0, singleFlightShared: 0, retriesAfterBan: 0, probesIssued: 0, probeLifts: 0, effectiveBudgetPer60s: DEFAULT_BUDGET },
+   213→  });
+   214→
+   215→// ── v12.0 ban-ledger persistence (survive restarts without re-probing) ──
+   216→// v12.6 BINANCE-REVIVAL (operator order «سیستم را به بایننس متصل کن»,
+   217→// trace 1a15ac1a1724cdb1) — POLICY SPLIT between ban scopes. Measured 2026-10-20
+   218→// 19:17-19:26Z: with ONE named pool IP banned (8.212.10.159), 9 direct draws
+   219→// returned 7×200 (klines/OI/funding/depth/aggTrades) and 2×418 — the NAT pool
+   220→// is MAJORITY-CLEAN, yet the v12.1 rule “one named-IP ban in the ledger ⇒
+   221→// GLOBAL zero-network window until the worst ban end” blacked out the whole
+   222→// fapi plane (flow BINANCE rung, venue consensus, OI/funding/tape/depth) for
+   223→// up to 35min per event and pushed flow weighting ×0.5 for most of its life.
+   224→//   · NAMED-IP entries («1.2.3.4»: until) = pool INTEL: recorded, retried
+   225→//     around (≤2, 120ms — pool rotation), but they NO LONGER arm the global
+   226→//     silence. Worst case stays bounded by the existing escalation ladder
+   227→//     (2 retries → 60s block → 3-streak ⇒ real-end window) — the Task-50
+   228→//     anti-spiral law applies where it matters (saturated pool / unknown scope).
+   229→//   · UNKNOWN-SCOPE entries (unparseable bodies, “_pool” markers, naked
+   230→//     “banned until X”) = the pool itself is the suspect ⇒ immediate global
+   231→//     window, exactly as before.
+   232→export function isUnknownScopeKey(key: string): boolean {
+   233→  return !/^\d{1,3}(\.\d{1,3}){3}$/.test(key); // anything that is not an IPv4 literal ("_pool", hostnames…)
+   234→}
+   235→
+   236→try {
+   237→  const raw = JSON.parse(readFileSync(BAN_PERSIST_PATH, "utf8")) as { ipBans?: Record<string, number> } | null;
+   238→  const nowMs = Date.now();
+   239→  let unknownMax = 0;
+   240→  let named = 0;
+   241→  for (const [key, until] of Object.entries(raw?.ipBans ?? {})) {
+   242→    if (typeof until !== "number" || until <= nowMs) continue;
+   243→    if (isUnknownScopeKey(key)) {
+   244→      if (until > unknownMax) unknownMax = until;
+   245→    } else {
+   246→      state.ipBans.set(key, until);
+   247→      named++;
+   248→    }
+   249→  }
+   250→  if (unknownMax > state.banUntil) {
+   251→    state.banUntil = unknownMax;
+   252→    console.log(`[fapi-gate] v12.6 restored UNKNOWN-SCOPE pool ban from disk — silence armed until ${new Date(unknownMax).toISOString()}`);
+   253→  }
+   254→  if (state.ipBans.size > 0) {
+   255→    // v12.6: named-IP records are INTEL only — no global arm at boot. The
+   256→    // first gateFetch takes the lottery draw; a banned draw retries around
+   257→    // the named IP (pool rotation) exactly like any other 418.
+   258→    console.log(`[fapi-gate] v12.6 restored ${named} named-IP ban record(s) as intel (no global arm — majority-clean pool policy)`);
+   259→  }
+   260→} catch { /* no ledger yet — fine */ }
+   261→let banPersistTimer: ReturnType<typeof setTimeout> | null = null;
+   262→function persistBans(): void {
+   263→  if (banPersistTimer) return;
+   264→  banPersistTimer = setTimeout(() => {
+   265→    banPersistTimer = null;
+   266→    try {
+   267→      mkdirSync(BAN_PERSIST_DIR, { recursive: true });
+   268→      const nowMs = Date.now();
+   269→      const ipBans: Record<string, number> = {};
+   270→      // v12.1 TASK-49 — READ-MERGE-WRITE: mini-services write their own 418
+   271→      // discoveries (incl. "_pool" unknown-scope markers with REAL ends) to
+   272→      // this same file. Blindly overwriting with state-only data DELETED a
+   273→      // 15:20Z pool ban mid-storm (2026-10-19) — never shorten/lose foreign
+   274→      // entries: merge disk first, then overlay ours, keep live only.
+   275→      try {
+   276→        const disk = JSON.parse(readFileSync(BAN_PERSIST_PATH, "utf8")) as { ipBans?: Record<string, number> } | null;
+   277→        for (const [ip, until] of Object.entries(disk?.ipBans ?? {})) {
+   278→          if (typeof until === "number" && until > nowMs) ipBans[ip] = until;
+   279→        }
+   280→      } catch {
+   281→        /* no ledger yet */
+   282→      }
+   283→      for (const [ip, until] of state.ipBans) if (until > nowMs) ipBans[ip] = Math.max(ipBans[ip] ?? 0, until);
+   284→      writeFileSync(BAN_PERSIST_PATH, JSON.stringify({ savedAt: new Date().toISOString(), ipBans }, null, 1));
+   285→    } catch { /* fail-open — observability only */ }
+   286→  }, BAN_PERSIST_DEBOUNCE_MS);
+   287→}
+   288→
+   289→// ── v12.0 egress IP sampler (which pool IP did this draw exit from?) ──
+   290→let egressInflight: Promise<string | null> | null = null;
+   291→export async function sampleEgressIp(): Promise<string | null> {
+   292→  if (state.sampledIp && Date.now() - state.sampledAt < EGRESS_SAMPLE_TTL_MS) return state.sampledIp;
+   293→  if (egressInflight) return egressInflight;
+   294→  egressInflight = (async () => {
+   295→    try {
+   296→      const ctrl = new AbortController();
+   297→      const t = setTimeout(() => ctrl.abort(), EGRESS_TIMEOUT_MS);
+   298→      const res = await fetch("https://api.ipify.org?format=json", { signal: ctrl.signal, cache: "no-store" });
+   299→      clearTimeout(t);
+   300→      if (!res.ok) return null;
+   301→      const j = (await res.json()) as { ip?: string };
+   302→      const ip = typeof j.ip === "string" && j.ip ? j.ip : null;
+   303→      if (ip) {
+   304→        state.sampledIp = ip;
+   305→        state.sampledAt = Date.now();
+   306→      }
+   307→      return ip;
+   308→    } catch {
+   309→      return null; // sampler down — never blocks the gate (fail-open)
+   310→    } finally {
+   311→      egressInflight = null;
+   312→    }
+   313→  })();
+   314→  return egressInflight;
+   315→}
+   316→
+   317→export interface FapiEgressStatus {
+   318→  banUntil: number;
+   319→  banRemainingMs: number;
+   320→  sampledIp: string | null;
+   321→  sampledAt: number | null;
+   322→  lastBannedIp: string | null;
+   323→  bannedIps: Array<{ ip: string; until: number; remainingMs: number }>;
+   324→  probesIssued: number;
+   325→  probeLifts: number;
+   326→  lastProbeAt: number;
+   327→}
+   328→
+   329→/** Live egress/ban picture for /api/egress-status and the nervous sweep. */
+   330→export function fapiEgressStatus(): FapiEgressStatus {
+   331→  const now = Date.now();
+   332→  const bannedIps: FapiEgressStatus["bannedIps"] = [];
+   333→  for (const [ip, until] of state.ipBans) if (until > now) bannedIps.push({ ip, until, remainingMs: until - now });
+   334→  bannedIps.sort((a, b) => b.until - a.until);
+   335→  return {
+   336→    banUntil: state.banUntil,
+   337→    banRemainingMs: Math.max(0, state.banUntil - now),
+   338→    sampledIp: state.sampledIp,
+   339→    sampledAt: state.sampledAt || null,
+   340→    lastBannedIp: state.lastBannedIp,
+   341→    bannedIps,
+   342→    probesIssued: state.stats.probesIssued,
+   343→    probeLifts: state.stats.probeLifts,
+   344→    lastProbeAt: state.lastProbeAt,
+   345→  };
+   346→}
+   347→
+   348→/** Optional runtime tuning — sane defaults mean nobody needs to call this. */
+   349→export function configureFapiGate(opts?: { budgetPer60s?: number }): void {
+   350→  if (opts?.budgetPer60s !== undefined) {
+   351→    const b = Math.max(200, Math.min(2300, Math.round(opts.budgetPer60s)));
+   352→    state.budgetPer60s = b;
+   353→  }
+   354→}
+   355→
+   356→export function fapiBanRemainingMs(): number {
+   357→  return Math.max(0, state.banUntil - Date.now());
+   358→}
+   359→
+   360→// ── v14.2 BAN-ACTIVITY PROBE (operator order «توصیه‌ها را کامل و مهندسی انجام
+   361→// بده» — audit rec #1 «تعلیق issue خودکار RAW-CAL هنگام بن فعال fapi») ─────
+   362→// ONE honest answer to «is the fapi plane ban-degraded right now?», shared by
+   363→// the RAW-CAL issuer and any future consumer. Active when EITHER the global
+   364→// zero-network window is live (unknown-scope / pool-wide evidence) OR the pool
+   365→// shows distress (≥2 named egress IPs banned simultaneously — the 10-18/10-19
+   366→// storm shape). A SINGLE named-IP ban is NOT distress (v12.6 majority-clean
+   367→// pool policy — flow keeps riding the ladder there).
+   368→export interface FapiBanActivity {
+   369→  active: boolean;
+   370→  reason: string | null;
+   371→  globalRemainingMs: number;
+   372→  namedLiveIps: number;
+   373→  effectiveBudgetPer60s: number;
+   374→}
+   375→
+   376→export function fapiBanActivity(): FapiBanActivity {
+   377→  const now = Date.now();
+   378→  const globalRemainingMs = Math.max(0, state.banUntil - now);
+   379→  const namedLiveIps = namedLiveBanCount(now);
+   380→  if (globalRemainingMs > 0) {
+   381→    return { active: true, reason: `fapi GLOBAL ban window live — ${Math.round(globalRemainingMs / 1000)}s left`, globalRemainingMs, namedLiveIps, effectiveBudgetPer60s: effectiveBudgetPer60s() };
+   382→  }
+   383→  if (namedLiveIps >= 2) {
+   384→    return { active: true, reason: `fapi pool distress — ${namedLiveIps} named egress IPs inside live ban windows`, globalRemainingMs, namedLiveIps, effectiveBudgetPer60s: effectiveBudgetPer60s() };
+   385→  }
+   386→  return { active: false, reason: null, globalRemainingMs, namedLiveIps, effectiveBudgetPer60s: effectiveBudgetPer60s() };
+   387→}
+   388→
+   389→export function fapiGateStats(): FapiGateStats {
+   390→  const now = Date.now();
+   391→  pruneWindow(now);
+   392→  let bannedIps = 0;
+   393→  for (const [, until] of state.ipBans) if (until > now) bannedIps++;
+   394→  return {
+   395→    attempted: state.stats.attempted,
+   396→    allowed: state.stats.allowed,
+   397→    droppedBudget: state.stats.droppedBudget,
+   398→    droppedBan: state.stats.droppedBan,
+   399→    lastBanUntil: state.stats.lastBanUntil,
+   400→    budgetPer60s: state.budgetPer60s,
+   401→    usedLast60s: state.windowSum,
+   402→    singleFlightShared: state.stats.singleFlightShared,
+   403→    banRemainingMs: fapiBanRemainingMs(),
+   404→    bannedPoolIps: bannedIps,
+   405→    retriesAfterBan: state.stats.retriesAfterBan,
+   406→    probesIssued: state.stats.probesIssued,
+   407→    probeLifts: state.stats.probeLifts,
+   408→    effectiveBudgetPer60s: effectiveBudgetPer60s(),
+   409→  };
+   410→}
+   411→
+   412→// ── weight table (Binance USDT-M futures documented weights) ────────────────
+   413→// klines ~2 (limit≤100) · depth 2-5-10 by limit · aggTrades 20 · trades 20 ·
+   414→// ticker/24hr 1 per-symbol / 40 full-universe · premiumIndex 1 per-symbol /
+   415→// 10 all-markers · futures/data/* 1 (openInterestHist, L/S ratios, basis…) ·
+   416→// exchangeInfo 1 · ping/time 1 · unknown default 5 (conservative).
+   417→function resolveWeight(path: string): number {
+   418→  const qIdx = path.indexOf("?");
+   419→  const ep = (qIdx === -1 ? path : path.slice(0, qIdx)).replace(/^\//, "").replace(/\/+$/, "");
+   420→  const query = qIdx === -1 ? "" : path.slice(qIdx + 1);
+   421→  const limit = (): number | null => {
+   422→    const m = /[?&]limit=(\d+)/.exec(query);
+   423→    return m ? Number(m[1]) : null;
+   424→  };
+   425→  switch (ep) {
+   426→    case "fapi/v1/ping":
+   427→    case "fapi/v1/time":
+   428→    case "fapi/v1/exchangeInfo":
+   429→      return 1;
+   430→    case "fapi/v1/klines": {
+   431→      const l = limit() ?? 500;
+   432→      return l <= 100 ? 2 : l <= 499 ? 5 : 10;
+   433→    }
+   434→    case "fapi/v1/depth": {
+   435→      const l = limit() ?? 100;
+   436→      return l <= 100 ? 2 : l <= 500 ? 5 : 10;
+   437→    }
+   438→    case "fapi/v1/aggTrades":
+   439→    case "fapi/v1/trades":
+   440→      return 20;
+   441→    case "fapi/v1/ticker/24hr":
+   442→      return /[?&]symbol=/.test(query) ? 1 : 40;
+   443→    case "fapi/v1/premiumIndex":
+   444→      return /[?&]symbol=/.test(query) ? 1 : 10;
+   445→    default:
+   446→      if (ep.startsWith("futures/data/")) return 1; // openInterestHist / L-S ratios / basis family
+   447→      return 5; // unknown → conservative default (covers fapi/v1/fundingRate etc.)
+   448→  }
+   449→}
+   450→
+   451→function pruneWindow(now: number): void {
+   452→  const cutoff = now - WINDOW_MS;
+   453→  while (state.spend.length > 0 && state.spend[0]!.at <= cutoff) {
+   454→    const e = state.spend.shift()!;
+   455→    state.windowSum -= e.w;
+   456→  }
+   457→  if (state.spend.length > SPEND_CAP) {
+   458→    // defensive: drop the oldest half rather than grow unbounded
+   459→    const keep = state.spend.slice(Math.floor(state.spend.length / 2));
+   460→    let sum = 0;
+   461→    for (const e of keep) sum += e.w;
+   462→    state.spend = keep;
+   463→    state.windowSum = sum;
+   464→  }
+   465→}
+   466→
+   467→/** Reserve `weight` from the rolling window. Returns the spend entry (for refunds) or null. */
+   468→// ── v14.2 BAN-AWARE RECOVERY PACER ────────────────────────────────────────
+   469→// The ONLY budget the rolling window spends against. A flat budget after a
+   470→// ban ended = instant re-saturation stampede (the 10-19 spiral); the pacer
+   471→// gives the pool a 10min ramp and caps telemetry while the pool shows live
+   472→// distress. Global-window minutes are NOT handled here (gateFetch drops
+   473→// everything while the window is live) — the pacer shapes the BEFORE
+   474→// (distress) and AFTER (recovery) of each ban episode.
+   475→function namedLiveBanCount(now: number): number {
+   476→  let n = 0;
+   477→  for (const [, until] of state.ipBans) if (until > now) n++;
+   478→  return n;
+   479→}
+   480→
+   481→export function effectiveBudgetPer60s(): number {
+   482→  const now = Date.now();
+   483→  let factor = 1;
+   484→  // POOL DISTRESS — ≥2 named egress IPs inside live ban windows: cap telemetry.
+   485→  if (namedLiveBanCount(now) >= 2) factor = Math.min(factor, PACER_DISTRESS_CAP);
+   486→  // RECOVERY RAMP — 10min linear 25%→100% after the last global window ends.
+   487→  if (state.banUntil > 0) {
+   488→    const sinceBan = now - state.banUntil;
+   489→    if (sinceBan >= 0 && sinceBan < PACER_RECOVERY_MS) {
+   490→      factor = Math.min(factor, PACER_RAMP_FLOOR + (1 - PACER_RAMP_FLOOR) * (sinceBan / PACER_RECOVERY_MS));
+   491→    }
+   492→  }
+   493→  return Math.max(PACER_MIN_BUDGET, Math.round(state.budgetPer60s * factor));
+   494→}
+   495→
+   496→function takeWeight(weight: number): SpendEntry | null {
+   497→  const now = Date.now();
+   498→  pruneWindow(now);
+   499→  if (state.windowSum + weight > effectiveBudgetPer60s()) return null;
+   500→  const entry: SpendEntry = { at: now, w: weight };
+   501→  state.spend.push(entry);
+   502→  state.windowSum += weight;
+   503→  return entry;
+   504→}
+   505→
+   506→/** 418/429 responses carry no weight cost — give the reservation back. */
+   507→function refundWeight(entry: SpendEntry | null): void {
+   508→  if (!entry) return;
+   509→  const idx = state.spend.indexOf(entry);
+   510→  if (idx === -1) return; // already pruned out of the window (its cost is gone too)
+   511→  state.spend.splice(idx, 1);
+   512→  state.windowSum -= entry.w;
+   513→}
+   514→
+   515→function armGlobalBan(until: number): void {
+   516→  if (until > state.banUntil) {
+   517→    state.banUntil = until;
+   518→    state.stats.lastBanUntil = until;
+   519→  }
+   520→}
+   521→
+   522→/** Record a 418/429 body. Returns { ip, until } when the body NAMES the banned egress IP. */
+   523→function noteBanBody(status: number, body: string): { ip: string; until: number } | null {
+   524→  const now = Date.now();
+   525→  const named = /IP\(([\d.]+)\)\s*banned until (\d+)/i.exec(body);
+   526→  if (named) {
+   527→    const ip = named[1]!;
+   528→    // v12.1 TASK-49: the LEDGER carries Binance's REAL end (sanity-capped 24h) —
+   529→    // the cosmetic +35min cap only applies to the global silence window below.
+   530→    // Capping the ledger made the early probe fire at a fake expiry and the
+   531→    // resulting 418 contact re-escalated the real ban (11:58→12:34→13:09 spiral).
+   532→    const realUntil = Math.min(Number(named[2]), now + 24 * 60_000);
+   533→    const until = Math.min(realUntil, now + BAN_CAP_MS);
+   534→    state.ipBans.set(ip, realUntil);
+   535→    state.lastBannedIp = ip;
+   536→    persistBans(); // v12.0 — named-IP ban ledger survives restarts (30s debounce)
+   537→    if (state.ipBans.size > IP_BAN_MAP_CAP) {
+   538→      // evict the soonest-expiring record
+   539→      let oldestKey: string | null = null;
+   540→      let oldestVal = Infinity;
+   541→      for (const [k, v] of state.ipBans) if (v < oldestVal) { oldestVal = v; oldestKey = k; }
+   542→      if (oldestKey) state.ipBans.delete(oldestKey);
+   543→    }
+   544→    state.recentBanEvents.push({ at: now, ip });
+   545→    if (state.recentBanEvents.length > 64) state.recentBanEvents.splice(0, state.recentBanEvents.length - 64);
+   546→    return { ip, until };
+   547→  }
+   548→  const untilMatch = /banned until (\d+)/i.exec(body);
+   549→  if (untilMatch) {
+   550→    armGlobalBan(Math.min(Number(untilMatch[1]), now + BAN_CAP_MS)); // unknown scope — assume it's us
+   551→    return null;
+   552→  }
+   553→  // unparseable body — conservative defaults (taxonomy precedent for 418)
+   554→  armGlobalBan(now + (status === 429 ? BAN_429_DEFAULT_MS : BAN_418_DEFAULT_MS));
+   555→  return null;
+   556→}
+   557→
+   558→/** Every retry landed on a (named) banned IP — escalate the global silence window. */
+   559→function escalatePoolBlock(worstNamedUntil: number): void {
+   560→  const now = Date.now();
+   561→  state.allBanStreak++;
+   562→  if (state.allBanStreak >= POOL_STREAK_FOR_LONG_BLOCK) {
+   563→    // repeated independent evidence — the egress pool is saturated: full
+   564→    // zero-network window, capped at 35min, then a fresh probe self-heals.
+   565→    armGlobalBan(Math.min(worstNamedUntil, now + BAN_CAP_MS));
+   566→    state.allBanStreak = 0;
+   567→  } else {
+   568→    armGlobalBan(now + POOL_BLOCK_SHORT_MS);
+   569→  }
+   570→}
+   571→
+   572→function pruneInflight(now: number): void {
+   573→  for (const [k, e] of state.inflight) {
+   574→    if (e.settled && now - e.startedAt >= SF_RESULT_MS) state.inflight.delete(k);
+   575→  }
+   576→}
+   577→
+   578→function delay(ms: number): Promise<void> {
+   579→  return new Promise<void>((r) => setTimeout(r, ms));
+   580→}
+   581→
+   582→/**
+   583→ * THE gate body. Resolves parsed JSON, or null on: live IP ban, weight-budget
+   584→ * shed, HTTP failure, timeout, or parse error. Never throws, never queues.
+   585→ */
+   586→async function executeGated<T>(path: string, opts?: GateFetchOpts): Promise<T | null> {
+   587→  const lane: FapiGatePriority = opts?.priority ?? "telemetry";
+   588→  const weight = Math.max(1, Math.round(opts?.weight ?? resolveWeight(path)));
+   589→  const timeoutMs = opts?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+   590→
+   591→  let entry = takeWeight(weight);
+   592→  if (!entry) {
+   593→    if (lane !== "critical") {
+   594→      state.stats.droppedBudget++;
+   595→      return null; // telemetry: drop instead of queueing a storm
+   596→    }
+   597→    await delay(CRITICAL_RETRY_MS); // one small negative retry
+   598→    entry = takeWeight(weight);
+   599→    if (!entry) {
+   600→      state.stats.droppedBudget++;
+   601→      return null;
+   602→    }
+   603→  }
+   604→
+   605→  const host = opts?.host ?? FAPI_HOST;
+   606→  let attempt = 0;
+   607→
+   608→  while (true) {
+   609→    const ctrl = new AbortController();
+   610→    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+   611→    let res: Response;
+   612→    try {
+   613→      // v12.6.1 CONNECTION-RECYCLE (measured 2026-10-20 19:41Z, bun runtime):
+   614→      // a keep-alive fetch POOLS one TCP flow ⇒ ONE egress IP for its whole
+   615→      // life — a pinned-banned connection turned 231 gate calls into 0 allowed
+   616→      // while 6/10 fresh connections succeeded. `Connection: close` = a fresh
+   617→      // NAT lottery draw per request; the TLS cost (~60ms) is trivial next to
+   618→      // the starvation it prevents.
+   619→      res = await fetch(`${host}${path}`, { signal: ctrl.signal, cache: "no-store", headers: { Connection: "close" } });
+   620→    } catch {
+   621→      return null; // timeout/abort/network — weight may have been consumed, keep the reservation
+   622→    } finally {
+   623→      clearTimeout(timer);
+   624→    }
+   625→
+   626→    if (res.ok) {
+   627→      const text = await res.text().catch(() => "");
+   628→      if (!text) return null; // empty 200 — nothing to invent
+   629→      state.stats.allowed++;
+   630→      state.allBanStreak = 0; // a clean 2xx proves the pool still serves us
+   631→      try {
+   632→        return JSON.parse(text) as T;
+   633→      } catch {
+   634→        return null;
+   635→      }
+   636→    }
+   637→
+   638→    if (res.status === 418 || res.status === 429) {
+   639→      const body = await res.text().catch(() => "");
+   640→      refundWeight(entry); // banned responses carry no weight cost
+   641→      entry = null;
+   642→      const named = noteBanBody(res.status, body);
+   643→      if (opts?.singleProbe) return null; // v12.0 early probe — single attempt, window stays armed
+   644→      if (!named) return null; // unknown-scope ban — global zero-network window already armed
+   645→      if (attempt >= BAN_RETRIES) {
+   646→        escalatePoolBlock(named.until);
+   647→        return null;
+   648→      }
+   649→      attempt++;
+   650→      state.stats.retriesAfterBan++;
+   651→      await delay(BAN_RETRY_DELAYS_MS[Math.min(attempt - 1, BAN_RETRY_DELAYS_MS.length - 1)]!); // span the NAT rotation window
+   652→      entry = takeWeight(weight);
+   653→      if (!entry) {
+   654→        state.stats.droppedBudget++;
+   655→        return null;
+   656→      }
+   657→      continue;
+   658→    }
+   659→
+   660→    return null; // other non-ok status — honest null, no retry
+   661→  }
+   662→}
+   663→
+   664→/** v12.1 TASK-49 — a recorded ban counts ONLY while its real end is in the future. */
+   665→function isIpBanned(ip: string | null, now: number): boolean {
+   666→  if (!ip) return false;
+   667→  return (state.ipBans.get(ip) ?? 0) > now;
+   668→}
+   669→
+   670→// v12.1 TASK-49 — SHARED LEDGER REFRESH: trade-service / price-ws write their
+   671→// own 418 discoveries (with REAL ends) to the same bans.json. Merge live disk
+   672→// entries into state every 30s (extend-only). v12.6 scope split: UNKNOWN-SCOPE
+   673→// entries extend the global silence (pool-suspect evidence); NAMED-IP entries
+   674→// merge into ipBans as intel only — a majority-clean pool must not be
+   675→// blacked out because one pool member drew a ban.
+   676→let lastLedgerCheckAt = 0;
+   677→function refreshLedgerOnce(): void {
+   678→  const nowMs = Date.now();
+   679→  lastLedgerCheckAt = nowMs;
+   680→  try {
+   681→    const raw = JSON.parse(readFileSync(BAN_PERSIST_PATH, "utf8")) as { ipBans?: Record<string, number> } | null;
+   682→    let unknownMax = 0;
+   683→    for (const [key, until] of Object.entries(raw?.ipBans ?? {})) {
+   684→      if (typeof until !== "number" || until <= nowMs) continue;
+   685→      if (isUnknownScopeKey(key)) {
+   686→        if (until > unknownMax) unknownMax = until;
+   687→        continue;
+   688→      }
+   689→      if (until > (state.ipBans.get(key) ?? 0)) state.ipBans.set(key, until);
+   690→    }
+   691→    // unknown-scope knowledge extends the global silence window (extend-only)
+   692→    if (unknownMax > state.banUntil) {
+   693→      state.banUntil = unknownMax;
+   694→      console.log(`[fapi-gate] v12.6 ledger refresh — UNKNOWN-SCOPE pool ban extends silence until ${new Date(unknownMax).toISOString()}`);
+   695→    }
+   696→  } catch {
+   697→    /* ledger gone/unreadable — keep in-memory state */
+   698→  }
+   699→}
+   700→try {
+   701→  const refresh = setInterval(refreshLedgerOnce, 30_000);
+   702→  if (typeof refresh.unref === "function") refresh.unref();
+   703→} catch {
+   704→  /* non-blocking env — skip refresh */
+   705→}
+   706→
+   707→export async function gateFetch<T>(path: string, opts?: GateFetchOpts): Promise<T | null> {
+   708→  state.stats.attempted++;
+   709→  const now = Date.now();
+   710→
+   711→  // v12.1 TASK-49 — LAZY LEDGER GUARD: the instant our global window expires,
+   712→  // re-check the shared ledger (throttled to one disk read / 15s) BEFORE any
+   713→  // network call — closes the poke-gap where the window died but the refresh
+   714→  // interval hadn't fired yet. While the pool is ledger-banned, zero pokes.
+   715→  if (now >= state.banUntil && now - lastLedgerCheckAt >= 15_000) refreshLedgerOnce();
+   716→  if (now < state.banUntil) state.stats.droppedBan++; // ledger re-armed the window — shed instantly
+   717→
+   718→  // GLOBAL BAN AWARENESS — while a global ban window is live, zero network calls
+   719→  // …except the v12.0 ROTATION-AWARE EARLY PROBE: one critical-lane attempt per
+   720→  // PROBE_COOLDOWN_MS when the sampled egress IP is clean — the pool rotates,
+   721→  // so the window can be LIFTED the moment a clean draw appears instead of
+   722→  // waiting out the full 35min cap. A failed probe keeps the window armed.
+   723→  if (now < state.banUntil) {
+   724→    state.stats.droppedBan++;
+   725→    const canProbe = (opts?.priority ?? "telemetry") === "critical" && now - state.lastProbeAt >= PROBE_COOLDOWN_MS;
+   726→    if (!canProbe) return null;
+   727→    // v12.1 TASK-49 — LEDGER FRESHNESS BEFORE PROBE: state may hold a cosmetic
+   728→    // cap while the disk carries a longer REAL end another process discovered.
+   729→    // A probe fired on stale state pokes a still-banned pool and re-escalates.
+   730→    // Re-read the ledger (15s throttle) and re-arm BEFORE the probe decision.
+   731→    if (now - lastLedgerCheckAt >= 15_000) refreshLedgerOnce();
+   732→    if (now < state.banUntil) return null; // ledger extended the silence — no probe
+   733→    state.lastProbeAt = now;
+   734→    const ip = await sampleEgressIp();
+   735→    // v12.1 TASK-49: expiry-aware check — a recorded ban whose real end passed
+   736→    // no longer blocks the probe (the old .has() kept ghost entries armed).
+   737→    if (!ip || isIpBanned(ip, now)) return null; // sampled draw is banned/unknown — stay silent
+   738→    state.stats.probesIssued++;
+   739→    const probeResult = await executeGated<T>(path, { ...opts, singleProbe: true });
+   740→    if (probeResult !== null) {
+   741→      state.banUntil = 0; // clean draw proved the pool rotated — lift instantly
+   742→      state.allBanStreak = 0;
+   743→      state.stats.probeLifts++;
+   744→      console.log(`[fapi-gate] v12.0 ban window LIFTED early — egress rotated to clean IP ${ip}`);
+   745→    }
+   746→    return probeResult;
+   747→  }
+   748→
+   749→  // SINGLE-FLIGHT per (host,path): share the request while it is in flight and
+   750→  // for a 2s result window — concurrent module askers pay the weight once.
+   751→  const key = `${opts?.host ?? FAPI_HOST}${path}`;
+   752→  const existing = state.inflight.get(key);
+   753→  if (existing) {
+   754→    const age = now - existing.startedAt;
+   755→    if (!existing.settled || age < SF_RESULT_MS) {
+   756→      state.stats.singleFlightShared++;
+   757→      return existing.promise as Promise<T | null>;
+   758→    }
+   759→    state.inflight.delete(key);
+   760→  }
+   761→  if (state.inflight.size >= SF_MAP_CAP) pruneInflight(now);
+   762→
+   763→  const promise = executeGated<T>(path, opts);
+   764→  const entry = { startedAt: now, settled: false, promise };
+   765→  state.inflight.set(key, entry);
+   766→  void promise
+   767→    .catch(() => null) // executeGated never rejects — belt & suspenders
+   768→    .finally(() => {
+   769→      entry.settled = true;
+   770→    });
+   771→  return promise;
+   772→}
+   773→

@@ -282,53 +282,11 @@ one_cycle() {
     [ "$(getk ws_fails)" -ge "$SIDE_FAILS_TO_ALERT" ] && say "SIDECAR ERROR (log-only): price-ws :3003 http:$ws fails=$(getk ws_fails) — app demotes to REST 2.5s poll; manual restart: cd $PROJECT/mini-services/price-ws && bun index.ts"
   fi
 
-  # ── KEYS-GUARD — toobit-bridge .env auto-restore (trace 1a1934073fe04971) ──
-  # The sandbox repo.tar rebuild (/start.sh full-tree restore) wipes the gitignored
-  # service .env — 5th incident 2026-10-31 ~11:56Z (bridge booted keysInstalled:false,
-  # LIVE silently dead ~7h until the operator re-delivered the keys). The sealed
-  # off-tree copy lives OUTSIDE /home/z/my-project so it survives every tree-level
-  # restore; bridge KEYS-HOTRELOAD (v1.5.3+) re-arms LIVE ≤30s after the file
-  # returns — no process restart needed. recovery-restore.sh + backup.sh tbenv-*
-  # carry the same secret through the restore and offsite chains.
-  local tb_env_f="/home/z/my-project/mini-services/toobit-bridge/.env"
-  # v3.4 POLARFS-FIRST escrow resolution (operator order 2026-11-02): /home/z is
-  # the wipe surface (11 wipes on 2026-11-02); /tmp/my-project (PolarFS) survived
-  # every one — secret sources resolve PolarFS-first, legacy path as fallback.
-  local tb_sealed="/home/z/.nexus-secrets/toobit-bridge.env"
-  [ -s "/tmp/my-project/secrets/toobit-bridge.env" ] && tb_sealed="/tmp/my-project/secrets/toobit-bridge.env"
-  if [ ! -s "$tb_env_f" ] && [ -s "$tb_sealed" ]; then
-    mkdir -p "$(dirname "$tb_env_f")" 2>/dev/null
-    if cp "$tb_sealed" "$tb_env_f" 2>/dev/null && chmod 600 "$tb_env_f" 2>/dev/null; then
-      say "KEYS-GUARD: toobit-bridge/.env was wiped — reinstalled from sealed copy (0600); KEYS-HOTRELOAD re-arms LIVE ≤30s"
-    fi
-  fi
-  # v3 secrets-chain — DB-escrow fallback (P0 trace 1a193604acd890f9): when BOTH
-  # the live .env and the sealed copy are gone (5th-incident shape), decrypt the
-  # AES-256-CBC/PBKDF2 escrow stored in EngineSetting "toobit.key-escrow" with
-  # the off-tree passphrase. Last independent link before operator re-delivery.
-  local tb_pass="/home/z/.nexus-secrets/escrow.pass"
-  [ -s "/tmp/my-project/secrets/escrow.pass" ] && tb_pass="/tmp/my-project/secrets/escrow.pass"
-  local tb_db="/home/z/my-project/db/custom.db"
-  if [ ! -s "$tb_env_f" ] && [ -s "$tb_pass" ] && [ -s "$tb_db" ]; then
-    local tb_enc; tb_enc=$(mktemp /home/z/.nexus-secrets/.escrow-XXXXXX.enc)
-    if python3 -c "
-import sqlite3,base64,json,sys
-try:
-    con=sqlite3.connect('$tb_db'); row=con.execute(\"SELECT value FROM EngineSetting WHERE key='toobit.key-escrow'\").fetchone(); con.close()
-    open(sys.argv[1],'wb').write(base64.b64decode(json.loads(row[0])['payloadB64'])) if row else sys.exit(3)
-except Exception: sys.exit(2)
-" "$tb_enc" 2>/dev/null && [ -s "$tb_enc" ]; then
-      mkdir -p "$(dirname "$tb_env_f")" 2>/dev/null
-      if openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -in "$tb_enc" -pass "file:$tb_pass" > "$tb_env_f" 2>/dev/null && grep -q "TOOBIT_API_KEY=" "$tb_env_f" 2>/dev/null; then
-        chmod 600 "$tb_env_f"
-        say "KEYS-GUARD v3: .env restored from DB ESCROW (both live+sealed were gone) — KEYS-HOTRELOAD re-arms LIVE ≤30s"
-      else
-        rm -f "$tb_env_f" 2>/dev/null
-        say "KEYS-GUARD: DB-escrow decrypt failed — bridge stays PAPER, operator re-delivery required"
-      fi
-    fi
-    rm -f "$tb_enc" 2>/dev/null
-  fi
+  # ── KEYS-GUARD — RETIRED 2026-11-05 ──────────────────────────────────────
+  # TOOBIT EXEC BRIDGE decommissioned by operator mandate (trace 1a1a8ea4186c6571):
+  # account flattened (exchange-verified 0 positions / 0 orders), module, watchdog
+  # cron 491600 and all key-restore chains removed. The EngineSetting toobit.key-escrow
+  # row was purged with it. No key material is auto-restored anymore.
 
   # ── P2.5 · telegram bridge :3005 — OWNED heal (v3.2) ───────────────
   # ROLLBACK-RECOVERY-0912-0030: the platform rollback killed the bridge and

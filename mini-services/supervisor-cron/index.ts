@@ -306,10 +306,9 @@ async function jobSweep(): Promise<{ verdict: string; reason: string; anomalies:
   // (ws down, feed frozen ~20h) never raised an alert because :3003 was never probed.
   probes.push(await probe("ws :3003", "http://127.0.0.1:3003/", (s) => s === 400 || s === 200)); // socket.io answers 400 on plain GET = ALIVE
   probes.push(await probe("bridge :3005", "http://127.0.0.1:3005/health", (s) => s === 200));
-  // v1.3.0 DOCTRINE SUPERVISOR (trace 1a15f7d945d27ead): toobit exec-bridge :3021
-  // joins the senior sweep — health probe + /doctrine violation feed below.
-  const tbtProbe = await probe("tbt :3021", "http://127.0.0.1:3021/health", (s) => s === 200);
-  probes.push(tbtProbe);
+  // v1.3.0 DOCTRINE SUPERVISOR: RETIRED 2026-11-05 — toobit exec-bridge :3021
+  // decommissioned by operator mandate (trace 1a1a8ea4186c6571); the tbt probe
+  // + doctrine violation feed were removed with the module.
 
   // sentinel verdict field
   let verdict = "UNKNOWN";
@@ -332,29 +331,6 @@ async function jobSweep(): Promise<{ verdict: string; reason: string; anomalies:
   }
   if (verdict === "RED") anomalies.push({ class: "sentinel-red", sev: "crit", msg: `sentinel :3030 verdict RED` });
   else if (verdict === "AMBER") anomalies.push({ class: "sentinel-amber", sev: "warn", msg: `sentinel :3030 verdict AMBER` });
-
-  // ── v1.3.0: TOOBIT EXEC-BRIDGE doctrine feed (پیگیری و دکترین) ─────────
-  // Only consulted when the bridge is up (svc-down already covers the other
-  // case). Violations are AMBER in PAPER, crit in LIVE (real money at risk).
-  if (tbtProbe.up) {
-    const tbtDoc = await fetchJson("http://127.0.0.1:3021/doctrine", 6_000);
-    if (!tbtDoc.ok || !tbtDoc.data || typeof tbtDoc.data !== "object") {
-      anomalies.push({ class: "tbt-doctrine-unreachable", sev: "warn", msg: "toobit-bridge :3021 /doctrine unreachable while health is up — doctrine supervisor degraded" });
-      log("warn", "tbt-doctrine-unreachable", { err: tbtDoc.err });
-    } else {
-      const dd = tbtDoc.data as { mode?: string; doctrine?: { violationsN?: number; lastViolation?: { kind?: string; detail?: string } | null; skipBy?: Record<string, number> } | null };
-      const vn = Number(dd.doctrine?.violationsN ?? 0);
-      if (vn > 0) {
-        const last = dd.doctrine?.lastViolation;
-        anomalies.push({
-          class: "tbt-doctrine-violation",
-          sev: dd.mode === "LIVE" ? "crit" : "warn",
-          msg: `toobit-bridge doctrine: ${vn} violation(s) — last=${last?.kind ?? "?"}: ${String(last?.detail ?? "").slice(0, 140)}`,
-        });
-        log("warn", "tbt-doctrine-violations", { n: vn, last: last?.kind });
-      }
-    }
-  }
 
   // ── RECOVERY-0929: data freshness + streak escalation + heal nudge ─────────
   const wsProbe = probes.find((p) => p.key === "ws");

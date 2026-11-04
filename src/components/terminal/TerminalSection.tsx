@@ -14,7 +14,6 @@ import EntryLeversCard from "@/components/terminal/EntryLeversCard";
 import GoldenLaneCard from "@/components/terminal/GoldenLaneCard";
 import FuturesRadarCard from "@/components/terminal/FuturesRadarCard";
 import RawCalCard from "@/components/terminal/RawCalCard";
-import ToobitBridgeCard from "@/components/terminal/ToobitBridgeCard";
 import { useMounted, useNow, useDeviceNow, usePulse } from "@/hooks/usePulse";
 import { fmtClockLocal, localTzLabel } from "@/lib/format";
 import type { EventLevel, SignalEventDTO } from "@/lib/api-types";
@@ -888,9 +887,6 @@ export default function TerminalSection() {
         <FlowScannerCard />
         <LiqDepthRadarCard />
         <VolRiskCard />
-        {/* ── TOOBIT EXEC BRIDGE — signal-card execution mirror (Task-52: PAPER/LIVE,
-            reconciliation, latency telemetry; read-only panel, key-only control) ── */}
-        <ToobitBridgeCard />
       </div>
     </section>
   );

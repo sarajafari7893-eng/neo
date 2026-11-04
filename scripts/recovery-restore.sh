@@ -240,56 +240,9 @@ def main() -> int:
     else:
         print("[WARN] .data journals absent in snapshot zip — optional, skipped")
 
-    # secrets chain v2 — Toobit bridge keys (trace 1a1934073fe04971): the gitignored
-    # service .env never lives in repo.tar or snapshot zips; the sealed off-tree copy
-    # survives tree-level restores and must be reinstalled BEFORE the bridge boots.
-    sealed = "/home/z/.nexus-secrets/toobit-bridge.env"
-    tb_env = os.path.join(ROOT, "mini-services", "toobit-bridge", ".env")
-    if os.path.isfile(sealed) and os.path.getsize(sealed) > 0:
-        os.makedirs(os.path.dirname(tb_env), exist_ok=True)
-        if not os.path.isfile(tb_env) or os.path.getsize(tb_env) == 0:
-            shutil.copy2(sealed, tb_env)
-            os.chmod(tb_env, 0o600)
-            step("toobit-bridge/.env reinstalled from sealed copy (keys survive recovery)", True)
-        else:
-            step("toobit-bridge/.env already present", True)
-    else:
-        print("[WARN] sealed key copy /home/z/.nexus-secrets/toobit-bridge.env ABSENT — trying DB escrow (4th link)…")
-
-    # secrets chain v3 — DB escrow fallback (P0, trace 1a193604acd890f9): the
-    # AES-256-CBC/PBKDF2 escrow inside EngineSetting "toobit.key-escrow" rides
-    # the restored DB; decrypt with the off-tree passphrase file and reinstall.
-    if (not os.path.isfile(tb_env) or os.path.getsize(tb_env) == 0):
-        import subprocess, sqlite3 as _sq
-        pass_f = "/home/z/.nexus-secrets/escrow.pass"
-        db_path = os.path.join(ROOT, "db", "custom.db")
-        if os.path.isfile(pass_f) and os.path.isfile(db_path):
-            try:
-                con = _sq.connect(db_path)
-                row = con.execute("SELECT value FROM EngineSetting WHERE key='toobit.key-escrow'").fetchone()
-                con.close()
-                if row:
-                    import base64 as _b64, json as _json, tempfile as _tf
-                    payload = _b64.b64decode(_json.loads(row[0])["payloadB64"])
-                    with _tf.NamedTemporaryFile(delete=False, suffix=".enc") as tf:
-                        tf.write(payload); enc_tmp = tf.name
-                    res = subprocess.run(["openssl", "enc", "-d", "-aes-256-cbc", "-pbkdf2", "-iter", "200000",
-                                          "-in", enc_tmp, "-pass", "file:" + pass_f], capture_output=True)
-                    os.unlink(enc_tmp)
-                    if res.returncode == 0 and b"TOOBIT_API_KEY=" in res.stdout:
-                        os.makedirs(os.path.dirname(tb_env), exist_ok=True)
-                        with open(tb_env, "wb") as f:
-                            f.write(res.stdout)
-                        os.chmod(tb_env, 0o600)
-                        step("toobit-bridge/.env restored from DB ESCROW (secrets chain v3)", True)
-                    else:
-                        print("[WARN] DB escrow decrypt failed — bridge boots PAPER until operator re-delivers keys")
-                else:
-                    print("[WARN] DB escrow row absent — bridge boots PAPER until operator re-delivers keys")
-            except Exception as _e:
-                print(f"[WARN] DB escrow path failed ({_e}) — bridge boots PAPER until operator re-delivers keys")
-        else:
-            print("[WARN] no escrow.pass / no DB — bridge boots PAPER until operator re-delivers keys")
+    # secrets chain — RETIRED 2026-11-05: toobit-bridge keys are gone with the
+    # module (operator mandate trace 1a1a8ea4186c6571 — decommission, account
+    # flattened). No key reinstall happens on recovery anymore.
 
     # manifests + calibration + worklog (evidence chain)
     for rel in ("backups/MANIFEST.json", "backups/calibration-latest.json", "worklog.md"):
