@@ -1,207 +1,94 @@
 {
- "at": "2026-11-03T10:59:15.012Z",
- "tehran": "03/11/2026, 14:29:15",
+ "at": "2026-11-04T23:49:16.796Z",
+ "tehran": "05/11/2026, 03:19:16",
  "status": "ok",
  "err": null,
  "review": {
   "verdict": "AMBER",
-  "summary": "سیستم با وجود وضعیت GREEN در سلامت کلی، دارای مشکلات قابل توجهی در اعتبارسنجی استراتژی و عملکرد 24 ساعته است.",
+  "summary": "سیستم با وجود وضعیت عادی در اکثر اجزا، با محدودیت حافظه و مشکلات در اعتبارسازی استراتژی مواجه است.",
   "findings": [
    {
     "sev": "P1",
-    "area": "اعتبارسنجی استراتژی",
-    "evidence": "PROMOTE gate = FAIL-OPEN-GAPS — gating leg(s): MOMENTUM 15/60 (25%) · total OOS 2668/300 (100%) · pace 24.6/day",
-    "impact": "محدودیت در ارتقای استراتژی‌ها و کاهش تعداد معاملات OOS که برای اعتبارسنجی ضروری است"
+    "area": "memory",
+    "evidence": "MemAvailable 370MB < 400MB",
+    "impact": "ریسک بالقوه OOM در محیط بدون سواپ که می‌تواند باعث توقف سیستم شود"
    },
    {
     "sev": "P1",
-    "area": "عملکرد 24 ساعته",
-    "evidence": "window24h: winRatePct: 33.3 · pnlUsd: -2.12",
-    "impact": "افت وین‌ریت و ضرر در بازه زمانی کوتاه‌مدت"
+    "area": "strategy_validation",
+    "evidence": "PROMOTE gate = FAIL (insufficient OOS n)",
+    "impact": "عدم توانایی در ارتقای استراتژی فعلی که بر وین‌ریت و PNL مستقیم تأثیر می‌گذارد"
    },
    {
     "sev": "P2",
-    "area": "استراتژی BREAKOUT",
-    "evidence": "byStrategy: BREAKOUT count: 6 wins: 0 pnl: 1.14",
-    "impact": "عملکرد ضعیف این استراتژی خاص که می‌تواند بر وین‌ریت کلی تأثیر بگذارد"
+    "area": "futures",
+    "evidence": "error: unavailable",
+    "impact": "عدم دسترسی به داده‌های فیوچرز که ممکن است تحلیل کامل را محدود کند"
    }
   ],
   "top_actions": [
    {
-    "action": "تکمیل سریع‌تر معاملات OOS برای رفع گیت‌های MOMENTUM",
-    "expected_effect_on_winrate_or_pnl": "افزایش تعداد معاملات OOS برای فعال‌سازی ارتقای استراتژی‌ها",
-    "effort": "M",
-    "risk": "پذیرفتنی"
-   },
-   {
-    "action": "بررسی و بهینه‌سازی پارامترهای استراتژی BREAKOUT",
-    "expected_effect_on_winrate_or_pnl": "بهبود عملکرد این استراتژی و افزایش وین‌ریت کلی",
-    "effort": "L",
-    "risk": "پذیرفتنی"
-   },
-   {
-    "action": "تحلیل دلایل افت PNL در 24 ساعت گذشته",
-    "expected_effect_on_winrate_or_pnl": "جلوگیری از تکرار ضررهای مشابه در آینده",
+    "action": "پایش و بهینه‌سازی مصرف حافظه",
+    "expected_effect_on_winrate_or_pnl": "پیشگیری از توقف ناگهانی سیستم و حفظ عملکرد پایدار",
     "effort": "S",
-    "risk": "پذیرفتنی"
+    "risk": "کم"
+   },
+   {
+    "action": "جمع‌آوری داده‌های بیشتر برای اعتبارسازی مجدد استراتژی",
+    "expected_effect_on_winrate_or_pnl": "افزایش وین‌ریت و PNL از طریق ارتقای استراتژی پس از رسیدن به حداقل معاملات OOS",
+    "effort": "M",
+    "risk": "متوسط"
+   },
+   {
+    "action": "بررسی و رفع مشکل اتصال به سرویس فیوچرز",
+    "expected_effect_on_winrate_or_pnl": "بهبود تحلیل و تصمیم‌گیری با در دسترس داشتن تمام داده‌های بازار",
+    "effort": "M",
+    "risk": "متوسط"
    }
   ]
  },
  "telemetrySnapshot": {
-  "generatedAt": "2026-11-03T10:59:09.982Z",
+  "generatedAt": "2026-11-04T23:49:11.388Z",
   "liveExecution": "DISABLED (paper/research-only; SUPPRESSED engine path — honesty contract)",
-  "strategyValidationStatus": "PROMOTE gate = FAIL-OPEN-GAPS — gating leg(s): MOMENTUM 15/60 (25%) · total OOS 2668/300 (100%) · pace 24.6/day · ETA 157.5d (slowest open leg MOMENTUM (45 left @ 0.3/day)) · OPERATOR-BAR(300/leg): blocked: MOMENTUM 15/300 (ETA 998d) (protocol STRATEGY-VALIDATION-PROTOCOL.md; sample-size leg only) — recommend only evidence-respecting actions",
+  "strategyValidationStatus": "PROMOTE gate = FAIL (insufficient OOS n; re-validation protocol in STRATEGY-VALIDATION-PROTOCOL.md) — recommend only evidence-respecting actions",
   "sentinel": {
-   "verdict": "GREEN",
-   "anomalies": [],
+   "verdict": "AMBER",
+   "anomalies": [
+    {
+     "sev": "warn",
+     "area": "memory",
+     "msg": "MemAvailable 370MB < 400MB — pre-emptive OOM-proximity watch (4GB no-swap box)"
+    }
+   ],
    "mem": {
-    "availableMb": 2300
+    "availableMb": 370
    },
    "disk": {
-    "rootFreeGb": 2.87,
-    "tmpFreeGb": 2.87
+    "rootFreeGb": 2.18,
+    "tmpFreeGb": 2.18
    },
    "backup": {
     "ok": true,
     "dir": "/tmp/my-project/backups",
     "encCount": 12,
     "zipCount": 12,
-    "newestEncMs": 1793702596428.9573,
-    "newestAnyMs": 1793702596428.9573,
-    "encAgeMs": 896611.0427246094
+    "newestEncMs": 1793825373785.519,
+    "newestAnyMs": 1793825373785.519,
+    "encAgeMs": 10751468.480957031
    },
    "rawcal": {
     "armed": true,
-    "issued": 739,
-    "issuedTotal": 2157,
+    "issued": 740,
+    "issuedTotal": 2158,
     "target": 3217,
     "heartbeatAgeH": 0,
-    "heartbeatAt": "2026-11-03T1057Z ARMED issued=739/2150 target=3217"
+    "heartbeatAt": "2026-11-04T2348Z PAUSED fapi ban active (fapi GLOBAL ban window live — 26s left) — issuer stands down, auto-resumes on lift"
    }
   },
-  "deepSweepQuick": "# NEXUS-SENTINEL DEEP SWEEP — 2026-11-03T10:59:09Z\n\n\n## 1 · LIVE VERDICT — GREEN\n- verdict: GREEN · scan: 2026-11-03T10:58:13.436Z\n  · app       UP  http=200 19ms\n  · ws        UP  http=400 2ms\n  · bridge    UP  http=200 2ms\n  · liq       UP  http=200 2ms\n  · trade     UP  http=200 2ms\n  · watchdog  UP  http=200 2ms\n- mem: 2300 MB avail · disk root: 2.87 GB · /tmp: 2.87 GB\n",
-  "pulseStats": {
-   "winRate": 25,
-   "totalSignals": 76,
-   "wins": 19,
-   "losses": 22,
-   "pnl24hUsd": -2.12,
-   "totalPnlUsd": 67.34,
-   "avgPnlPercent": 8.86,
-   "streak": {
-    "type": "loss",
-    "count": 0
-   },
-   "account": {
-    "startBalance": 100,
-    "balance": 318.76,
-    "equity": 318.76,
-    "unrealizedPnl": 0,
-    "unrealizedPnlAllRows": 0,
-    "unsafeOpenRows": 0,
-    "exposureUsd": 0,
-    "freeMargin": 318.76,
-    "marginUsedPct": 0,
-    "openPositions": 0,
-    "feesPaid": 201.68,
-    "closeAll": {
-     "enabled": true,
-     "targetUsd": 20,
-     "lastTriggeredAt": "2026-10-30T00:31:57.138Z",
-     "triggerCount": 8
-    }
-   },
-   "window24h": {
-    "n": 6,
-    "wins": 2,
-    "winRatePct": 33.3,
-    "pnlUsd": -2.12
-   },
-   "window7d": {
-    "n": 60,
-    "wins": 32,
-    "winRatePct": 53.3,
-    "pnlUsd": 26.93
-   },
-   "byStrategy": [
-    {
-     "strategy": "AI-SWING",
-     "count": 68,
-     "wins": 19,
-     "pnl": 67.57,
-     "avgConfidence": 76
-    },
-    {
-     "strategy": "BREAKOUT",
-     "count": 6,
-     "wins": 0,
-     "pnl": 1.14,
-     "avgConfidence": 85
-    },
-    {
-     "strategy": "MEAN-REVERT",
-     "count": 2,
-     "wins": 0,
-     "pnl": -1.38,
-     "avgConfidence": 84
-    }
-   ],
-   "equityCurveTail": [
-    {
-     "date": "10-29",
-     "cum": 45.69,
-     "daily": 45.69
-    },
-    {
-     "date": "10-30",
-     "cum": 78.56,
-     "daily": 32.88
-    },
-    {
-     "date": "10-31",
-     "cum": 68.72,
-     "daily": -9.84
-    },
-    {
-     "date": "11-01",
-     "cum": 74.21,
-     "daily": 5.49
-    },
-    {
-     "date": "11-02",
-     "cum": 67.99,
-     "daily": -6.22
-    },
-    {
-     "date": "11-03",
-     "cum": 67.34,
-     "daily": -0.65
-    }
-   ]
-  },
+  "deepSweepQuick": "# NEXUS-SENTINEL DEEP SWEEP — 2026-11-04T23:49:10Z\n\n\n## 1 · LIVE VERDICT — AMBER\n- verdict: AMBER · scan: 2026-11-04T23:48:45.959Z\n  · app       UP  http=200 143ms\n  · ws        UP  http=400 3ms\n  · bridge    UP  http=200 3ms\n  · liq       UP  http=200 3ms\n  · trade     UP  http=200 3ms\n  · watchdog  UP  http=200 3ms\n- mem: 370 MB avail · disk root: 2.18 GB · /tmp: 2.18 GB\n  - [warn] memory: MemAvailable 370MB < 400MB — pre-emptive OOM-proximity watch (4GB no-swap box)\n",
+  "pulseStats": {},
   "rawcal": {
-   "armed": true,
-   "target": 3217,
-   "settledN": 2101,
-   "openRaw": 0,
-   "rawWinRatePct": 21.9,
-   "disarmReason": "",
-   "paceSettledE2": 2101,
-   "paceSettleRate3h": 0,
-   "paceNeeded": 1116,
-   "qualityInformativePct": 63.5,
-   "qualityHealthyPct": 92,
-   "qualityGate": {
-    "verdict": "GREEN",
-    "healthFloor": 85,
-    "blockers": [],
-    "window": {
-     "since": "2026-09-15T11:30:00.000Z",
-     "settled": 200,
-     "healthyPct": 92,
-     "informativePct": 63.5
-    }
-   }
+   "error": "unavailable"
   },
   "shadowVetoArms": [
    {
@@ -225,7 +112,7 @@
     "n": 30,
     "target": 30,
     "fillPct": 100,
-    "winRatePct": 33.3,
+    "winRatePct": 40,
     "starved": false
    },
    {
@@ -238,22 +125,22 @@
    }
   ],
   "shadowVetoStats": {
-   "total": 9673,
-   "passSide": 5597,
-   "rejectSide": 4076,
-   "vetoCount": 6629,
-   "tradeCount": 3044,
-   "modelSharePct": 42.5,
+   "total": 9779,
+   "passSide": 5642,
+   "rejectSide": 4137,
+   "vetoCount": 6729,
+   "tradeCount": 3050,
+   "modelSharePct": 43.1,
    "modelGroundedPct": 100,
-   "avgConfidence": 67.5,
-   "gateAgreement": 2653,
+   "avgConfidence": 67.7,
+   "gateAgreement": 2711,
    "paperOpen": 11,
-   "paperSettled": 1431,
+   "paperSettled": 1434,
    "recent24h": {
-    "n": 199,
-    "modelSharePct": 95.5,
-    "lastModelAgeH": 0.4,
-    "lastVerdictAgeH": 0.4
+    "n": 83,
+    "modelSharePct": 95.2,
+    "lastModelAgeH": 0.1,
+    "lastVerdictAgeH": 0.1
    }
   },
   "futures": {
@@ -268,21 +155,21 @@
    "watch": 2,
    "lastFrameAt": null,
    "spotConnected": true,
-   "spotFrames": 42617,
-   "spotLastFrameAt": 1793703549273,
+   "spotFrames": 132148,
+   "spotLastFrameAt": 1793836150733,
    "spotStreams": 2,
    "spotReconnects": 0,
-   "restBannedUntil": 1793705858130,
-   "restProbeConsecutiveFails": 1,
+   "restBannedUntil": 1793841859952,
+   "restProbeConsecutiveFails": 2,
    "symbols": 2,
-   "trades": 43617,
+   "trades": 132148,
    "restPolls": 2,
-   "restErrors": 1,
+   "restErrors": 2,
    "reconnects": 0,
-   "uptimeMs": 4916273
+   "uptimeMs": 9686048
   },
   "lastSweepAnomalies": [],
-  "lastReviewAt": "2026-11-02T22:59:14.695Z"
+  "lastReviewAt": "2026-11-03T16:18:02.863Z"
  },
- "deepSweepChars": 376
+ "deepSweepChars": 474
 }

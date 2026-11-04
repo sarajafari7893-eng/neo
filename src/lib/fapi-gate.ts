@@ -160,6 +160,7 @@ export interface FapiGateStats {
   probesIssued: number; // rotation-aware early probes attempted during a ban window
   probeLifts: number; // windows lifted early because a clean draw succeeded
   effectiveBudgetPer60s: number; // v14.2 pacer view of the budget (≤ budgetPer60s)
+  aimdFactor: number; // v14.3 rolling-cycle AIMD shed (1.0 healthy → 0.25 floor) — chapter-7 item ②
 }
 
 interface SpendEntry { at: number; w: number }
@@ -173,6 +174,9 @@ interface GateState {
   ipBans: Map<string, number>; // named egress IP → ban end (observability + pool evidence)
   recentBanEvents: Array<{ at: number; ip: string }>; // named-IP ban events (observability)
   allBanStreak: number; // consecutive gateFetch calls where EVERY attempt was banned
+  aimdFactor: number; // v14.3 AIMD shed — ×0.7 per named-IP ban, +0.05/min clean recovery
+  lastBanEventAt: number; // v14.3 — last named-IP ban event (recovery clock anchor)
+  lastAimdRecoverAt: number; // v14.3 — last additive-recovery application
   // v12.0 egress manager
   sampledIp: string | null;
   sampledAt: number;
@@ -205,6 +209,9 @@ const state: GateState =
     ipBans: new Map(),
     recentBanEvents: [],
     allBanStreak: 0,
+    aimdFactor: 1,
+    lastBanEventAt: 0,
+    lastAimdRecoverAt: 0,
     sampledIp: null,
     sampledAt: 0,
     lastBannedIp: null,
@@ -386,6 +393,9 @@ export function fapiBanActivity(): FapiBanActivity {
   return { active: false, reason: null, globalRemainingMs, namedLiveIps, effectiveBudgetPer60s: effectiveBudgetPer60s() };
 }
 
+// NOTE v14.3: fapiBanActivity()/fapiGateStats() close over the same pacer —
+// the AIMD factor is visible in fapiGateStats().aimdFactor for observability.
+
 export function fapiGateStats(): FapiGateStats {
   const now = Date.now();
   pruneWindow(now);
@@ -406,6 +416,7 @@ export function fapiGateStats(): FapiGateStats {
     probesIssued: state.stats.probesIssued,
     probeLifts: state.stats.probeLifts,
     effectiveBudgetPer60s: effectiveBudgetPer60s(),
+    aimdFactor: Number(state.aimdFactor.toFixed(3)),
   };
 }
 
@@ -478,9 +489,42 @@ function namedLiveBanCount(now: number): number {
   return n;
 }
 
+// ── v14.3 ROLLING-CYCLE AIMD PACER (chapter-7 item ② «backoff واقعی», operator
+// mandate trace 1a1a8ea4186c6571) — the missing third leg of the v14.2 pacer.
+// Measured failure mode (engineering report NX3247+LIVE): the 3-IP egress pool
+// rides a ROLLING ~20min ban cycle — bans expire, the full budget floods back
+// instantly (named-IP bans never armed the global window ⇒ no ramp), the pool
+// re-saturates in the same minute and re-bans. Fix: an AIMD shed factor that
+// DECREASES multiplicatively on every named-IP ban event (×0.7, floor 0.25) and
+// recovers ADDITIVELY during clean minutes (+0.05/min, cap 1.0). Sustained ban
+// churn ⇒ progressively quieter pool without any operator tuning; a genuinely
+// healthy pool heals back to full budget in ~15 clean minutes.
+const AIMD_DROP = 0.7;
+const AIMD_FLOOR = 0.25;
+const AIMD_RECOVER_PER_MIN = 0.05;
+
+function recoverAimd(now: number): void {
+  if (state.aimdFactor >= 1) { state.lastAimdRecoverAt = now; return; }
+  if (state.lastBanEventAt === 0) return;
+  const anchor = Math.max(state.lastAimdRecoverAt, state.lastBanEventAt);
+  const cleanMin = Math.floor((now - anchor) / 60_000);
+  if (cleanMin <= 0) return;
+  state.aimdFactor = Math.min(1, state.aimdFactor + cleanMin * AIMD_RECOVER_PER_MIN);
+  state.lastAimdRecoverAt = now;
+}
+
+function noteAimdBanEvent(now: number): void {
+  recoverAimd(now);
+  state.aimdFactor = Math.max(AIMD_FLOOR, state.aimdFactor * AIMD_DROP);
+  state.lastBanEventAt = now;
+  state.lastAimdRecoverAt = now;
+}
+
 export function effectiveBudgetPer60s(): number {
   const now = Date.now();
   let factor = 1;
+  recoverAimd(now); // v14.3 — additive clean-minute recovery before clamping
+  factor = Math.min(factor, state.aimdFactor);
   // POOL DISTRESS — ≥2 named egress IPs inside live ban windows: cap telemetry.
   if (namedLiveBanCount(now) >= 2) factor = Math.min(factor, PACER_DISTRESS_CAP);
   // RECOVERY RAMP — 10min linear 25%→100% after the last global window ends.
@@ -543,6 +587,7 @@ function noteBanBody(status: number, body: string): { ip: string; until: number 
     }
     state.recentBanEvents.push({ at: now, ip });
     if (state.recentBanEvents.length > 64) state.recentBanEvents.splice(0, state.recentBanEvents.length - 64);
+    noteAimdBanEvent(now); // v14.3 — every named-IP ban deepens the rolling-cycle shed
     return { ip, until };
   }
   const untilMatch = /banned until (\d+)/i.exec(body);

@@ -51,3 +51,6 @@ must be confirmed against the live platform cron list before trusting them.
 - monthly drill: 367116 (lost in resync) → 369735 → current **verify**.
 - daily report 364970: schedule bug documented 2026-09-07 (`CRON-364970-HOURLY-MISFIRE-0907`, `CRON-364970-GUARD-V2-0907`).
 - keep-alive 354312 incident log: `354312-incident-20260904-1345` (OOM while ping-OK — ping ≠ health; keep the triage step).
+
+## تغییرات 2026-11-05 (trace 1a1a8ea4186c6571)
+- **Job 491600 (NX bridge watchdog، fixed_rate 1200s) حذف شد** — ماژول TOOBIT EXEC BRIDGE به‌طور کامل منحل شد (حساب FLAT، کلیدها purge، فایل‌ها حذف، آرشیو در `backups/toobit-bridge-archive-20261105.tar.gz`). هیچ جایگزینی لازم نیست؛ p0-watchdog :3020 دیگر ورودی tbt ندارد.
