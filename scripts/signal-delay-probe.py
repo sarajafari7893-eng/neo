@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ── NEXUS//SIGNALS — SIGNAL-DELAY PROBE (P2.8 ring, v14.2 restore) ──────────
-# Recreated 2026-11-04 after sandbox rollback (original lost; contract from
+# Rebuilt 2026-11-04 (2nd time) after another sandbox rollback (original from
 # mandate trace 1a1a15fb6bc0bd75). READ-ONLY telemetry, fail-open: any error
 # prints OK-line and exits 0 — must never block the watchdog cycle.
 #
