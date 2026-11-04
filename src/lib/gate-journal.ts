@@ -242,6 +242,15 @@ export async function gateJournalRefresh(maxAgeMs = REFRESH_MIN_INTERVAL_MS): Pr
   if (refreshing) return refreshing;
   refreshing = (async () => {
     try {
+      // VERDICT-CORE audit 2026-11-05 — COLD-GENERATION READ FIX: hydrate() only
+      // ran on WRITE paths, so a freshly-compiled read generation started with
+      // readPos=0 and tailed the file's OLDEST bytes (11-03 history) — 12h-window
+      // stats came back EMPTY and the core wrote "journal is empty" (observed live
+      // on cycle #1412's first POST). Hydrate cold generations here (once, single-
+      // flight, readPos=file-size) so the first refresh already sees the freshest
+      // 6000-line history. Warm generations (hydratedAt>0) are untouched — re-running
+      // hydrate on them would re-push tail records into the rings.
+      if (hydratedAt === 0) await hydrate();
       const st = await stat(FILE).catch(() => null);
       if (!st) return;
       if (st.size < readPos) readPos = 0; // rotated — restart the tail on the fresh file
@@ -420,6 +429,14 @@ export interface GateStats {
   blocks: Array<{ gate: GateName; count: number; lastReason: string }>;
   deploys: number;
   avgDeployScore: number | null;
+  // VERDICT-CORE audit 2026-11-05 (operator mandate) — ring-honesty disclosure:
+  // the block ring caps at BLOCK_CAP; with heavy churn (~8-11 blocks/min in chop)
+  // it holds only ~60-90 min of accepted records, so per-gate counts are a
+  // RECENT-CHURN SNAPSHOT (and dedup-topology-skewed: single-key gates like
+  // MEMORY compress, multi-symbol gates like REGIME fan out) — never a true
+  // window census. Consumers (AI core narrative) MUST disclose this.
+  blocksRingSize: number;
+  blocksRingSaturated: boolean;
 }
 
 export function gateStats(windowHours = 6): GateStats {
@@ -485,6 +502,8 @@ export function gateStats(windowHours = 6): GateStats {
     blocks: [...blockMap.entries()].map(([gate, e]) => ({ gate, count: e.count, lastReason: e.lastReason })).sort((a, b) => b.count - a.count),
     deploys: deploysWin.length,
     avgDeployScore: deploysWin.length ? Number((deploysWin.reduce((a, d) => a + Math.abs(d.score), 0) / deploysWin.length).toFixed(1)) : null,
+    blocksRingSize: blocks.length,
+    blocksRingSaturated: blocks.length >= BLOCK_CAP,
   };
 }
 
@@ -507,7 +526,9 @@ export async function gateJournalForCore(windowHours = 12, maxBoundary = 8): Pro
   stats: GateStats;
   boundaryFiles: string[];
   blockFiles: string[];
+  boundarySamples: GateSample[]; // raw rows behind boundaryFiles — deterministic lesson verification (VERDICT-CORE audit 2026-11-05)
 }> {
+  await gateJournalReady(); // hydrate cold generations BEFORE tailing (audit 2026-11-05: read-path emptiness fix)
   await gateJournalRefresh(0); // grounding consumers always see fresh rings
   const stats = gateStats(windowHours);
   const nearGate = samples
@@ -530,7 +551,7 @@ export async function gateJournalForCore(windowHours = 12, maxBoundary = 8): Pro
     `${stats.samples} threshold verdicts in ${windowHours}h: ${stats.byBand.PASS} passed, ${stats.byBand.BOUNDARY} landed in the boundary band (gap −8..0, ${stats.boundary?.sharePct ?? 0}% of evaluations, avg gap ${stats.boundary?.avgGap ?? "n/a"}), ${stats.byBand.REJECT} rejected outright.`,
     `Dominant confirm factor: ${topConfirm ? `${topConfirm.factor} (×${topConfirm.count}, avg ${topConfirm.avgVote})` : "n/a"}. Dominant oppose factor: ${topOppose ? `${topOppose.factor} (×${topOppose.count}, avg ${topOppose.avgVote})` : "n/a"}.`,
     `Threshold modifiers live: ${stats.thrModifiers.map((t) => `${t.name}×${t.count} avg ${t.avg >= 0 ? "+" : ""}${t.avg}`).join(" · ") || "none"}.`,
-    `Hard blocks: ${stats.blocks.map((b) => `${b.gate}×${b.count}`).join(" · ") || "none"}. Deployed: ${stats.deploys}${stats.avgDeployScore !== null ? ` (avg |score| ${stats.avgDeployScore})` : ""}.`,
+    `Hard blocks: ${stats.blocks.map((b) => `${b.gate}×${b.count}`).join(" · ") || "none"}.${stats.blocksRingSaturated ? ` [BLOCK-RING SATURATED at ${stats.blocksRingSize} — these counts are the newest ~${stats.blocksRingSize} accepted records only (≈60-90min of churn), NOT the full ${windowHours}h census; single-key gates (MEMORY) are dedup-compressed while multi-symbol gates (REGIME) fan out — treat as recent-churn snapshot]` : ""} Deployed: ${stats.deploys}${stats.avgDeployScore !== null ? ` (avg |score| ${stats.avgDeployScore})` : ""}.`,
   ].join(" ");
-  return { narrative, stats, boundaryFiles, blockFiles };
+  return { narrative, stats, boundaryFiles, blockFiles, boundarySamples: nearGate };
 }

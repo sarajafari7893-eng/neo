@@ -907,6 +907,8 @@ export interface GateStatsDTO {
   blocks: Array<{ gate: GateNameDTO; count: number; lastReason: string }>;
   deploys: number;
   avgDeployScore: number | null;
+  blocksRingSize?: number;
+  blocksRingSaturated?: boolean;
 }
 
 export interface GateLessonDTO {

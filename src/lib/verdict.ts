@@ -39,6 +39,104 @@ export interface VerdictCoreState {
   lessons: VerdictCoreLesson[];
 }
 
+// ── DETERMINISTIC LESSON VERIFIER (VERDICT-CORE audit 2026-11-05, operator mandate)
+// The LLM lesson-writer was caught twice in cycle #1410: a fabricated quantifier
+// ("8/8 PUMPUSDT" — actual 1/8) and a category error (symbols called strategies).
+// Contract: every numeric claim a lesson makes is re-checked against the SAME
+// measured rows the model studied; failures are ANNOTATED (never silently
+// rewritten) and confidence is capped (مصوبه (ج)). Fail-open — verification
+// must never break the learning cycle.
+
+const VERIFIER_SYMBOL_RE = /\b([A-Z0-9]{3,12}USDT)\b/g;
+// "8/8 PUMPUSDT" AND the compressed form "8/8 boundary rejects (ZECUSDT, PUMPUSDT)"
+// (cycle #1411 showed the model bridges the quantifier to the symbol with prose)
+const VERIFIER_QUANT_RE = /(\d{1,3})\s*\/\s*(\d{1,3})(?:[^\n]{0,40}?)([A-Z0-9]{3,12}USDT)/g;
+// census forms: "703 REGIME" (cycle #1410) AND "REGIME violations (684/800)" (cycle #1411)
+const VERIFIER_BLOCK_RE = /(\d{2,7})\s+(REGIME|MEMORY|STRATEGY|LEARNED|FLOW|DECISIVE|ONSET-RETEST|RISK-CLUSTER)\b/g;
+const VERIFIER_BLOCK_FRAC_RE = /\b(REGIME|MEMORY|STRATEGY|LEARNED|FLOW|DECISIVE|ONSET-RETEST|RISK-CLUSTER)\b[^.\n]{0,30}?(\d{2,7})\s*\/\s*\d{2,7}/g;
+
+interface VerifierCtx {
+  boundarySamples: Array<{ symbol: string; direction: string }>;
+  stats: {
+    windowHours: number;
+    blocks: Array<{ gate: string; count: number }>;
+    blocksRingSaturated?: boolean;
+    blocksRingSize?: number;
+  };
+}
+
+interface VerifierResult {
+  evidence: string | undefined;
+  confidence: number;
+  corrected: boolean;
+}
+
+function verifyLessonFinding(
+  finding: { pattern: string; evidence?: string; confidence: number },
+  ctx: VerifierCtx,
+): VerifierResult {
+  try {
+    const text = `${finding.pattern} ${finding.evidence ?? ""}`;
+    const notes: string[] = [];
+    let corrected = false;
+
+    // ① quantifier check — "N/M SYMBOL" vs the boundary files actually studied
+    for (const m of text.matchAll(new RegExp(VERIFIER_QUANT_RE.source, "g"))) {
+      const sym = m[3];
+      const claimed = Number(m[1]);
+      const actual = ctx.boundarySamples.filter((s) => s.symbol === sym).length;
+      if (actual < claimed) {
+        corrected = true;
+        notes.push(`QUANTIFIER-MISMATCH ${sym}: claimed ${m[1]}/${m[2]}, the boundary files studied contain ${actual}`);
+      }
+    }
+
+    // ② hard-block census check — block counts vs a saturated ring snapshot
+    //    (both word orders: "703 REGIME" and "REGIME violations (684/800)")
+    const censusA = [...text.matchAll(new RegExp(VERIFIER_BLOCK_RE.source, "g"))]
+      .filter((m) => Number(m[1]) >= 50).map((m) => m[2]);
+    const censusB = [...text.matchAll(new RegExp(VERIFIER_BLOCK_FRAC_RE.source, "g"))]
+      .filter((m) => Number(m[2]) >= 50).map((m) => m[1]);
+    const citesBlockCensus = censusA.length > 0 || censusB.length > 0; // only census-scale numbers, not "1/7 flagged"
+    if (citesBlockCensus && ctx.stats.blocksRingSaturated) {
+      corrected = true;
+      const gates = [...new Set([...censusA, ...censusB])].join(", ");
+      notes.push(`RING-SNAPSHOT ${gates ? `(${gates}) ` : ""}block counts here are the newest ~${ctx.stats.blocksRingSize ?? 800} accepted records (≈60-90min churn), not the ${ctx.stats.windowHours}h census`);
+    }
+
+    // symbol-presence sanity: a lesson naming a symbol absent from the studied rows
+    for (const m of text.matchAll(new RegExp(VERIFIER_SYMBOL_RE.source, "g"))) {
+      const sym = m[1];
+      const inBoundary = ctx.boundarySamples.some((s) => s.symbol === sym);
+      const inBlocks = ctx.stats.blocks.some((b) => (b.gate === "REGIME" || b.gate === "MEMORY") && b.count > 0); // weak proxy — block lastReason not per-symbol here
+      if (!inBoundary && !inBlocks && ctx.boundarySamples.length > 0) {
+        corrected = true;
+        notes.push(`SYMBOL-UNVERIFIED ${sym}: not present in the boundary files studied this cycle`);
+        break; // one flag per finding is enough
+      }
+    }
+
+    let confidence = Math.round(finding.confidence);
+    if (corrected) {
+      confidence = Math.min(confidence, 70); // (ج) cap for corrected lessons
+    } else if (
+      new RegExp(VERIFIER_QUANT_RE.source).test(text) ||
+      [...text.matchAll(new RegExp(VERIFIER_BLOCK_RE.source, "g"))].some((m) => Number(m[1]) >= 50) ||
+      [...text.matchAll(new RegExp(VERIFIER_BLOCK_FRAC_RE.source, "g"))].some((m) => Number(m[2]) >= 50)
+    ) {
+      confidence = Math.min(confidence, 90); // (ج) cap for verified numeric lessons
+    }
+
+    const evidence = notes.length
+      ? `${finding.evidence ?? finding.pattern} [VERIFIER: ${notes.join("; ")}]`
+      : finding.evidence;
+    return { evidence, confidence, corrected };
+  } catch {
+    // fail-open — never break the cycle on verifier bugs
+    return { evidence: finding.evidence, confidence: Math.round(finding.confidence), corrected: false };
+  }
+}
+
 const STATE_KEY = "verdictcore.state";
 const LAST_RUN_KEY = "verdictcore.lastRun";
 const AUTO_INTERVAL_MS = 30 * 60_000;
@@ -125,23 +223,54 @@ export async function runVerdictLearn(windowHours = 12): Promise<VerdictCoreStat
   const { aiVerdictLearn } = await import("@/lib/ai");
   const res = await aiVerdictLearn(grounding, adapted);
 
+  // DETERMINISTIC VERIFICATION — every finding's numeric claims re-checked
+  // against the rows the model actually studied (audit 2026-11-05, مصوبه ب/ج)
+  const verifierCtx: VerifierCtx = {
+    boundarySamples: journal.boundarySamples.map((s) => ({ symbol: s.symbol, direction: s.direction })),
+    stats: {
+      windowHours: stats.windowHours,
+      blocks: stats.blocks.map((b) => ({ gate: b.gate, count: b.count })),
+      blocksRingSaturated: stats.blocksRingSaturated,
+      blocksRingSize: stats.blocksRingSize,
+    },
+  };
+  const verified = res.findings.map((f) => verifyLessonFinding(f, verifierCtx));
+  const correctedCount = verified.filter((v) => v.corrected).length;
+
+  const prev = await getVerdictCoreState();
+
+  // HISTORY HEALING — persisted lessons from earlier cycles keep their original
+  // unverified text (e.g. #1410's "8/8 PUMPUSDT" sat at confidence 100). Re-verify
+  // every stored lesson that does not already carry a verifier tag; annotate + cap
+  // when it fails against the CURRENT studied rows. Verified-clean history is
+  // left untouched (no silent downgrades).
+  const healedPrev = prev.lessons.map((l) => {
+    if ((l.evidence ?? l.pattern).includes("[VERIFIER:")) return l;
+    const v = verifyLessonFinding(
+      { pattern: l.pattern, evidence: l.evidence, confidence: l.confidence },
+      verifierCtx,
+    );
+    if (!v.corrected) return l;
+    return { ...l, confidence: Math.min(l.confidence, v.confidence), evidence: v.evidence ?? l.evidence };
+  });
+  const healedCount = healedPrev.filter((l, i) => l !== prev.lessons[i]).length;
+
   const nowIso = new Date().toISOString();
-  const lessons: VerdictCoreLesson[] = res.findings.map((f) => ({
+  const lessons: VerdictCoreLesson[] = res.findings.map((f, i) => ({
     at: nowIso,
     scope: "GATE-JOURNAL",
     pattern: f.evidence ? `${f.pattern} — ev: ${f.evidence}` : f.pattern,
     action: f.action,
     label: res.label,
-    confidence: Math.round(f.confidence),
-    evidence: f.evidence,
+    confidence: verified[i]?.confidence ?? Math.round(f.confidence),
+    evidence: verified[i]?.evidence ?? f.evidence,
   }));
 
-  const prev = await getVerdictCoreState();
   const state: VerdictCoreState = {
     runs: prev.runs + 1,
     lastRunAt: nowIso,
-    lastAnswer: res.digest,
-    lessons: [...lessons, ...prev.lessons].slice(0, LESSON_CAP),
+    lastAnswer: correctedCount > 0 ? `${res.digest} [VERIFIER: ${correctedCount} lesson(s) annotated/corrected against the studied rows this cycle]` : res.digest,
+    lessons: [...lessons, ...healedPrev].slice(0, LESSON_CAP),
   };
   await saveState(state);
 
@@ -153,7 +282,7 @@ export async function runVerdictLearn(windowHours = 12): Promise<VerdictCoreStat
         null,
         "ENGINE",
         "ai",
-        `VERDICT-CORE cycle #${state.runs} (${res.label}) — studied ${stats.samples} gate verdicts (${stats.byBand.BOUNDARY} boundary · ${stats.byBand.REJECT} rejects · ${stats.deploys} deploys) — top reject driver ${adapted.topRejectDrivers[0]?.code ?? "n/a"}, top confirm driver ${adapted.topConfirmDrivers[0]?.code ?? "n/a"} — lessons persisted to the central core`,
+        `VERDICT-CORE cycle #${state.runs} (${res.label}) — studied ${stats.samples} gate verdicts (${stats.byBand.BOUNDARY} boundary · ${stats.byBand.REJECT} rejects · ${stats.deploys} deploys) — top reject driver ${adapted.topRejectDrivers[0]?.code ?? "n/a"}, top confirm driver ${adapted.topConfirmDrivers[0]?.code ?? "n/a"} — verifier: ${correctedCount}/${res.findings.length} findings + ${healedCount} history lessons annotated — lessons persisted to the central core`,
       )
     )
     .catch(() => undefined);
