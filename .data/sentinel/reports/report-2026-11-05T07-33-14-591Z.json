@@ -1,14 +1,19 @@
 {
  "schemaVersion": 1,
  "kind": "deep",
- "at": "2026-11-03T22:47:27.660Z",
- "tehran": "04/11/2026, 02:17:27",
- "verdict": "RED",
+ "at": "2026-11-05T07:33:13.607Z",
+ "tehran": "05/11/2026, 11:03:13",
+ "verdict": "AMBER",
  "anomalies": [
   {
-   "sev": "crit",
-   "area": "engine",
-   "msg": "no SignalEvent for 498262h+47m — engine may be stalled"
+   "sev": "warn",
+   "area": "watchdog",
+   "msg": "layer-1 non-ok services: {\"app\":\"ok\",\"liq\":\"ok\",\"ws\":\"ok\",\"bridge\":\"ok\",\"trade\":\"ok\",\"sentinel\":\"ok\",\"armor\":\"ok\",\"cron\":\"ok\",\"stable\":\"ok\",\"kw\":\"ok\",\"mem\":\"ok\",\"warm\":\"ok\",\"tbt\":\"escalated\",\"cards\":\"ok\"}"
+  },
+  {
+   "sev": "warn",
+   "area": "dev.log",
+   "msg": "21 error lines in recent log window"
   }
  ],
  "services": [
@@ -17,78 +22,78 @@
    "label": "app :3000",
    "up": true,
    "status": 200,
-   "ms": 89
+   "ms": 28
   },
   {
    "key": "ws",
    "label": "price-ws :3003",
    "up": true,
    "status": 400,
-   "ms": 2
+   "ms": 20
   },
   {
    "key": "bridge",
    "label": "telegram-bridge :3005",
    "up": true,
    "status": 200,
-   "ms": 2
+   "ms": 20
   },
   {
    "key": "liq",
    "label": "liq :3010",
    "up": true,
    "status": 200,
-   "ms": 2
+   "ms": 20
   },
   {
    "key": "trade",
    "label": "trade :3011",
    "up": true,
    "status": 200,
-   "ms": 2
+   "ms": 20
   },
   {
    "key": "watchdog",
    "label": "p0-watchdog :3020",
    "up": true,
    "status": 200,
-   "ms": 2
+   "ms": 20
   }
  ],
  "mem": {
-  "availableMb": 529
+  "availableMb": 559
  },
  "disk": {
-  "rootFreeGb": 2.28,
-  "tmpFreeGb": 2.28
+  "rootFreeGb": 3.03,
+  "tmpFreeGb": 3.03
  },
  "db": {
   "ok": true,
-  "signals": 3247,
-  "events": 80148,
-  "prices": 91340,
-  "assets": 28,
+  "signals": 3248,
+  "events": 80352,
+  "prices": 73381,
+  "assets": 33,
   "pumps": 2307,
-  "events1h": 781,
-  "lastEventAgeMs": 1793746045476,
+  "events1h": 1719,
+  "lastEventAgeMs": 4234,
   "stuckActive": 0,
   "orphanEvents": 0,
   "stuckPumpTracks": 0,
   "dbBytes": 57462784,
-  "walBytes": 4297192
+  "walBytes": 4120032
  },
  "backup": {
   "ok": true,
   "dir": "/tmp/my-project/backups",
   "encCount": 12,
   "zipCount": 12,
-  "newestEncMs": 1793744293090.9387,
-  "newestAnyMs": 1793744293090.9387,
-  "encAgeMs": 1754423.0612792969
+  "newestEncMs": 1793857769065.79,
+  "newestAnyMs": 1793857769065.79,
+  "encAgeMs": 6223620.2099609375
  },
  "watchdog": {
   "ok": true,
-  "ver": "p0-watchdog 1.5.0",
+  "ver": "p0-watchdog 1.4.9",
   "modes": {
    "app": "ok",
    "liq": "ok",
@@ -102,22 +107,22 @@
    "kw": "ok",
    "mem": "ok",
    "warm": "ok",
-   "tbt": "ok",
+   "tbt": "escalated",
    "cards": "ok"
   },
-  "nonOk": 0,
+  "nonOk": 1,
   "memLevel": "ok",
-  "memAvailableMb": 507,
+  "memAvailableMb": 566,
   "paused": false
  },
  "log": {
-  "windowLines": 1007,
-  "errors": 13,
+  "windowLines": 906,
+  "errors": 21,
   "http500": 0,
   "oom": 0,
   "enospc": 0,
   "hydration": 0,
-  "unhandled": 2,
+  "unhandled": 0,
   "settlementStalled": 0,
   "turbopackPanic": 0
  },
@@ -125,24 +130,24 @@
   "ok": true,
   "source": "live-api",
   "mode": "shadow",
-  "generatedAt": "2026-11-03T22:47:27.526Z",
+  "generatedAt": "2026-11-05T07:33:12.746Z",
   "stats": {
-   "total": 9693,
-   "passSide": 5606,
-   "rejectSide": 4087,
-   "vetoCount": 6646,
-   "tradeCount": 3047,
-   "modelSharePct": 42.6,
+   "total": 600,
+   "passSide": 279,
+   "rejectSide": 321,
+   "vetoCount": 539,
+   "tradeCount": 61,
+   "modelSharePct": 78.2,
    "modelGroundedPct": 100,
-   "avgConfidence": 67.5,
-   "gateAgreement": 2662,
-   "paperOpen": 11,
-   "paperSettled": 1433,
+   "avgConfidence": 83.5,
+   "gateAgreement": 286,
+   "paperOpen": 10,
+   "paperSettled": 1435,
    "recent24h": {
-    "n": 111,
-    "modelSharePct": 94.6,
-    "lastModelAgeH": 2.5,
-    "lastVerdictAgeH": 2.5
+    "n": 131,
+    "modelSharePct": 94.7,
+    "lastModelAgeH": 1.7,
+    "lastVerdictAgeH": 0
    }
   },
   "arms": [
@@ -153,7 +158,7 @@
     "pct": 100,
     "starved": false,
     "reachable": true,
-    "fed": 1622,
+    "fed": 26,
     "lastFedAgeH": null
    },
    {
@@ -163,7 +168,7 @@
     "pct": 100,
     "starved": false,
     "reachable": true,
-    "fed": 3984,
+    "fed": 253,
     "lastFedAgeH": null
    },
    {
@@ -173,7 +178,7 @@
     "pct": 100,
     "starved": false,
     "reachable": true,
-    "fed": 1427,
+    "fed": 1428,
     "lastFedAgeH": null
    },
    {
@@ -193,7 +198,7 @@
   "tSum": 120,
   "nSumReach": 107,
   "tSumReach": 120,
-  "fenceEntries24hFloor": 191
+  "fenceEntries24hFloor": 186
  },
  "rawcal": {
   "armed": true,
@@ -201,35 +206,40 @@
   "issuedTotal": 2158,
   "target": 3217,
   "heartbeatAgeH": 0,
-  "heartbeatAt": "2026-11-03T2246Z PAUSED fapi ban active (fapi GLOBAL ban window live — 46s left) — issuer stands down, auto-resumes on lift"
+  "heartbeatAt": "2026-11-05T0733Z PAUSED fapi ban active (fapi GLOBAL ban window live — 974s left) — issuer stands down, auto-resumes on lift"
  },
  "cards": {
   "ok": true,
-  "sentinelAgeSec": 15,
-  "ticks": 502,
-  "refreshed1h": 27,
-  "failures1h": 37,
+  "sentinelAgeSec": 1,
+  "ticks": 118,
+  "refreshed1h": 22,
+  "failures1h": 64,
   "staleHot": 3,
   "worst": [
    {
     "symbol": "EVAAUSDT",
-    "ageMin": 2,
+    "ageMin": 71,
     "heat": "hot"
    },
    {
     "symbol": "BMTUSDT",
-    "ageMin": 1,
-    "heat": "hot"
-   },
-   {
-    "symbol": "HOTUSDT",
-    "ageMin": 1,
+    "ageMin": 3,
     "heat": "hot"
    },
    {
     "symbol": "HYPEUSDT",
-    "ageMin": 1,
+    "ageMin": 3,
     "heat": "warm"
+   },
+   {
+    "symbol": "LSKUSDT",
+    "ageMin": 3,
+    "heat": "warm"
+   },
+   {
+    "symbol": "FFUSDT",
+    "ageMin": 2,
+    "heat": "hot"
    }
   ]
  },
@@ -237,11 +247,11 @@
   "armed": true,
   "curing": false,
   "cures24h": 0,
-  "lastCureAt": "2026-10-23T18:29:30.906Z",
+  "lastCureAt": "2026-11-03T00:34:31.064Z",
   "lastCureOutcome": "app-200-post-cure",
   "failStreak": 0,
   "baselineMark": 0
  },
- "uptimeSec": 23400,
+ "uptimeSec": 5401,
  "ver": "nexus-sentinel 1.3.2"
 }
