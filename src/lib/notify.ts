@@ -41,11 +41,14 @@ import { renderSignalBannerV2, renderDailyPoster, type BannerV2Spec } from "./te
 
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN ?? "";
 const ENV_CHAT = process.env.TELEGRAM_CHAT_ID ?? "";
-// v12.7 SIGNAL-CHANNEL MIRROR (operator order 2026-11-06 trace 1a1ae5194b0586d9
-// «کارت سیگنال جدید باز شده هم به کانال همزمان ارسال بشه») — every CREATED card
-// (new opened signal) is mirrored VERBATIM to this channel: same photo banner +
-// caption the operator chat receives. Fire-and-forget, never blocks the engine
-// or the operator send; empty/unset = mirror dormant. Never echo the value.
+// v12.8 SIGNAL-CHANNEL MIRROR (operator order 2026-11-06 trace 1a1ae5194b0586d9
+// «کارت سیگنال جدید باز شده هم به کانال همزمان ارسال بشه», extended trace
+// 1a1ae5ccfa2fba91 «کانال چرخه‌ی کامل عمر سیگنال را نشان دهد») — EVERY relayed
+// lifecycle card (CREATED birth · TP1/TP2/TP3 rungs · SL stop · TTL_EXPIRED /
+// EARLY_EXIT close · TTL_EXTENDED grant · AFTERLIFE follow-up) is mirrored
+// VERBATIM to this channel: same card the operator chat receives. Fire-and-
+// forget, never blocks the engine or the operator send; empty/unset = mirror
+// dormant. Never echo the value.
 const ENV_SIGNAL_CHANNEL = process.env.TELEGRAM_SIGNAL_CHANNEL ?? "";
 
 const CHAT_OVERRIDE_KEY = "telegram.chatId";
@@ -146,7 +149,7 @@ async function ensureBotIdentity(): Promise<void> {
         bootLogged = true;
         const chat = chatOverride ?? ENV_CHAT;
         const selfRefused = chat === String(botId);
-        console.log(`[NOTIFY] telegram relay ${selfRefused ? "ARMED (chat PENDING)" : chat ? "ARMED" : "DORMANT (no chat)"} — bot @${botUsername} (#${botId})${selfRefused ? ` · TELEGRAM_CHAT_ID equals the bot's own id — Telegram rejects bot→bot sends; waiting for discoverChat()/override` : chat ? ` · chat ${chat.slice(0, 3)}***${chat.slice(-2)}` : " · TELEGRAM_CHAT_ID unset"}${ENV_SIGNAL_CHANNEL ? ` · signal-channel mirror → ${ENV_SIGNAL_CHANNEL.slice(0, 1)}***${ENV_SIGNAL_CHANNEL.slice(-4)} (CREATED cards)` : ""}`);
+        console.log(`[NOTIFY] telegram relay ${selfRefused ? "ARMED (chat PENDING)" : chat ? "ARMED" : "DORMANT (no chat)"} — bot @${botUsername} (#${botId})${selfRefused ? ` · TELEGRAM_CHAT_ID equals the bot's own id — Telegram rejects bot→bot sends; waiting for discoverChat()/override` : chat ? ` · chat ${chat.slice(0, 3)}***${chat.slice(-2)}` : " · TELEGRAM_CHAT_ID unset"}${ENV_SIGNAL_CHANNEL ? ` · signal-channel mirror → ${ENV_SIGNAL_CHANNEL.slice(0, 1)}***${ENV_SIGNAL_CHANNEL.slice(-4)} (full lifecycle)` : ""}`);
       }
     }
   } catch (e: unknown) {
@@ -480,13 +483,17 @@ async function buildCard(type: string, symbol: string | null, engineMessage: str
   return { text, photo: renderStatusBanner(spec), photoName: `${kind.toLowerCase()}-${serial}.png` };
 }
 
-// ── v12.7 SIGNAL-CHANNEL MIRROR (operator order 2026-11-06, trace 1a1ae5194b0586d9) ──
-// CREATED cards ride to the public signal channel VERBATIM — the exact final
-// card the operator chat received (post flood-valve/caption-compaction), photo
-// banner + caption or the text fallback. Fire-and-forget: failures are counted
-// + ringed and NEVER touch the operator send or the engine hot path. Own photo
-// flood valve (≤6/hour, overflow → same card as text) mirrors operator doctrine.
-async function mirrorCreatedToChannel(card: RelayCard): Promise<void> {
+// ── v12.8 SIGNAL-CHANNEL MIRROR (operator orders 2026-11-06, traces
+// 1a1ae5194b0586d9 + 1a1ae5ccfa2fba91) ──
+// FULL-LIFECYCLE cards ride to the public signal channel VERBATIM — the exact
+// final card the operator chat received (post flood-valve/caption-compaction),
+// photo banner + caption or the text fallback. Animated operator sends (TP
+// MP4s) mirror as their static PNG — presentation differs, payload identical,
+// and the channel never burns the animation budget. Fire-and-forget: failures
+// are counted + ringed and NEVER touch the operator send or the engine hot
+// path. Own photo flood valve (≤6/hour, overflow → same card as text) mirrors
+// operator doctrine.
+async function mirrorCardToChannel(card: RelayCard): Promise<void> {
   if (!ENV_SIGNAL_CHANNEL) return;
   let out = card;
   if (out.photo) {
@@ -507,7 +514,7 @@ async function mirrorCreatedToChannel(card: RelayCard): Promise<void> {
     chLastSentAt = Date.now();
     if (!chLiveLogged) {
       chLiveLogged = true;
-      console.log(`[NOTIFY] signal-channel mirror LIVE → ${ENV_SIGNAL_CHANNEL.slice(0, 1)}***${ENV_SIGNAL_CHANNEL.slice(-4)} (first CREATED card delivered)`);
+      console.log(`[NOTIFY] signal-channel mirror LIVE → ${ENV_SIGNAL_CHANNEL.slice(0, 1)}***${ENV_SIGNAL_CHANNEL.slice(-4)} (first lifecycle card delivered)`);
     }
   } else {
     chFailCount++;
@@ -631,14 +638,16 @@ export function relaySignalEvent(type: string, symbol: string | null, message: s
       pushErr(`${type}: ${r?.error ?? "?"}`);
       console.error(`[NOTIFY] telegram relay send failed (${type}): ${r?.error ?? "?"}`);
     }
-    // v12.7 — operator order «کارت سیگنال جدید باز شده هم به کانال همزمان
-    // ارسال بشه»: mirror the FINAL card (exactly what the operator chat got)
-    // to the public signal channel. NOTE: rides on the operator chat being
-    // resolvable (resolved + persisted for weeks) — unresolved-chat pending
-    // state skips the mirror too, by design (one health gate).
-    if (type === "CREATED" && ENV_SIGNAL_CHANNEL) {
+    // v12.8 — operator order «کانال چرخه‌ی کامل عمر سیگنال را نشان دهد»:
+    // mirror EVERY final card (exactly what the operator chat got) to the
+    // public signal channel — birth, rungs, stop, expiry, extension, afterlife.
+    // relaySignalEvent's entry gate already restricts this to RELAYABLE_TYPES;
+    // NOTE: rides on the operator chat being resolvable (resolved + persisted
+    // for weeks) — unresolved-chat pending state skips the mirror too, by
+    // design (one health gate).
+    if (ENV_SIGNAL_CHANNEL) {
       try {
-        await mirrorCreatedToChannel(card);
+        await mirrorCardToChannel(card);
       } catch (e) {
         chFailCount++;
         pushErr(`channel: ${e instanceof Error ? e.message : String(e)}`);

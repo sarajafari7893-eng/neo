@@ -33628,3 +33628,12 @@ Task ID: WDGEN-RECYCLE-20261103
 - `relayHealth()` extended with `signalChannel {configured,target-masked,sent,failed,lastSentAt}`; boot log shows mirror state; samples (sendSampleCards) deliberately do NOT mirror.
 **Verification**: lint clean (21 pre-existing legacy scripts/ errors only) · live E2E via real relaySignalEvent (TEST-labeled NX-3249 replay): operator chat OK + channel OK, relayHealth signalChannel sent=1 failed=0 · compiled chunks contain mirror · boot logs show `signal-channel mirror → @***eneo`.
 **P1 fix during mission**: `fundingByb` phantom-column regression re-appeared (stale client 00:13 vs schema 00:14 — FuturesSnapshot samples dead again). Same operator-approved runbook as prior session: `bunx prisma generate` (client now 0 refs) + controlled app kill → layer-1 heal (new pid 10879, Ready 1.7s). Post-boot: 0 fundingByb errors, RAWCAL heartbeat ARMED every minute, 6/6 core services up, verdict AMBER (drought/ban watch only).
+
+## Task ID: SENTINEL-20261106-LIFECYCLE-MIRROR (trace 1a1ae5ccfa2fba91)
+**Mission**: operator order «کانال چرخه‌ی کامل عمر سیگنال را نشان دهد» — extend channel mirror from CREATED-only to FULL signal lifecycle
+**Changes (src/lib/notify.ts, v12.7 → v12.8 — 5 surgical edits)**:
+- Mirror hook now fires for EVERY relayed card (CREATED · TP1/TP2/TP3 · SL · TTL_EXPIRED · TTL_EXTENDED · EARLY_EXIT · AFTERLIFE) — the same 9-type set the operator chat receives; entry gate RELAYABLE_TYPES unchanged (PUMP_RADAR ban intact).
+- `mirrorCreatedToChannel` → `mirrorCardToChannel`; animated operator MP4s mirror as static PNG (payload identical, channel never burns animation budget); own ≤6/h photo valve retained.
+- relayHealth.signalChannel unchanged shape; boot log + .env comment updated to "full lifecycle".
+**Verification**: lint clean on notify.ts · live E2E via real relaySignalEvent (TEST-labeled replays: TP3 of NX-3249 + SL of NX-3248): operator chat 2/2 OK + channel 2/2 OK, signalChannel sent=2 failed=0 · hot-reloaded chunks contain mirrorCardToChannel · dev.log recent errors 0.
+**State**: @mytradeneo now shows the complete signal lifecycle automatically — birth, profit rungs, stop, expiry, extension, afterlife — zero operator action required.
