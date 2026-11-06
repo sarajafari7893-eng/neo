@@ -41,6 +41,12 @@ import { renderSignalBannerV2, renderDailyPoster, type BannerV2Spec } from "./te
 
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN ?? "";
 const ENV_CHAT = process.env.TELEGRAM_CHAT_ID ?? "";
+// v12.7 SIGNAL-CHANNEL MIRROR (operator order 2026-11-06 trace 1a1ae5194b0586d9
+// «کارت سیگنال جدید باز شده هم به کانال همزمان ارسال بشه») — every CREATED card
+// (new opened signal) is mirrored VERBATIM to this channel: same photo banner +
+// caption the operator chat receives. Fire-and-forget, never blocks the engine
+// or the operator send; empty/unset = mirror dormant. Never echo the value.
+const ENV_SIGNAL_CHANNEL = process.env.TELEGRAM_SIGNAL_CHANNEL ?? "";
 
 const CHAT_OVERRIDE_KEY = "telegram.chatId";
 const ERR_RING_CAP = 8;
@@ -67,6 +73,12 @@ let lastAutoDiscoverSkipLog = 0; // v10.16: dev.log spam throttle (was ~3.5k lin
 // v12.0.1 — flood valves
 let createdPhotoTimes: number[] = []; // CREATED photo sends in the trailing hour
 let createdPhotoBudgetSkip = 0;
+// v12.7 signal-channel mirror state + its own photo flood valve (≤6/hour, same doctrine)
+let chSentCount = 0;
+let chFailCount = 0;
+let chLastSentAt: number | null = null;
+let chPhotoTimes: number[] = [];
+let chLiveLogged = false;
 let ttlGrantRelaySeen = new Map<string, number>(); // signalId → last relayed grant number
 
 function pushErr(msg: string): void {
@@ -84,6 +96,7 @@ export function relayHealth(): {
   chatId: string | null; chatResolved: boolean; chatSource: "env" | "discovered" | "none";
   sent: number; failed: number; lastSentAt: number | null; lastErrors: string[];
   pumpDumpBlocked: number; animSent: number; animFails: number; createdPhotoBudgetSkip: number;
+  signalChannel: { configured: boolean; target: string | null; sent: number; failed: number; lastSentAt: number | null };
 } {
   const chat = chatOverride ?? ENV_CHAT;
   return {
@@ -95,6 +108,11 @@ export function relayHealth(): {
     chatSource: chatOverride ? "discovered" : ENV_CHAT ? "env" : "none",
     sent: sentCount, failed: failCount, lastSentAt, lastErrors: [...errRing],
     pumpDumpBlocked, animSent, animFails, createdPhotoBudgetSkip,
+    signalChannel: {
+      configured: ENV_SIGNAL_CHANNEL.length > 0,
+      target: ENV_SIGNAL_CHANNEL ? `${ENV_SIGNAL_CHANNEL.slice(0, 1)}***${ENV_SIGNAL_CHANNEL.slice(-4)}` : null,
+      sent: chSentCount, failed: chFailCount, lastSentAt: chLastSentAt,
+    },
   };
 }
 
@@ -128,7 +146,7 @@ async function ensureBotIdentity(): Promise<void> {
         bootLogged = true;
         const chat = chatOverride ?? ENV_CHAT;
         const selfRefused = chat === String(botId);
-        console.log(`[NOTIFY] telegram relay ${selfRefused ? "ARMED (chat PENDING)" : chat ? "ARMED" : "DORMANT (no chat)"} — bot @${botUsername} (#${botId})${selfRefused ? ` · TELEGRAM_CHAT_ID equals the bot's own id — Telegram rejects bot→bot sends; waiting for discoverChat()/override` : chat ? ` · chat ${chat.slice(0, 3)}***${chat.slice(-2)}` : " · TELEGRAM_CHAT_ID unset"}`);
+        console.log(`[NOTIFY] telegram relay ${selfRefused ? "ARMED (chat PENDING)" : chat ? "ARMED" : "DORMANT (no chat)"} — bot @${botUsername} (#${botId})${selfRefused ? ` · TELEGRAM_CHAT_ID equals the bot's own id — Telegram rejects bot→bot sends; waiting for discoverChat()/override` : chat ? ` · chat ${chat.slice(0, 3)}***${chat.slice(-2)}` : " · TELEGRAM_CHAT_ID unset"}${ENV_SIGNAL_CHANNEL ? ` · signal-channel mirror → ${ENV_SIGNAL_CHANNEL.slice(0, 1)}***${ENV_SIGNAL_CHANNEL.slice(-4)} (CREATED cards)` : ""}`);
       }
     }
   } catch (e: unknown) {
@@ -462,6 +480,42 @@ async function buildCard(type: string, symbol: string | null, engineMessage: str
   return { text, photo: renderStatusBanner(spec), photoName: `${kind.toLowerCase()}-${serial}.png` };
 }
 
+// ── v12.7 SIGNAL-CHANNEL MIRROR (operator order 2026-11-06, trace 1a1ae5194b0586d9) ──
+// CREATED cards ride to the public signal channel VERBATIM — the exact final
+// card the operator chat received (post flood-valve/caption-compaction), photo
+// banner + caption or the text fallback. Fire-and-forget: failures are counted
+// + ringed and NEVER touch the operator send or the engine hot path. Own photo
+// flood valve (≤6/hour, overflow → same card as text) mirrors operator doctrine.
+async function mirrorCreatedToChannel(card: RelayCard): Promise<void> {
+  if (!ENV_SIGNAL_CHANNEL) return;
+  let out = card;
+  if (out.photo) {
+    const nowH = Date.now();
+    chPhotoTimes = chPhotoTimes.filter((t) => nowH - t < 3_600_000);
+    if (chPhotoTimes.length >= 6) out = { text: out.text }; // valve overflow → text, still honest
+    else chPhotoTimes.push(nowH);
+  }
+  let r: { ok: boolean; error?: string };
+  if (out.photo) {
+    r = await apiSendPhoto(ENV_SIGNAL_CHANNEL, out.text, out.photo, out.photoName ?? "flowradar-signal.png");
+    if (!r.ok) r = await apiCall<unknown>("sendMessage", { chat_id: ENV_SIGNAL_CHANNEL, text: out.text.slice(0, 3800), parse_mode: "HTML", disable_web_page_preview: true });
+  } else {
+    r = await apiCall<unknown>("sendMessage", { chat_id: ENV_SIGNAL_CHANNEL, text: out.text.slice(0, 3800), parse_mode: "HTML", disable_web_page_preview: true });
+  }
+  if (r.ok) {
+    chSentCount++;
+    chLastSentAt = Date.now();
+    if (!chLiveLogged) {
+      chLiveLogged = true;
+      console.log(`[NOTIFY] signal-channel mirror LIVE → ${ENV_SIGNAL_CHANNEL.slice(0, 1)}***${ENV_SIGNAL_CHANNEL.slice(-4)} (first CREATED card delivered)`);
+    }
+  } else {
+    chFailCount++;
+    pushErr(`channel: ${r.error}`);
+    console.error(`[NOTIFY] signal-channel mirror send failed: ${r.error}`);
+  }
+}
+
 /** Fire-and-forget relay — NEVER await this from the engine hot path. */
 export function relaySignalEvent(type: string, symbol: string | null, message: string, signalId?: string | null): void {
   // v10.20 PUMP/DUMP BAN (operator mandate) — swallow banned types at the
@@ -576,6 +630,19 @@ export function relaySignalEvent(type: string, symbol: string | null, message: s
       failCount++;
       pushErr(`${type}: ${r?.error ?? "?"}`);
       console.error(`[NOTIFY] telegram relay send failed (${type}): ${r?.error ?? "?"}`);
+    }
+    // v12.7 — operator order «کارت سیگنال جدید باز شده هم به کانال همزمان
+    // ارسال بشه»: mirror the FINAL card (exactly what the operator chat got)
+    // to the public signal channel. NOTE: rides on the operator chat being
+    // resolvable (resolved + persisted for weeks) — unresolved-chat pending
+    // state skips the mirror too, by design (one health gate).
+    if (type === "CREATED" && ENV_SIGNAL_CHANNEL) {
+      try {
+        await mirrorCreatedToChannel(card);
+      } catch (e) {
+        chFailCount++;
+        pushErr(`channel: ${e instanceof Error ? e.message : String(e)}`);
+      }
     }
   })();
 }
