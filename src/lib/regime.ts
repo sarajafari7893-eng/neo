@@ -227,9 +227,10 @@ export function regimeRuling(regime: MarketRegime | null, direction: "LONG" | "S
       if (long) {
         return { ok: false, reason: `CHOP (${regime.note}) — LONG vetoed in chop at guard L${guard} (EQ-100 ledger: LONG −$111.22 Oct / −$108.09 W41+42, TP1-touch only 14% — rotational decay, strength ${regime.strength.toFixed(2)})`, sizeMult: 0, slMult: 1, scoreAdj: 0, thrAdj: 0, tag: "REGIME-CHOP" };
       }
+      // v13.4-operator — CHOP SHORT OPENED (operator mandate trace 1a1ae0a3a58bd421, 2026-11-05): the EQ-100 ledger itself crowns CHOP SHORT the winning cohort (+$40.49 W41+42, MR|S WR 56.9%) while the +10/+6 threshold tax was the clean-window suppressor behind the issuance drought. Threshold+conviction tax REMOVED; the size haircut (×0.7/×0.85) is KEPT as residual risk discipline. LONG veto and the BREAKOUT/MOMENTUM/AI-SCALP hard vetoes are UNTOUCHED (protective walls stay).
       return strongChop
-        ? { ok: true, sizeMult: 0.7, slMult: 1, scoreAdj: -6, thrAdj: 10, reason: `CHOP strong (${regime.note}) — SHORT admitted at guard L${guard} (EQ-100: CHOP SHORT +$40.49 W41+42, MR|S WR 56.9%): +10 threshold, conviction −6, size ×0.7`, tag: "REGIME-CHOP" }
-        : { ok: true, sizeMult: 0.85, slMult: 1, scoreAdj: -3, thrAdj: 6, reason: `CHOP (${regime.note}) — SHORT admitted at guard L${guard} (EQ-100: CHOP SHORT +$40.49 W41+42, AI-SWING|S +$36.89 WR41%): +6 threshold, conviction −3, size ×0.85`, tag: "REGIME-CHOP" };
+        ? { ok: true, sizeMult: 0.7, slMult: 1, scoreAdj: 0, thrAdj: 0, reason: `CHOP strong (${regime.note}) — SHORT OPENED in chop per operator mandate (EQ-100: CHOP SHORT +$40.49 W41+42, MR|S WR 56.9%): base threshold, size ×0.7 kept`, tag: "REGIME-CHOP" }
+        : { ok: true, sizeMult: 0.85, slMult: 1, scoreAdj: 0, thrAdj: 0, reason: `CHOP (${regime.note}) — SHORT OPENED in chop per operator mandate (EQ-100: CHOP SHORT +$40.49 W41+42, AI-SWING|S +$36.89 WR41%): base threshold, size ×0.85 kept`, tag: "REGIME-CHOP" };
     }
     // guard 0 — legacy soft ladder (explicit operator softening only)
     if (strongChop) {
