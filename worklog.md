@@ -33656,3 +33656,39 @@ Task ID: WDGEN-RECYCLE-20261103
 | probeDeploys | 1 (kept) | G4 MEMORY-gate drought bypass stays ARMED |
 **KEPT CLOSED (honesty/protective rails — not quality gates)**: feed-fresh + sim-price ban + PHANTOM-FEED + PRICE-ARMOR + LIQUIDITY-FLOOR + spacing ≥10min/open-cap + fapi-ban issuer suspension (v14.2 operator mandate) + core-revert.enabled=true (v12.8+ wall already advisory).
 **Result**: FIRST ISSUE IN 3 DAYS within the first scan cycle after the change — NX-3250 ADAUSDT LONG AI-SWING @ 0.1848 (SL 0.181898 · TP1 0.187702 · TP2 0.190197 · TP3 0.193505 · 9x · $10 · conf 79% · TTL 289m · MTF-CONSENSUS, EVENT-TRIGGER, RAW-CAL) at 2026-11-06T01:13:09Z. Lifecycle mirror delivered the CREATED card to @mytradeneo automatically (dev.log: `signal-channel mirror LIVE — first lifecycle card delivered`), 0 relay errors. issued 740→741, openRaw 1/8. Next issue eligible ≥01:23Z (10min spacing).
+
+## Task ID: SENTINEL-20261106-OPEN-GATES (trace 1a1a66a9881d011 + 1a1b2af7bcc328fd)
+**Mission**: OPEN-GATES — «تمام گیتهای ورودی را باز کن» + root-cause «چرا هیچ ردیابی و سیگنالی تولید نمی شود؟»
+
+### Root cause (measured, not guessed)
+1. **fapi-ban issuer stand-down (v14.2, raw-cal.ts)**: the 3-IP egress pool rides a rolling
+   ban cycle; the global window re-armed every ~24min (all-banned streak + probe contacts) ⇒
+   ban-active ≈100% of wall clock ⇒ the RAW-CAL issuer stood down ~100% ⇒ issued frozen at
+   749 for **18.4h** (last 02:40Z), stall alert fired 19:34Z.
+2. **REGIME gate (regimeGuard L1)**: 6,873 blocks / 24h (gate journal, epoch-parsed) — the
+   #1 deploy-plane killer (chop veto on every candidate in the current CHOP tape).
+3. **STRAT-PAUSE (AI-SCALP since 10-14, MEAN-REVERT since 11-03)**: 140 blocks/24h — both
+   auto-lane strategies paused.
+4. MEMORY 1,641/24h = 1,628 × AI-SWING MG-PROBE block (48h cooldown, self-re-arming;
+   capture lane bypasses via bypassQuality) — left to its own escape path.
+5. Already-open knobs found: decisiveFilter 0, decisiveErMin 0, volBarrier 0, shortGuard 0,
+   chaseThrAdj 0, dislocationGate 0, minScore 12 pinned — NOT the drought cause.
+
+### Changes
+- `src/lib/raw-cal.ts` v14.4: fapi-ban hard stand-down → DEGRADED-CAPTURE continue
+  (rows tagged FAPI-DEG via extraTags; heartbeat honest "OPEN (degraded)"). engine.ts
+  NOT touched — FLAT-10 intact (md5 eaf8be0776bdf7597a502a2d77fd8c3e before = after).
+- EngineSetting "gate": regimeGuard 1 → 0 (script .data/ops-open-gates-1106.mjs, readback verified).
+- EngineSetting "strat-pause.state": AI-SCALP + MEAN-REVERT enabled:false (evidence preserved, reversible).
+- P1 regression heal (established runbook): stale Prisma client still carried fundingByb
+  (3 refs) while schema clean → `bunx prisma generate` (0 refs) + controlled kill (pid 2241)
+  → p0-watchdog layer-1 heal (boot 21:18:36Z). Post-boot errors stopped at log line 19312;
+  364 fresh lines clean after.
+
+### Verification (live)
+- 21:16:20Z **NX-3268 WLDUSDT LONG MEAN-REVERT @0.3475** — RAW-CAL capture, tags RAW-CAL+FAPI-DEG ✓
+- 21:16:23Z NX-3269 BTCUSDT LONG AI-SCALP @75911.28 · 21:16:53Z NX-3270 ETHUSDT LONG @2231.27 ·
+  21:17:11Z NX-3271 TAOUSDT SHORT AI-SCALP @225.2 (un-paused strategy issuing again)
+- Heartbeat: PAUSED→OPEN (degraded) transition live; issued 749→750/2161.
+- Kept hard (disclosed): MEMORY probe hysteresis, BOTTOM-FADE, feed-fresh/sim-price/PHANTOM
+  honesty rails, anti-sil spacing 10min, open-cap 8, PUMP_RADAR ban.
