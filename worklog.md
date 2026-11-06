@@ -33618,3 +33618,13 @@ Task ID: WDGEN-RECYCLE-20261103
 - Book: 3249 serials — EXPIRED 1661 / SL 1363 / TP3 162 / CLOSED 61 / VOID 2 · open 0 (FLAT) · TP≥1 touched 692/3247 (21.3%) · avg settled PnL +0.62% margin.
 - No code changed, no service restarted, no trading-domain mutation.
 **Verdict**: AMBER — engine healthy and honest; issuance drought is tape-driven (chop) + protective pauses, not a defect.
+
+## Task ID: SENTINEL-20261106-CHANNEL-MIRROR (trace 1a1ae5194b0586d9)
+**Mission**: operator order «کارت سیگنال جدید باز شده هم به کانال همزمان ارسال بشه» — auto-mirror CREATED cards → @mytradeneo
+**Changes (src/lib/notify.ts, v12.7 — 7 surgical inserts)**:
+- `ENV_SIGNAL_CHANNEL` from new env `TELEGRAM_SIGNAL_CHANNEL=@mytradeneo` (.env appended).
+- `mirrorCreatedToChannel()`: mirrors the FINAL card (same photo banner + caption the operator chat received, post flood-valve/caption-compaction) to the channel; own ≤6/hour photo valve → text overflow; fire-and-forget, failures counted + ringed, never touches operator send or engine hot path.
+- Hook in `relaySignalEvent` after operator-send accounting: `type === "CREATED" && ENV_SIGNAL_CHANNEL` → mirror (rides on resolved-chat health gate).
+- `relayHealth()` extended with `signalChannel {configured,target-masked,sent,failed,lastSentAt}`; boot log shows mirror state; samples (sendSampleCards) deliberately do NOT mirror.
+**Verification**: lint clean (21 pre-existing legacy scripts/ errors only) · live E2E via real relaySignalEvent (TEST-labeled NX-3249 replay): operator chat OK + channel OK, relayHealth signalChannel sent=1 failed=0 · compiled chunks contain mirror · boot logs show `signal-channel mirror → @***eneo`.
+**P1 fix during mission**: `fundingByb` phantom-column regression re-appeared (stale client 00:13 vs schema 00:14 — FuturesSnapshot samples dead again). Same operator-approved runbook as prior session: `bunx prisma generate` (client now 0 refs) + controlled app kill → layer-1 heal (new pid 10879, Ready 1.7s). Post-boot: 0 fundingByb errors, RAWCAL heartbeat ARMED every minute, 6/6 core services up, verdict AMBER (drought/ban watch only).
