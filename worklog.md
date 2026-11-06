@@ -33608,3 +33608,13 @@ Task ID: WDGEN-RECYCLE-20261103
 **۴) راستی‌آزمایی:** ۲۵ رکورد «SHORT OPENED» در ژورنال گیت؛ نمونهٔ ADAUSDT SHORT با `thr.regime=0` (قبلاً REJECT با +10 می‌شد، اکنون BOUNDARY). tsc روی regime.ts تمیز (فقط خطاهای از-قبل-موجود fapi-gate/downlevel)؛ FLAT-10 md5 `eaf8be07…` ✓؛ md5 جدید regime.ts `4fe0ba59…`.
 **۵) رسوب Prisma دوباره:** ۴ خطای fundingByb بعد از بوت جدید (کلاینت در 15:03UTC بازتولید/جایگزین شده بود) → ران‌بوک تکرار شد: generate + ری‌استارت کنترل‌شدهٔ اپ → **صفر بعد از بوت 57450** ✓.
 **۶) چشم‌انداز خشکسالی:** در پنجره‌های تمیزِ بین بن‌ها، SHORT های CHOP حالا در آستانهٔ پایه ارزیابی می‌شوند (پاوش، MR|S، AI-SWING وقتی expectancy بازیابد)؛ لاین بن-مهار (SURROGATE-FLOW BLOCK / RAWCAL-PAUSED) عمداً دست‌نخورده ماند — همان دیوار حفاظتی فرمان 11-03؛ اگر اپراتور بازکردن آن را بخواهد، فرمان جداگانه لازم است. MEMORY gate با بهبود rolling expectancy (TP3 امروزی کمکی است) خودش باز می‌شود.
+
+## Task ID: SENTINEL-20261106-CARDS-DIAG (trace 1a1ae45c46b3bf61)
+**Mission**: M0+M4 — operator order «فقط کارت‌های سیگنال‌های صادر شده و وضعیت سیگنال‌ها را به کانال mytradeneo ارسال کن + چرایی توقف صدور»
+**Actions**:
+- Verified bot access to @mytradeneo (channel "My Trades", id -1001241588458) via getChat — token never echoed.
+- Sent 7 HTML cards to @mytradeneo via bot API (script `.data/ops-cards-myt.mjs`, SQLite readonly): 1 status card + 6 signal cards (NX-3244…NX-3249). All 7 → ok:true.
+- Diagnosis of issuance stall: engine ALIVE (block ring updating ~every 50s). RAW-CAL armed, issued 740/2158, target 3217, last issue NX-3247 @ 2026-11-03T11:51Z. Block ring dominant reason: `scan-no-candidate — decisive-excursion filter` (ENA/TAO/XRP SHORT: projected travel 0.16–0.91% vs required 1.34–2.55%, ER 0.04–0.30 vs chop floor 0.12 — deep chop, honest no-touch prediction). Secondary: periodic `fapi ban pause` (GLOBAL window / 2-IP pool distress) per operator-mandated v14.2 stand-down. Gate journal last 90min: ring-gate bands PASS 703 / BOUNDARY 372 / REJECT 124; deploy-layer gates REGIME 379, MEMORY 400, DECISIVE 25, BOTTOM-FADE 1, SINGLE-VENUE 2.
+- Book: 3249 serials — EXPIRED 1661 / SL 1363 / TP3 162 / CLOSED 61 / VOID 2 · open 0 (FLAT) · TP≥1 touched 692/3247 (21.3%) · avg settled PnL +0.62% margin.
+- No code changed, no service restarted, no trading-domain mutation.
+**Verdict**: AMBER — engine healthy and honest; issuance drought is tape-driven (chop) + protective pauses, not a defect.
