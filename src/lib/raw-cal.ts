@@ -245,24 +245,25 @@ export async function maybeRawCalDeploy(): Promise<{ issued: boolean; serial?: n
     return { issued: false, note: "not armed" };
   }
 
-  // 0) v14.2 FAPI-BAN ISSUER SUSPENSION (operator order «توصیه‌ها را کامل و
-  //    مهندسی انجام بده», trace 1a1a15fb6bc0bd75 — audit rec #1 «تعلیق issue
-  //    خودکار RAW-CAL هنگام بن فعال fapi», NX-3247 forensics fc143950) ────────
-  //    WHY: the 10-30→11-03 collapse cohort was born inside the fapi famine —
-  //    unfiltered capture rows whose flow evidence was SPOT-MIRROR surrogate
-  //    (NX-3247: flowJson CONFLICTS −9 measured on the wrong venue) poison the
-  //    calibration book they exist to fill. While the fapi plane is ban-active
-  //    (global window live OR ≥2 named egress IPs banned — fapiBanActivity()),
-  //    the AUTO-issuer stands down completely: same data-capture doctrine, but
-  //    a capture row born from the wrong venue's tape is worse than no row.
-  //    Arms/heartbeat stay alive (the mode does NOT disarm — it pauses), so
-  //    the instant the ban lifts, capture resumes with zero operator action.
-  //    The pause reason lands in the pace-monitor block ring + heartbeat.
+  // 0) v14.4 FAPI-BAN DEGRADED-CAPTURE (operator order 2026-11-06 trace
+  //    1a1a66a9881d011 «تمام گیتهای ورودی را باز کن», reiterated trace
+  //    1a1b2af7bcc328fd) — SUPERSEDES the v14.2 hard stand-down. ─────────────
+  //    WHY the flip: v14.2's premise died in the 3-IP rolling-ban era. Measured
+  //    2026-11-06: the fapi plane is ban-active ~100% of the wall clock (the
+  //    all-banned streak + probe contacts re-arm the global window every
+  //    ~24min), so the stand-down became a PERMANENT issuance freeze — issued
+  //    frozen at 749 for 18.4h, stall alert fired 19:34Z. The poison v14.2
+  //    feared is now contained at the DATA layer instead: v13.3 ①-ب
+  //    SPOT-MIRROR demote (flow evidence scores 0, INFORMATIONAL-ONLY while
+  //    ban-active) + the honesty rails that stay hard inside deploySignal
+  //    (feed-fresh guard, sim-price ban, PHANTOM-FEED). So the issuer now
+  //    CONTINUES through ban windows on the degraded tape, and every degraded
+  //    row carries the FAPI-DEG tag for per-cohort audit (the capture book can
+  //    split FAPI-DEG vs clean rows exactly like the regime split).
+  //    Reversible: re-enable a return here restores the v14.2 stand-down.
   const ban = fapiBanActivity();
   if (ban.active) {
-    noteRawCalBlock(`fapi ban pause — ${ban.reason?.slice(0, 60)}`);
-    touchRawcalHeartbeat(`PAUSED fapi ban active (${ban.reason?.slice(0, 60)}) — issuer stands down, auto-resumes on lift`);
-    return { issued: false, note: `fapi ban pause — ${ban.reason ?? "ban active"}` };
+    touchRawcalHeartbeat(`OPEN (degraded) fapi ban active (${ban.reason?.slice(0, 60)}) — issuer continues per operator order 2026-11-06 «تمام گیتهای ورودی را باز کن», rows tagged FAPI-DEG`);
   }
 
   // 1) progress check FIRST — Task 34-2 ARMS-COUPLED AUTO-CANCEL (2026-09-26
@@ -337,8 +338,14 @@ export async function maybeRawCalDeploy(): Promise<{ issued: boolean; serial?: n
 
   // 4) issue the capture record through the engine scan (honesty rails stay
   //    hard inside deploySignal: feed-fresh guard + sim-price ban)
+  //    v14.4 — during a live fapi ban the row is tagged FAPI-DEG (degraded
+  //    spot-mirror tape) so the capture book can audit the cohort separately.
   const { deploySignal } = await import("./engine");
-  const res = await deploySignal(undefined, undefined, { calCapture: true, triggerTag: "RAW-CAL" });
+  const res = await deploySignal(undefined, undefined, {
+    calCapture: true,
+    triggerTag: "RAW-CAL",
+    ...(ban.active ? { extraTags: ["FAPI-DEG"] } : {}),
+  });
   if (!res.signal) {
     // rate-limit the "scan found nothing" chatter — one event / 30min
     noteRawCalBlock(`scan-no-candidate — ${res.error?.slice(0, 60) ?? "no setup"}`);
