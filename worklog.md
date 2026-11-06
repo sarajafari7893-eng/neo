@@ -33637,3 +33637,22 @@ Task ID: WDGEN-RECYCLE-20261103
 - relayHealth.signalChannel unchanged shape; boot log + .env comment updated to "full lifecycle".
 **Verification**: lint clean on notify.ts · live E2E via real relaySignalEvent (TEST-labeled replays: TP3 of NX-3249 + SL of NX-3248): operator chat 2/2 OK + channel 2/2 OK, signalChannel sent=2 failed=0 · hot-reloaded chunks contain mirrorCardToChannel · dev.log recent errors 0.
 **State**: @mytradeneo now shows the complete signal lifecycle automatically — birth, profit rungs, stop, expiry, extension, afterlife — zero operator action required.
+
+## Task ID: SENTINEL-20261106-GATES-OPEN (trace 1a1ae66a9881d011)
+**Mission**: operator order «تمام گیتهای ورودی را باز کن» — issuance had been 0 for 3 days behind the quality-gate wall
+**Changes (EngineSetting key "gate" via sanctioned clamped putGateSettings — knob-level, NO code touched, FLAT-10 intact)**:
+| knob | before → after | gate |
+|---|---|---|
+| minScore | 17 → 12 [PINNED] | base threshold → clamp floor |
+| flowShortlist | 4 → 6 | max candidates evaluated per scan |
+| flowVetoScore | 4 → 25 | flow veto → effectively OFF (was VERY tight at −4) |
+| regimeGuard | 1 → 0 | REGIME chop veto → soft penalties only |
+| onsetRetestGuard | 1 → 0 | VOL-ONSET chase/retest gate OFF |
+| chaseThrAdj | 6 → 0 | LONG-chase surcharge OFF |
+| dislocationGate | 1 → 0 | venue dislocation gate OFF |
+| decisiveFilter | 1 → 0 | DECISIVE excursion filter OFF (dominant blocker) |
+| decisiveErMin | 0.12 → 0 | ER chop floor OFF |
+| maxActive | 6 → 8 | full capacity |
+| probeDeploys | 1 (kept) | G4 MEMORY-gate drought bypass stays ARMED |
+**KEPT CLOSED (honesty/protective rails — not quality gates)**: feed-fresh + sim-price ban + PHANTOM-FEED + PRICE-ARMOR + LIQUIDITY-FLOOR + spacing ≥10min/open-cap + fapi-ban issuer suspension (v14.2 operator mandate) + core-revert.enabled=true (v12.8+ wall already advisory).
+**Result**: FIRST ISSUE IN 3 DAYS within the first scan cycle after the change — NX-3250 ADAUSDT LONG AI-SWING @ 0.1848 (SL 0.181898 · TP1 0.187702 · TP2 0.190197 · TP3 0.193505 · 9x · $10 · conf 79% · TTL 289m · MTF-CONSENSUS, EVENT-TRIGGER, RAW-CAL) at 2026-11-06T01:13:09Z. Lifecycle mirror delivered the CREATED card to @mytradeneo automatically (dev.log: `signal-channel mirror LIVE — first lifecycle card delivered`), 0 relay errors. issued 740→741, openRaw 1/8. Next issue eligible ≥01:23Z (10min spacing).
