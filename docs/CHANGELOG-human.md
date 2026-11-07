@@ -259,3 +259,5 @@
 - `2026-11-06T20:32:09.917Z` DAILY-SCHEDULER: weekly performance report auto-sent for Iranian week containing 2026-11-07 (self-driving)
 
 - `2026-11-06T21:03:36.747Z` DAILY-SCHEDULER: SRE engineering daily auto-sent for Tehran day 2026-11-07 (self-driving)
+
+- `2026-11-07T20:32:03.369Z` DAILY-SCHEDULER: daily performance report auto-sent for Tehran day 2026-11-08 (self-driving, no platform cron)
