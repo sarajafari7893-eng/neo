@@ -1,8 +1,8 @@
 {
  "schemaVersion": 1,
  "kind": "deep",
- "at": "2026-11-06T12:01:12.767Z",
- "tehran": "06/11/2026, 15:31:12",
+ "at": "2026-11-07T11:09:51.334Z",
+ "tehran": "07/11/2026, 14:39:51",
  "verdict": "AMBER",
  "anomalies": [
   {
@@ -13,7 +13,7 @@
   {
    "sev": "warn",
    "area": "dev.log",
-   "msg": "34 error lines in recent log window"
+   "msg": "35 error lines in recent log window"
   }
  ],
  "services": [
@@ -22,14 +22,14 @@
    "label": "app :3000",
    "up": true,
    "status": 200,
-   "ms": 21
+   "ms": 19
   },
   {
    "key": "ws",
    "label": "price-ws :3003",
    "up": true,
    "status": 400,
-   "ms": 14
+   "ms": 2
   },
   {
    "key": "bridge",
@@ -43,53 +43,53 @@
    "label": "liq :3010",
    "up": true,
    "status": 200,
-   "ms": 1
+   "ms": 2
   },
   {
    "key": "trade",
    "label": "trade :3011",
    "up": true,
    "status": 200,
-   "ms": 1
+   "ms": 2
   },
   {
    "key": "watchdog",
    "label": "p0-watchdog :3020",
    "up": true,
    "status": 200,
-   "ms": 1
+   "ms": 2
   }
  ],
  "mem": {
-  "availableMb": 614
+  "availableMb": 470
  },
  "disk": {
-  "rootFreeGb": 2.89,
-  "tmpFreeGb": 2.89
+  "rootFreeGb": 4.11,
+  "tmpFreeGb": 4.11
  },
  "db": {
   "ok": true,
-  "signals": 3266,
-  "events": 80239,
-  "prices": 96948,
+  "signals": 3319,
+  "events": 80222,
+  "prices": 93420,
   "assets": 29,
   "pumps": 2307,
-  "events1h": 990,
-  "lastEventAgeMs": 1389,
+  "events1h": 660,
+  "lastEventAgeMs": 14322,
   "stuckActive": 0,
   "orphanEvents": 0,
   "stuckPumpTracks": 0,
-  "dbBytes": 59088896,
-  "walBytes": 4124152
+  "dbBytes": 59371520,
+  "walBytes": 4128272
  },
  "backup": {
   "ok": true,
   "dir": "/tmp/my-project/backups",
   "encCount": 12,
   "zipCount": 12,
-  "newestEncMs": 1793956290915.0874,
-  "newestAnyMs": 1793956290915.0874,
-  "encAgeMs": 10181562.912597656
+  "newestEncMs": 1794044607587.5066,
+  "newestAnyMs": 1794044607587.5066,
+  "encAgeMs": 5183476.493408203
  },
  "watchdog": {
   "ok": true,
@@ -112,13 +112,13 @@
   },
   "nonOk": 1,
   "memLevel": "ok",
-  "memAvailableMb": 626,
+  "memAvailableMb": 473,
   "paused": false
  },
  "log": {
-  "windowLines": 1583,
-  "errors": 34,
-  "http500": 1,
+  "windowLines": 1703,
+  "errors": 35,
+  "http500": 0,
   "oom": 0,
   "enospc": 0,
   "hydration": 0,
@@ -130,24 +130,24 @@
   "ok": true,
   "source": "live-api",
   "mode": "shadow",
-  "generatedAt": "2026-11-06T12:01:12.499Z",
+  "generatedAt": "2026-11-07T11:09:51.078Z",
   "stats": {
    "total": 600,
-   "passSide": 287,
-   "rejectSide": 313,
-   "vetoCount": 538,
-   "tradeCount": 62,
-   "modelSharePct": 75.5,
+   "passSide": 317,
+   "rejectSide": 283,
+   "vetoCount": 581,
+   "tradeCount": 19,
+   "modelSharePct": 50.5,
    "modelGroundedPct": 100,
-   "avgConfidence": 82.3,
-   "gateAgreement": 277,
+   "avgConfidence": 72,
+   "gateAgreement": 274,
    "paperOpen": 10,
-   "paperSettled": 1439,
+   "paperSettled": 1444,
    "recent24h": {
-    "n": 238,
-    "modelSharePct": 52.1,
-    "lastModelAgeH": 2.8,
-    "lastVerdictAgeH": 0
+    "n": 263,
+    "modelSharePct": 36.1,
+    "lastModelAgeH": 7.6,
+    "lastVerdictAgeH": 0.2
    }
   },
   "arms": [
@@ -158,7 +158,7 @@
     "pct": 100,
     "starved": false,
     "reachable": true,
-    "fed": 26,
+    "fed": 10,
     "lastFedAgeH": null
    },
    {
@@ -168,7 +168,7 @@
     "pct": 100,
     "starved": false,
     "reachable": true,
-    "fed": 261,
+    "fed": 307,
     "lastFedAgeH": null
    },
    {
@@ -178,7 +178,7 @@
     "pct": 100,
     "starved": false,
     "reachable": true,
-    "fed": 1432,
+    "fed": 1437,
     "lastFedAgeH": null
    },
    {
@@ -198,28 +198,33 @@
   "tSum": 120,
   "nSumReach": 107,
   "tSumReach": 120,
-  "fenceEntries24hFloor": 357
+  "fenceEntries24hFloor": 442
  },
  "rawcal": {
   "armed": true,
-  "issued": 749,
-  "issuedTotal": 2167,
+  "issued": 791,
+  "issuedTotal": 2209,
   "target": 3217,
   "heartbeatAgeH": 0,
-  "heartbeatAt": "2026-11-06T1201Z PAUSED fapi ban active (fapi GLOBAL ban window live — 770s left) — issuer stands down, auto-resumes on lift"
+  "heartbeatAt": "2026-11-07T1109Z OPEN (degraded) fapi ban active (fapi GLOBAL ban window live — 697s left) — issuer continues per operator orde"
  },
  "cards": {
   "ok": true,
-  "sentinelAgeSec": 14,
-  "ticks": 196,
-  "refreshed1h": 10,
-  "failures1h": 67,
+  "sentinelAgeSec": 15,
+  "ticks": 585,
+  "refreshed1h": 9,
+  "failures1h": 45,
   "staleHot": 2,
   "worst": [
    {
-    "symbol": "ONEUSDT",
-    "ageMin": 11,
-    "heat": "hot"
+    "symbol": "MEGAUSDT",
+    "ageMin": 15,
+    "heat": "warm"
+   },
+   {
+    "symbol": "HYPEUSDT",
+    "ageMin": 3,
+    "heat": "warm"
    },
    {
     "symbol": "CYBERUSDT",
@@ -227,9 +232,9 @@
     "heat": "hot"
    },
    {
-    "symbol": "HYPEUSDT",
+    "symbol": "ONEUSDT",
     "ageMin": 1,
-    "heat": "warm"
+    "heat": "hot"
    }
   ]
  },
@@ -242,6 +247,6 @@
   "failStreak": 0,
   "baselineMark": 0
  },
- "uptimeSec": 9000,
+ "uptimeSec": 27000,
  "ver": "nexus-sentinel 1.3.2"
 }
