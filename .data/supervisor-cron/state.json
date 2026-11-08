@@ -2,15 +2,15 @@
  "ver": "supervisor-cron 1.7.0",
  "pid": 2716,
  "startedAt": "2026-11-08T20:19:53.166Z",
- "updatedAt": "2026-11-08T21:47:58.507Z",
+ "updatedAt": "2026-11-08T21:57:57.490Z",
  "jobs": {
   "sweep": {
-   "lastRunAt": 1794174477414,
-   "nextRunAt": 1794174477414,
+   "lastRunAt": 1794175077415,
+   "nextRunAt": 1794175677414,
    "lastStatus": "ok",
-   "lastDurationMs": 1093,
+   "lastDurationMs": 74,
    "lastError": null,
-   "runs": 833,
+   "runs": 834,
    "failures": 0
   },
   "progress": {
@@ -41,12 +41,12 @@
    "failures": 0
   },
   "backup": {
-   "lastRunAt": 1794163809699,
-   "nextRunAt": 1794174609699,
+   "lastRunAt": 1794174609700,
+   "nextRunAt": 1794185409700,
    "lastStatus": "ok",
-   "lastDurationMs": 18956,
+   "lastDurationMs": 21807,
    "lastError": null,
-   "runs": 46,
+   "runs": 47,
    "failures": 0
   },
   "digest": {
@@ -59,24 +59,24 @@
    "failures": 0
   },
   "keepwarm": {
-   "lastRunAt": 1794174477414,
-   "nextRunAt": 1794174777414,
+   "lastRunAt": 1794175077415,
+   "nextRunAt": 1794175077414,
    "lastStatus": "ok",
-   "lastDurationMs": 1065,
+   "lastDurationMs": 75,
    "lastError": null,
-   "runs": 1589,
-   "failures": 117
+   "runs": 1591,
+   "failures": 118
   }
  },
  "lastSweep": {
-  "at": "2026-11-08T21:47:58.507Z",
+  "at": "2026-11-08T21:57:57.489Z",
   "verdict": "AMBER",
   "reason": "sentinel :3030 verdict AMBER",
   "services": {
    "app": {
     "up": true,
     "status": 200,
-    "ms": 1073
+    "ms": 61
    },
    "liq": {
     "up": true,
@@ -86,12 +86,12 @@
    "trade": {
     "up": true,
     "status": 200,
-    "ms": 0
+    "ms": 1
    },
    "armor": {
     "up": true,
     "status": 200,
-    "ms": 1
+    "ms": 0
    },
    "watchdog": {
     "up": true,
@@ -106,12 +106,12 @@
    "ws": {
     "up": true,
     "status": 400,
-    "ms": 9
+    "ms": 1
    },
    "bridge": {
     "up": true,
     "status": 200,
-    "ms": 0
+    "ms": 1
    }
   },
   "anomalies": [
@@ -122,7 +122,7 @@
    }
   ],
   "data": {
-   "lastEventAgeMin": 0
+   "lastEventAgeMin": 1
   },
   "streaks": {
    "wsDown": 0,
@@ -144,11 +144,11 @@
   "newN": 8
  },
  "lastKeepwarm": {
-  "at": "2026-11-08T21:47:58.479Z",
+  "at": "2026-11-08T21:57:57.490Z",
   "ok": true,
-  "ms": 1065,
-  "bootAt": "2026-11-08T21:45:36.800Z",
-  "gitSha": "7eb90e1",
+  "ms": 75,
+  "bootAt": "2026-11-08T21:52:59.190Z",
+  "gitSha": "da606eb",
   "coldStreak": 0
  },
  "coldStreak": 0,
@@ -162,34 +162,6 @@
  "wsDownStreak": 0,
  "staleStreak": 0,
  "history": [
-  {
-   "id": "sweep",
-   "at": 1794164877414,
-   "status": "ok",
-   "durationMs": 44,
-   "detail": "AMBER: sentinel :3030 verdict AMBER"
-  },
-  {
-   "id": "keepwarm",
-   "at": 1794165177415,
-   "status": "ok",
-   "durationMs": 34,
-   "detail": "HEARTBEAT OK 33ms boot=19:04:59Z sha=f1b8460"
-  },
-  {
-   "id": "sweep",
-   "at": 1794165477414,
-   "status": "ok",
-   "durationMs": 66,
-   "detail": "AMBER: sentinel :3030 verdict AMBER"
-  },
-  {
-   "id": "keepwarm",
-   "at": 1794165477414,
-   "status": "ok",
-   "durationMs": 74,
-   "detail": "HEARTBEAT OK 73ms boot=19:14:22Z sha=68b5771"
-  },
   {
    "id": "digest",
    "at": 1794165622138,
@@ -511,6 +483,34 @@
    "status": "ok",
    "durationMs": 1093,
    "detail": "AMBER: sentinel :3030 verdict AMBER"
+  },
+  {
+   "id": "backup",
+   "at": 1794174609700,
+   "status": "ok",
+   "durationMs": 21807,
+   "detail": "snapshot ok in 22s: SNAPSHOT OK — nexus-snapshot-20261108-215009.zip (47M) · 12 snapshots retained (max 12) · wal:VACUUM-COPY-CONSISTENT+CHECKPOINTED · cal:OK · enc:ENCRYPTED · off-site: DISABLED(oper"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1794174777414,
+   "status": "error",
+   "durationMs": 1,
+   "detail": "HEARTBEAT COLD app:3000 0ms streak=1"
+  },
+  {
+   "id": "sweep",
+   "at": 1794175077415,
+   "status": "ok",
+   "durationMs": 74,
+   "detail": "AMBER: sentinel :3030 verdict AMBER"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1794175077415,
+   "status": "ok",
+   "durationMs": 75,
+   "detail": "HEARTBEAT OK 75ms boot=21:52:59Z sha=da606eb"
   }
  ],
  "watchRuns": [
