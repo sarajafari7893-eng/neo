@@ -1,0 +1,901 @@
+     1→// ── FlowRadar Neo v6.3 outbound relay (server-only) ───────────────────────
+     2→// TELEGRAM mirror for ALERTABLE engine events. v6.3 operator round:
+     3→// «اصلاح ساختار پیام‌های تلگرامی — چیدمان مرتب و خط به خط با ایموجی، و
+     4→// تصویر برای سیگنالهای win / stop / EXPIRED». Every relay now sends a
+     5→// STRUCTURED HTML card (tidy line-by-line, emoji-labelled fields) and the
+     6→// three outcome classes get a RENDERED BANNER IMAGE (dependency-free PNG
+     7→// from telegram-image.ts): WIN (TP1/TP2/TP3, mint), STOP (SL, danger),
+     8→// EXPIRED (TTL_EXPIRED, amber). Card fields come from the REAL signal row —
+     9→// nothing is invented; when the row is unavailable the engine message line
+    10→// is relayed verbatim as the honest fallback.
+    11→//
+    12→// Delivery remains fire-and-forget with hard timeouts so Telegram can never
+    13→// stall the engine tick; the error ring + counters feed /api/notify health.
+    14→
+    15→// ── v12.0.1 TASK-46 RELAY REPAIR (operator: «پیام‌های تکراری مدام + تصاویر
+    16→// کامل نیست و در بیشتر موارد بدون تصویر») ─────────────────────────────────
+    17→// ① RAW-CAL CREATED cards carry their banner again — the v10.4 text-only
+    18→//    strip was designed when capture was an occasional mode; the whole book
+    19→//    is RAW-CAL now, so MOST cards shipped bare-text (the operator's exact
+    20→//    complaint). Photos ship for every CREATED; a 6/hour global flood valve
+    21→//    (createdPhotoBudget) stays as the anti-spam backstop.
+    22→// ② TTL_EXTENDED hourly-grant spam — the dynamic expiry gate can legitimately
+    23→//    grant up to 3× (+60m each); each grant shipped a FULL photo card → the
+    24→//    same card every hour. Grant #1 keeps the full card; grants ≥2 degrade to
+    25→//    a compact one-line text (mechanics unchanged — the relay policy changed).
+    26→// ③ Upload timeouts: photo 9s→20s, animation→25s, apiCall 4.5s→9s — multipart
+    27→//    uploads through the memory-starved process + rotating egress pool were
+    28→//    aborting → silent text fallback → «بدون تصویر». One photo retry added.
+    29→// ④ Caption safety: photo captions >1024 chars are REJECTED by Telegram (the
+    30→//    whole send fails → text fallback = another imageless card). The engine
+    31→//    message blockquote now truncates to keep the caption ≤1000.
+    32→
+    33→import { db } from "@/lib/db";
+    34→import { APP_NAME } from "./brand";
+    35→import fs from "node:fs/promises";
+    36→import path from "node:path";
+    37→import { spawn } from "node:child_process";
+    38→import { tmpdir } from "node:os";
+    39→import { renderStatusBanner, type BannerStatus } from "./telegram-image";
+    40→import { renderSignalBannerV2, renderDailyPoster, type BannerV2Spec } from "./telegram-art";
+    41→
+    42→const TOKEN = process.env.TELEGRAM_BOT_TOKEN ?? "";
+    43→const ENV_CHAT = process.env.TELEGRAM_CHAT_ID ?? "";
+    44→// v12.8 SIGNAL-CHANNEL MIRROR (operator order 2026-11-06 trace 1a1ae5194b0586d9
+    45→// «کارت سیگنال جدید باز شده هم به کانال همزمان ارسال بشه», extended trace
+    46→// 1a1ae5ccfa2fba91 «کانال چرخه‌ی کامل عمر سیگنال را نشان دهد») — EVERY relayed
+    47→// lifecycle card (CREATED birth · TP1/TP2/TP3 rungs · SL stop · TTL_EXPIRED /
+    48→// EARLY_EXIT close · TTL_EXTENDED grant · AFTERLIFE follow-up) is mirrored
+    49→// VERBATIM to this channel: same card the operator chat receives. Fire-and-
+    50→// forget, never blocks the engine or the operator send; empty/unset = mirror
+    51→// dormant. Never echo the value.
+    52→const ENV_SIGNAL_CHANNEL = process.env.TELEGRAM_SIGNAL_CHANNEL ?? "";
+    53→
+    54→const CHAT_OVERRIDE_KEY = "telegram.chatId";
+    55→const ERR_RING_CAP = 8;
+    56→
+    57→// v10.20 OPERATOR MANDATE: «ارسال پیام‌های مربوط به پامپ و دامپ رو به تلگرام
+    58→// مصدود کن» — PUMP/DUMP RADAR lines are BANNED from the Telegram mirror. The
+    59→// events still live in the SignalEvent journal, pump-performance forensics and
+    60→// the dashboard; ONLY the relay is blocked (counted honestly in
+    61→// relayHealth.pumpDumpBlocked). EARLY_EXIT stays (v10.4 rationale unchanged).
+    62→export const BANNED_RELAY_TYPES = new Set(["PUMP_RADAR"]);
+    63→export const RELAYABLE_TYPES = new Set(["CREATED", "TP1", "TP2", "TP3", "SL", "TTL_EXPIRED", "TTL_EXTENDED", "AFTERLIFE", "EARLY_EXIT"]); // v10.4: + EARLY_EXIT — v8.4 R2/R7 early time-exits are real settle outcomes (7 of the last 8 closes) and were silently dropped from the operator mirror · v10.20: PUMP_RADAR removed (operator ban)
+    64→
+    65→const errRing: string[] = [];
+    66→let sentCount = 0;
+    67→let failCount = 0;
+    68→let pumpDumpBlocked = 0; // v10.20 honesty counter — banned pump/dump relays swallowed here
+    69→let lastSentAt: number | null = null;
+    70→let botId: number | null = null; // learned once via getMe
+    71→let botUsername: string | null = null;
+    72→let chatOverride: string | null = null; // EngineSetting override (wins over env)
+    73→let overrideLoaded = false;
+    74→let bootLogged = false;
+    75→let lastAutoDiscoverSkipLog = 0; // v10.16: dev.log spam throttle (was ~3.5k lines/day)
+    76→// v12.0.1 — flood valves
+    77→let createdPhotoTimes: number[] = []; // CREATED photo sends in the trailing hour
+    78→let createdPhotoBudgetSkip = 0;
+    79→// v12.7 signal-channel mirror state + its own photo flood valve (≤6/hour, same doctrine)
+    80→let chSentCount = 0;
+    81→let chFailCount = 0;
+    82→let chLastSentAt: number | null = null;
+    83→let chPhotoTimes: number[] = [];
+    84→let chLiveLogged = false;
+    85→let ttlGrantRelaySeen = new Map<string, number>(); // signalId → last relayed grant number
+    86→
+    87→function pushErr(msg: string): void {
+    88→  errRing.unshift(`${new Date().toISOString().slice(11, 19)}Z ${msg}`);
+    89→  if (errRing.length > ERR_RING_CAP) errRing.pop();
+    90→}
+    91→
+    92→/** Token present — synchronous cheap check used on the engine hot path. */
+    93→export function relayArmed(): boolean {
+    94→  return TOKEN.length > 0;
+    95→}
+    96→
+    97→export function relayHealth(): {
+    98→  armed: boolean; tokenValid: boolean | null; botUsername: string | null;
+    99→  chatId: string | null; chatResolved: boolean; chatSource: "env" | "discovered" | "none";
+   100→  sent: number; failed: number; lastSentAt: number | null; lastErrors: string[];
+   101→  pumpDumpBlocked: number; animSent: number; animFails: number; createdPhotoBudgetSkip: number;
+   102→  signalChannel: { configured: boolean; target: string | null; sent: number; failed: number; lastSentAt: number | null };
+   103→} {
+   104→  const chat = chatOverride ?? ENV_CHAT;
+   105→  return {
+   106→    armed: relayArmed(),
+   107→    tokenValid: botId !== null ? true : null,
+   108→    botUsername,
+   109→    chatId: chat ? `${chat.slice(0, 3)}***${chat.slice(-2)}` : null,
+   110→    chatResolved: chat.length > 0 && botId !== null && chat !== String(botId),
+   111→    chatSource: chatOverride ? "discovered" : ENV_CHAT ? "env" : "none",
+   112→    sent: sentCount, failed: failCount, lastSentAt, lastErrors: [...errRing],
+   113→    pumpDumpBlocked, animSent, animFails, createdPhotoBudgetSkip,
+   114→    signalChannel: {
+   115→      configured: ENV_SIGNAL_CHANNEL.length > 0,
+   116→      target: ENV_SIGNAL_CHANNEL ? `${ENV_SIGNAL_CHANNEL.slice(0, 1)}***${ENV_SIGNAL_CHANNEL.slice(-4)}` : null,
+   117→      sent: chSentCount, failed: chFailCount, lastSentAt: chLastSentAt,
+   118→    },
+   119→  };
+   120→}
+   121→
+   122→/** Load the persisted chat override (EngineSetting telegram.chatId) once.
+   123→ * op-audit-20260908: must run BEFORE the boot log — the first boot log used to
+   124→ * print "DORMANT · TELEGRAM_CHAT_ID unset" even when the chat id was already
+   125→ * persisted, because ensureAutoDiscover→getMe logged before resolveChat ever
+   126→ * loaded the override. One DB read, once per module instance. */
+   127→async function loadOverride(): Promise<void> {
+   128→  if (overrideLoaded) return;
+   129→  overrideLoaded = true;
+   130→  try {
+   131→    const row = await db.engineSetting.findUnique({ where: { key: CHAT_OVERRIDE_KEY } });
+   132→    if (row?.value) chatOverride = row.value;
+   133→  } catch { /* fresh db */ }
+   134→}
+   135→
+   136→async function ensureBotIdentity(): Promise<void> {
+   137→  if (botId !== null || !TOKEN) return;
+   138→  await loadOverride(); // truthful boot log — persisted chat counts as resolved
+   139→  try {
+   140→    const ctrl = new AbortController();
+   141→    const t = setTimeout(() => ctrl.abort(), 4500);
+   142→    const res = await fetch(`https://api.telegram.org/bot${TOKEN}/getMe`, { signal: ctrl.signal, cache: "no-store" });
+   143→    clearTimeout(t);
+   144→    const json = (await res.json()) as { ok: boolean; result?: { id: number; username?: string } };
+   145→    if (json.ok && json.result) {
+   146→      botId = json.result.id;
+   147→      botUsername = json.result.username ?? null;
+   148→      if (!bootLogged) {
+   149→        bootLogged = true;
+   150→        const chat = chatOverride ?? ENV_CHAT;
+   151→        const selfRefused = chat === String(botId);
+   152→        console.log(`[NOTIFY] telegram relay ${selfRefused ? "ARMED (chat PENDING)" : chat ? "ARMED" : "DORMANT (no chat)"} — bot @${botUsername} (#${botId})${selfRefused ? ` · TELEGRAM_CHAT_ID equals the bot's own id — Telegram rejects bot→bot sends; waiting for discoverChat()/override` : chat ? ` · chat ${chat.slice(0, 3)}***${chat.slice(-2)}` : " · TELEGRAM_CHAT_ID unset"}${ENV_SIGNAL_CHANNEL ? ` · signal-channel mirror → ${ENV_SIGNAL_CHANNEL.slice(0, 1)}***${ENV_SIGNAL_CHANNEL.slice(-4)} (full lifecycle)` : ""}`);
+   153→      }
+   154→    }
+   155→  } catch (e: unknown) {
+   156→    pushErr(`getMe failed: ${e instanceof Error ? e.message : String(e)}`);
+   157→  }
+   158→}
+   159→
+   160→async function resolveChat(): Promise<string | null> {
+   161→  await ensureBotIdentity();
+   162→  await loadOverride();
+   163→  const chat = chatOverride ?? ENV_CHAT;
+   164→  if (!chat || botId === null || chat === String(botId)) return null;
+   165→  return chat;
+   166→}
+   167→
+   168→async function apiCall<T>(method: string, body: unknown, timeoutMs = 9000): Promise<{ ok: boolean; result?: T; error?: string }> {
+   169→  const ctrl = new AbortController();
+   170→  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+   171→  try {
+   172→    const res = await fetch(`https://api.telegram.org/bot${TOKEN}/${method}`, {
+   173→      method: "POST",
+   174→      headers: { "content-type": "application/json" },
+   175→      body: JSON.stringify(body),
+   176→      signal: ctrl.signal,
+   177→      cache: "no-store",
+   178→    });
+   179→    const json = (await res.json()) as { ok: boolean; result?: T; description?: string };
+   180→    return json.ok ? { ok: true, result: json.result } : { ok: false, error: json.description ?? `HTTP ${res.status}` };
+   181→  } catch (e: unknown) {
+   182→    return { ok: false, error: e instanceof Error ? (e.name === "AbortError" ? `timeout ${timeoutMs}ms` : e.message) : String(e) };
+   183→  } finally {
+   184→    clearTimeout(timer);
+   185→  }
+   186→}
+   187→
+   188→/** Multipart photo upload (sendPhoto) — FormData/Blob are global in Node 18+.
+   189→ * v12.0.1: 20s (was 9s — multipart uploads through the starved process/egress
+   190→ * pool were aborting into the text fallback), + ONE retry on timeout/5xx. */
+   191→async function apiSendPhoto(chat: string, caption: string, photo: Buffer, filename: string): Promise<{ ok: boolean; error?: string }> {
+   192→  let last = { ok: false, error: "unsent" } as { ok: boolean; error?: string };
+   193→  for (let attempt = 0; attempt < 2; attempt++) {
+   194→    const ctrl = new AbortController();
+   195→    const timer = setTimeout(() => ctrl.abort(), 20_000);
+   196→    try {
+   197→      const isPng = filename.toLowerCase().endsWith(".png");
+   198→      const form = new FormData();
+   199→      form.append("chat_id", chat);
+   200→      form.append("caption", caption.slice(0, 1024));
+   201→      form.append("parse_mode", "HTML");
+   202→      form.append("photo", new Blob([new Uint8Array(photo)], { type: isPng ? "image/png" : "image/jpeg" }), filename);
+   203→      const res = await fetch(`https://api.telegram.org/bot${TOKEN}/sendPhoto`, { method: "POST", body: form, signal: ctrl.signal, cache: "no-store" });
+   204→      const json = (await res.json()) as { ok: boolean; description?: string };
+   205→      last = json.ok ? { ok: true } : { ok: false, error: json.description ?? `HTTP ${res.status}` };
+   206→    } catch (e: unknown) {
+   207→      last = { ok: false, error: e instanceof Error ? (e.name === "AbortError" ? "timeout 20000ms" : e.message) : String(e) };
+   208→    } finally {
+   209→      clearTimeout(timer);
+   210→    }
+   211→    if (last.ok) return last;
+   212→    if (!(last.error ?? "").includes("timeout") && !/HTTP 5\d\d/.test(last.error ?? "")) return last; // only transient classes retry
+   213→    await new Promise((r) => setTimeout(r, 1200));
+   214→  }
+   215→  return last;
+   216→}
+   217→
+   218→function esc(s: string): string {
+   219→  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+   220→}
+   221→
+   222→// ── v10.21 ANIMATED OUTCOME CARDS ──────────────────────────────
+   223→// TP1/TP2/TP3 (WIN + FULL) cards ship as a 14-frame motion MP4:
+   224→// sharp renders each frame with the v10.21 motion layer (diagonal sweep beam
+   225→// + sonar pings + headline glow breathing + bottom traveler) → ffmpeg
+   226→// (image2pipe → libx264, faststart) → sendAnimation. v10.20's pulse-only
+   227→// loop was invisible after H.264 compression (operator: «هیچ موشنی ندارد»)
+   228→// — the motion layer is now impossible to miss, and crf 26→23 keeps the
+   229→// beam intact. Budget-guarded (max 8/hour + ≥45s gap) so a burst of
+   230→// outcomes can never flood the chat; every failure degrades silently to
+   231→// the static sendPhoto path. The TEXT is always the payload — the
+   232→// animation is presentation, never a blocker.
+   233→const ANIMATED_TYPES = new Set(["TP1", "TP2", "TP3"]);
+   234→const ANIM_FRAMES = 14;
+   235→const ANIM_FPS = 12;
+   236→const ANIM_MAX_PER_HOUR = 8;
+   237→const ANIM_MIN_GAP_MS = 45_000;
+   238→let animTimes: number[] = [];
+   239→let animSent = 0;
+   240→let animFails = 0;
+   241→
+   242→function animBudgetOk(): boolean {
+   243→  const now = Date.now();
+   244→  animTimes = animTimes.filter((t) => now - t < 3_600_000);
+   245→  if (animTimes.length > 0 && now - animTimes[animTimes.length - 1]! < ANIM_MIN_GAP_MS) return false;
+   246→  return animTimes.length < ANIM_MAX_PER_HOUR;
+   247→}
+   248→
+   249→async function renderAnimFrames(spec: BannerV2Spec): Promise<Buffer[]> {
+   250→  const frames: Buffer[] = [];
+   251→  for (let i = 0; i < ANIM_FRAMES; i++) {
+   252→    const phase = i / ANIM_FRAMES;
+   253→    const pulse = 0.5 - 0.5 * Math.cos(2 * Math.PI * phase); // smooth 0→1→0 loop
+   254→    frames.push(await renderSignalBannerV2({ ...spec, pulse, phase }));
+   255→  }
+   256→  return frames;
+   257→}
+   258→
+   259→/** 12 PNG frames in → H.264 MP4 out (≤20s hard kill). null on any failure —
+   260→ * the static photo path takes over, the alert never waits. NOTE: the MP4
+   261→ * muxer cannot write to a pipe ("does not support non seekable output") so
+   262→ * the encode lands in a transient temp file, is read back and unlinked. */
+   263→function encodeAnimMp4(frames: Buffer[]): Promise<Buffer | null> {
+   264→  return new Promise((resolve) => {
+   265→    const tmpPath = path.join(tmpdir(), `nexus-anim-${process.pid}-${Date.now()}.mp4`);
+   266→    let child: ReturnType<typeof spawn>;
+   267→    try {
+   268→      child = spawn(
+   269→        "ffmpeg",
+   270→        ["-hide_banner", "-loglevel", "error", "-y", "-f", "image2pipe", "-framerate", String(ANIM_FPS), "-i", "-", "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p", "-movflags", "+faststart", tmpPath],
+   271→        { stdio: ["pipe", "ignore", "pipe"] },
+   272→      );
+   273→    } catch {
+   274→      resolve(null);
+   275→      return;
+   276→    }
+   277→    let errTail = "";
+   278→    let done = false;
+   279→    const finish = (v: Buffer | null) => {
+   280→      if (!done) {
+   281→        done = true;
+   282→        void fs.unlink(tmpPath).catch(() => undefined);
+   283→        resolve(v);
+   284→      }
+   285→    };
+   286→    const killer = setTimeout(() => {
+   287→      child.kill("SIGKILL");
+   288→      finish(null);
+   289→    }, 20_000);
+   290→    child.stderr?.on("data", (c: Buffer) => {
+   291→      errTail = (errTail + c.toString()).slice(-300);
+   292→    });
+   293→    child.on("error", () => {
+   294→      clearTimeout(killer);
+   295→      finish(null);
+   296→    });
+   297→    child.on("close", (code) => {
+   298→      clearTimeout(killer);
+   299→      if (code !== 0) {
+   300→        if (errTail) console.error(`[NOTIFY] anim encode failed (code ${code}): ${errTail.trim().split("\n").pop()}`);
+   301→        finish(null);
+   302→        return;
+   303→      }
+   304→      fs.readFile(tmpPath).then((buf) => finish(buf.length > 1024 ? buf : null)).catch(() => finish(null));
+   305→    });
+   306→    void (async () => {
+   307→      try {
+   308→        for (const f of frames) {
+   309→          if (done) break;
+   310→          if (!child.stdin!.write(f)) await new Promise<void>((r) => child.stdin!.once("drain", () => r()));
+   311→        }
+   312→        child.stdin!.end();
+   313→      } catch {
+   314→        child.kill("SIGKILL");
+   315→      }
+   316→    })();
+   317→  });
+   318→}
+   319→
+   320→/** Multipart sendAnimation — mirrors apiSendPhoto (FormData/Blob global). */
+   321→async function apiSendAnimation(chat: string, caption: string, mp4: Buffer, filename: string): Promise<{ ok: boolean; error?: string }> {
+   322→  const ctrl = new AbortController();
+   323→  const timer = setTimeout(() => ctrl.abort(), 25_000); // v12.0.1: was 12s — MP4 uploads need headroom under memory pressure
+   324→  try {
+   325→    const form = new FormData();
+   326→    form.append("chat_id", chat);
+   327→    form.append("caption", caption.slice(0, 1024));
+   328→    form.append("parse_mode", "HTML");
+   329→    form.append("width", "1280");
+   330→    form.append("height", "720");
+   331→    form.append("animation", new Blob([new Uint8Array(mp4)], { type: "video/mp4" }), filename);
+   332→    const res = await fetch(`https://api.telegram.org/bot${TOKEN}/sendAnimation`, { method: "POST", body: form, signal: ctrl.signal, cache: "no-store" });
+   333→    const json = (await res.json()) as { ok: boolean; description?: string };
+   334→    return json.ok ? { ok: true } : { ok: false, error: json.description ?? `HTTP ${res.status}` };
+   335→  } catch (e: unknown) {
+   336→    return { ok: false, error: e instanceof Error ? (e.name === "AbortError" ? "timeout 25000ms" : e.message) : String(e) };
+   337→  } finally {
+   338→    clearTimeout(timer);
+   339→  }
+   340→}
+   341→
+   342→function fmtPrice(p: number): string {
+   343→  return p >= 100 ? p.toFixed(2) : p.toFixed(p >= 1 ? 4 : 6);
+   344→}
+   345→
+   346→// ── v6.3.2 OPERATOR ARTWORK — the full uploaded banner set ──
+   347→// Operator mandate: «استفاده از تصویر های ضمینه شده برای سیگنالهای win / stop /
+   348→// EXPIRED» + the lost-window batch (2026-09-05 21:09) adds NEW / TTL / FULL /
+   349→// Short. The PROVIDED artwork ships first; the dependency-free rendered
+   350→// banner (telegram-image.ts) is only the fallback when a file is missing.
+   351→type ArtKind = BannerStatus;
+   352→const ART_FILES: Record<ArtKind, string> = {
+   353→  WIN: "WIN.jpg", STOP: "STOP.jpg", EXPIRED: "EXPIRED.jpg",
+   354→  NEW: "NEW.jpg", SHORT: "SHORT.jpg", TTL_EXT: "TTL.jpg", FULL: "FULL.jpg",
+   355→  AFTERLIFE: "AFTERLIFE.jpg",
+   356→};
+   357→const artCache = new Map<ArtKind, Buffer | null>();
+   358→
+   359→async function loadOperatorArt(kind: ArtKind): Promise<Buffer | null> {
+   360→  if (artCache.has(kind)) return artCache.get(kind) ?? null;
+   361→  try {
+   362→    const buf = await fs.readFile(path.join(process.cwd(), "assets", "telegram", ART_FILES[kind]));
+   363→    artCache.set(kind, buf);
+   364→    return buf;
+   365→  } catch {
+   366→    artCache.set(kind, null);
+   367→    return null;
+   368→  }
+   369→}
+   370→
+   371→// ── v6.3 STRUCTURED CARD COMPOSER ─────────────────────────────────────────
+   372→// Event → (emoji headline, HTML body, optional banner image). Every field is
+   373→// read from the persisted Signal row; the engine message is appended verbatim.
+   374→interface RelayCard {
+   375→  text: string;
+   376→  photo?: Buffer;
+   377→  photoName?: string;
+   378→  /** v10.20 — the banner spec, kept so animated types can re-render pulse frames */
+   379→  bannerSpec?: BannerV2Spec;
+   380→}
+   381→
+   382→const HEADLINE: Record<string, { emoji: string; title: string }> = {
+   383→  CREATED: { emoji: "🚀", title: "NEW SIGNAL DEPLOYED" },
+   384→  TP1: { emoji: "💰", title: "TP1 HIT — 50% BOOKED" },
+   385→  TP2: { emoji: "💰💰", title: "TP2 HIT — 80% BOOKED" },
+   386→  TP3: { emoji: "🏆", title: "FULL LADDER — TP3 CAPTURED" },
+   387→  SL: { emoji: "🛑", title: "STOPPED OUT" },
+   388→  TTL_EXPIRED: { emoji: "⏰", title: "SIGNAL EXPIRED" },
+   389→  EARLY_EXIT: { emoji: "🚪", title: "EARLY TIME-EXIT" }, // v10.4: v8.4 R2/R7 adverse/stalled cut — was invisible to the operator
+   390→  TTL_EXTENDED: { emoji: "⏳", title: "TTL EXTENDED" },
+   391→  AFTERLIFE: { emoji: "🔮", title: "EXPIRED FOLLOW-UP" },
+   392→  // v9.0 PUMP/DUMP RADAR — flow tracking declarations + resolutions + unlock
+   393→  PUMP_RADAR: { emoji: "📡", title: "PUMP/DUMP RADAR" },
+   394→};
+   395→
+   396→const BANNER_STATUS: Partial<Record<string, BannerStatus>> = {
+   397→  CREATED: "NEW", TP1: "WIN", TP2: "WIN", TP3: "FULL", SL: "STOP", TTL_EXPIRED: "EXPIRED", TTL_EXTENDED: "TTL_EXT",
+   398→  AFTERLIFE: "AFTERLIFE", EARLY_EXIT: "EXPIRED", // v10.4: early cut settles EXPIRED → amber artwork
+   399→};
+   400→
+   401→type SignalLike = NonNullable<Awaited<ReturnType<typeof db.signal.findUnique>>>;
+   402→
+   403→/** Tehran wall-clock stamp for artwork corners — presentation only. */
+   404→function tehranStamp(): string {
+   405→  return `${new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Tehran", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date()).replace(",", "")} TEHRAN`;
+   406→}
+   407→
+   408→/** The tidy line-by-line HTML body shared by live cards and sample proofs. */
+   409→function composeSignalText(type: string, sig: SignalLike, engineMessage: string): string {
+   410→  const head = HEADLINE[type] ?? { emoji: "📡", title: type };
+   411→  const dirEmoji = sig.direction === "LONG" ? "🟢 LONG" : "🔴 SHORT";
+   412→  const serial = `NX-${String(sig.serial).padStart(4, "0")}`;
+   413→  const pnl = sig.pnlPercent ?? 0;
+   414→  const pnlLine = `${pnl >= 0 ? "+" : ""}${pnl.toFixed(1)}% NET`;
+   415→  const reached = sig.reachedTp ?? 0;
+   416→  const lines: string[] = [
+   417→    `${head.emoji} <b>${esc(head.title)}</b>`,
+   418→    `${dirEmoji} · <b>${esc(sig.symbol)}</b> · <i>${esc(sig.strategy)}${sig.timeframe ? ` (${esc(sig.timeframe)})` : ""}</i>`,
+   419→    "",
+   420→    `🎯 TP1: <code>${fmtPrice(sig.tp1)}</code>   💰 TP2: <code>${fmtPrice(sig.tp2)}</code>   🏆 TP3: <code>${fmtPrice(sig.tp3)}</code>`,
+   421→    `🛑 Stop: <code>${fmtPrice(sig.stopLoss)}</code>   📍 Entry: <code>${fmtPrice(sig.entryPrice)}</code>`,
+   422→    "",
+   423→    `⚡ Leverage: <b>${sig.leverage}x</b>   💵 Margin: <b>$${sig.marginUsd.toFixed(0)}</b>   📐 R:R <b>1:${sig.riskReward.toFixed(1)}</b>`,
+   424→    `📊 Conviction: <b>${sig.confidence}%</b>   ⏳ TTL: <b>${sig.ttlMinutes}m</b>${sig.ttlExtensions ? ` (+${sig.ttlExtensions} ext)` : ""}`,
+   425→  ];
+   426→  if (type !== "CREATED") {
+   427→    lines.push(`💵 Result: <b>${pnl >= 0 ? "✅" : "❌"} ${esc(pnlLine)}</b>   🪜 Ladder: <b>${reached}/3</b>`);
+   428→  }
+   429→  lines.push("", `<blockquote>💬 ${esc(engineMessage)}</blockquote>`);
+   430→  lines.push(`<i>🤖 ${esc(serial)} · FLOWRADAR-NEO AI live engine</i>`);
+   431→  return lines.join("\n");
+   432→}
+   433→
+   434→async function buildCard(type: string, symbol: string | null, engineMessage: string, signalId: string | null): Promise<RelayCard> {
+   435→  const head = HEADLINE[type] ?? { emoji: "📡", title: type };
+   436→  const sig = signalId ? await db.signal.findUnique({ where: { id: signalId } }).catch(() => null) : null;
+   437→
+   438→  if (!sig) {
+   439→    // honest fallback — engine line only
+   440→    return { text: `${head.emoji} <b>${APP_NAME} — ${esc(head.title)}</b>\n${symbol ? `📊 <b>${esc(symbol)}</b>\n` : ""}\n<blockquote>${esc(engineMessage)}</blockquote>` };
+   441→  }
+   442→
+   443→  const text = composeSignalText(type, sig, engineMessage);
+   444→  const banner = BANNER_STATUS[type];
+   445→  if (!banner) return { text };
+   446→  // CREATED cards are direction-aware: the red bear artwork ships for SHORT
+   447→  // deployments, the rocket/bull for LONG.
+   448→  const kind: BannerStatus = type === "CREATED" && sig.direction === "SHORT" ? "SHORT" : banner;
+   449→
+   450→  const serial = `NX-${String(sig.serial).padStart(4, "0")}`;
+   451→  const pnl = sig.pnlPercent ?? 0;
+   452→  const pnlLine = `${pnl >= 0 ? "+" : ""}${pnl.toFixed(1)}% NET`;
+   453→  const reached = sig.reachedTp ?? 0;
+   454→  const line2 = type === "SL" ? `RISK CONTAINED · LADDER ${reached}/3` : type === "TTL_EXPIRED" ? `TTL ${sig.ttlMinutes}M ELAPSED · LADDER ${reached}/3` : type === "EARLY_EXIT" ? `EARLY CUT (R2/R7) · LADDER ${reached}/3` : type === "TTL_EXTENDED" ? `+${sig.ttlExtensions} EXT · STILL LIVE` : type === "AFTERLIFE" ? `POST-EXPIRY ${((sig.afterlife ?? "TRACKING").replace(/_/g, " "))} · MFE ${((sig.maxPostPnlPercent ?? 0) >= 0 ? "+" : "")}${(sig.maxPostPnlPercent ?? 0).toFixed(1)}%` : type === "CREATED" ? `ENTRY ${fmtPrice(sig.entryPrice)} · RR 1:${sig.riskReward.toFixed(1)}` : `LADDER ${reached}/3 BANKED · RR 1:${sig.riskReward.toFixed(1)}`;
+   455→  const spec = {
+   456→    status: kind,
+   457→    title: `${sig.symbol} ${sig.direction}`,
+   458→    line1: `${serial} · ${pnlLine}`,
+   459→    line2,
+   460→    ts: tehranStamp(),
+   461→    // v10.20 PRICE LADDER — structural anatomy from the real row (SL/ENTRY/
+   462→    // TP1-3, banked rungs gold). ladderStrip self-guards: inverted/crossed
+   463→    // rows (qualityFlag INVERTED_STOP legacy) render no ladder, never a
+   464→    // redrawn "fixed" one. No live MARK on artwork — honesty doctrine.
+   465→    ladder: {
+   466→      direction: sig.direction === "SHORT" ? ("SHORT" as const) : ("LONG" as const),
+   467→      entry: sig.entryPrice,
+   468→      tp1: sig.tp1,
+   469→      tp2: sig.tp2,
+   470→      tp3: sig.tp3,
+   471→      sl: sig.stopLoss,
+   472→      reachedTp: sig.reachedTp ?? 0,
+   473→    },
+   474→  };
+   475→  // v8.1: professional composite (AI art + coin logo + live data) first; the
+   476→  // operator JPG set and the pixel-font banner remain as fallbacks.
+   477→  try {
+   478→    const photo = await renderSignalBannerV2(spec);
+   479→    return { text, photo, photoName: `${kind.toLowerCase()}-${serial}.png`, bannerSpec: spec };
+   480→  } catch { /* sharp failure → legacy chain below */ }
+   481→  const art = await loadOperatorArt(kind);
+   482→  if (art) return { text, photo: art, photoName: ART_FILES[kind] };
+   483→  return { text, photo: renderStatusBanner(spec), photoName: `${kind.toLowerCase()}-${serial}.png` };
+   484→}
+   485→
+   486→// ── v12.8 SIGNAL-CHANNEL MIRROR (operator orders 2026-11-06, traces
+   487→// 1a1ae5194b0586d9 + 1a1ae5ccfa2fba91) ──
+   488→// FULL-LIFECYCLE cards ride to the public signal channel VERBATIM — the exact
+   489→// final card the operator chat received (post flood-valve/caption-compaction),
+   490→// photo banner + caption or the text fallback. Animated operator sends (TP
+   491→// MP4s) mirror as their static PNG — presentation differs, payload identical,
+   492→// and the channel never burns the animation budget. Fire-and-forget: failures
+   493→// are counted + ringed and NEVER touch the operator send or the engine hot
+   494→// path. Own photo flood valve (≤6/hour, overflow → same card as text) mirrors
+   495→// operator doctrine.
+   496→async function mirrorCardToChannel(card: RelayCard): Promise<void> {
+   497→  if (!ENV_SIGNAL_CHANNEL) return;
+   498→  let out = card;
+   499→  if (out.photo) {
+   500→    const nowH = Date.now();
+   501→    chPhotoTimes = chPhotoTimes.filter((t) => nowH - t < 3_600_000);
+   502→    if (chPhotoTimes.length >= 6) out = { text: out.text }; // valve overflow → text, still honest
+   503→    else chPhotoTimes.push(nowH);
+   504→  }
+   505→  let r: { ok: boolean; error?: string };
+   506→  if (out.photo) {
+   507→    r = await apiSendPhoto(ENV_SIGNAL_CHANNEL, out.text, out.photo, out.photoName ?? "flowradar-signal.png");
+   508→    if (!r.ok) r = await apiCall<unknown>("sendMessage", { chat_id: ENV_SIGNAL_CHANNEL, text: out.text.slice(0, 3800), parse_mode: "HTML", disable_web_page_preview: true });
+   509→  } else {
+   510→    r = await apiCall<unknown>("sendMessage", { chat_id: ENV_SIGNAL_CHANNEL, text: out.text.slice(0, 3800), parse_mode: "HTML", disable_web_page_preview: true });
+   511→  }
+   512→  if (r.ok) {
+   513→    chSentCount++;
+   514→    chLastSentAt = Date.now();
+   515→    if (!chLiveLogged) {
+   516→      chLiveLogged = true;
+   517→      console.log(`[NOTIFY] signal-channel mirror LIVE → ${ENV_SIGNAL_CHANNEL.slice(0, 1)}***${ENV_SIGNAL_CHANNEL.slice(-4)} (first lifecycle card delivered)`);
+   518→    }
+   519→  } else {
+   520→    chFailCount++;
+   521→    pushErr(`channel: ${r.error}`);
+   522→    console.error(`[NOTIFY] signal-channel mirror send failed: ${r.error}`);
+   523→  }
+   524→}
+   525→
+   526→/** Fire-and-forget relay — NEVER await this from the engine hot path. */
+   527→export function relaySignalEvent(type: string, symbol: string | null, message: string, signalId?: string | null): void {
+   528→  // v10.20 PUMP/DUMP BAN (operator mandate) — swallow banned types at the
+   529→  // choke point, count honestly, never touch Telegram with them.
+   530→  if (BANNED_RELAY_TYPES.has(type)) {
+   531→    pumpDumpBlocked++;
+   532→    return;
+   533→  }
+   534→  if (!relayArmed() || !RELAYABLE_TYPES.has(type)) return;
+   535→  void (async () => {
+   536→    const chat = await resolveChat();
+   537→    if (!chat) return; // honest pending state — not an error, no doomed send
+   538→    // ── v12.0.1 TASK-46 relay policy ──
+   539→    // ① RAW-CAL CREATED cards ship their banner again (v10.4 text-only strip
+   540→    // removed — the whole book is capture-mode now, so MOST cards went bare).
+   541→    // Flood valve: ≤6 CREATED photo posters/hour, overflow → text + counter.
+   542→    // ② TTL_EXTENDED grant #1 → full photo card; grants ≥2 → compact one-line
+   543→    // text (the hourly-grant spam the operator reported). Mechanics unchanged.
+   544→    let rawCalTextOnly = false;
+   545→    let ttlGrantNo = 0;
+   546→    if (type === "CREATED" && signalId) {
+   547→      const sig = await db.signal.findUnique({ where: { id: signalId }, select: { tags: true } }).catch(() => null);
+   548→      if (sig?.tags?.includes("RAW-CAL")) {
+   549→        const nowH = Date.now();
+   550→        createdPhotoTimes = createdPhotoTimes.filter((t) => nowH - t < 3_600_000);
+   551→        if (createdPhotoTimes.length >= 6) {
+   552→          rawCalTextOnly = true; // flood valve — still honest, just lighter
+   553→          createdPhotoBudgetSkip++;
+   554→        } else createdPhotoTimes.push(nowH);
+   555→      }
+   556→    }
+   557→    if (type === "TTL_EXTENDED" && signalId) {
+   558→      const sig = await db.signal.findUnique({ where: { id: signalId }, select: { ttlExtensions: true } }).catch(() => null);
+   559→      ttlGrantNo = sig?.ttlExtensions ?? 0;
+   560→      const seen = ttlGrantRelaySeen.get(signalId);
+   561→      if (seen !== undefined && ttlGrantNo <= seen) return; // defensive: identical grant re-fire → swallow
+   562→      ttlGrantRelaySeen.set(signalId, ttlGrantNo);
+   563→      if (ttlGrantRelaySeen.size > 64) {
+   564→        const oldest = [...ttlGrantRelaySeen.entries()].sort((a, b) => a[1] - b[1])[0];
+   565→        if (oldest) ttlGrantRelaySeen.delete(oldest[0]);
+   566→      }
+   567→    }
+   568→    let card: RelayCard;
+   569→    try {
+   570→      card = await buildCard(type, symbol, message, signalId ?? null);
+   571→    } catch {
+   572→      card = { text: `📡 ${APP_NAME} ${type}${symbol ? ` · ${esc(symbol)}` : ""}\n${esc(message)}`.slice(0, 3800) };
+   573→    }
+   574→    if (rawCalTextOnly) card = { text: card.text }; // flood-valve overflow → text (v10.4 heritage, now budget-gated)
+   575→    // TTL grant #2+: compact one-line text — the operator already got the full
+   576→    // card for grant #1; hourly identical art posters were the reported spam.
+   577→    if (type === "TTL_EXTENDED" && ttlGrantNo > 1) {
+   578→      const sym = symbol ?? "?";
+   579→      card = { text: `⏳ <b>TTL extended again</b> · ${esc(sym)} — grant #${ttlGrantNo} (same setup still near its rung; full card was grant #1 · dashboard shows the live mark)` };
+   580→    }
+   581→    // v12.0.1 caption safety: Telegram REJECTS photo captions >1024 → the whole
+   582→    // image send fails → text fallback (another imageless card). Compact the
+   583→    // blockquote to keep the caption under the cap.
+   584→    if (card.photo && card.text.length > 1000) {
+   585→      const m = card.text.match(/<blockquote>[\s\S]*?<\/blockquote>/);
+   586→      if (m) {
+   587→        const room = 1000 - (card.text.length - m[0].length);
+   588→        if (room > 40) {
+   589→          const inner = m[0].slice(12, -14);
+   590→          card = { ...card, text: card.text.replace(m[0], `<blockquote>💬 ${inner.slice(0, Math.max(0, room - 30))}…</blockquote>`) };
+   591→        } else card = { ...card, text: card.text.replace(m[0], "") };
+   592→      }
+   593→      if (card.text.length > 1000) card = { ...card, text: card.text.slice(0, 1000) };
+   594→    }
+   595→    let r: { ok: boolean; error?: string } | null = null;
+   596→    // v10.20 ANIMATED OUTCOME CARDS — TP1/TP2/TP3 first try the 12-frame
+   597→    // glow-pulse MP4 (budget-guarded); any miss degrades to the static photo.
+   598→    let animated = false;
+   599→    if (card.photo && card.bannerSpec && ANIMATED_TYPES.has(type) && animBudgetOk()) {
+   600→      try {
+   601→        const frames = await renderAnimFrames(card.bannerSpec);
+   602→        const mp4 = await encodeAnimMp4(frames);
+   603→        if (mp4) {
+   604→          const mp4Name = `${(card.photoName ?? "flowradar-signal.png").replace(/\.png$/i, "")}.mp4`;
+   605→          const a = await apiSendAnimation(chat, card.text, mp4, mp4Name);
+   606→          if (a.ok) {
+   607→            animated = true;
+   608→            animSent++;
+   609→            animTimes.push(Date.now());
+   610→            r = { ok: true };
+   611→          } else {
+   612→            animFails++;
+   613→            pushErr(`anim ${type}: ${a.error}`);
+   614→          }
+   615→        } else {
+   616→          animFails++;
+   617→        }
+   618→      } catch (e) {
+   619→        animFails++;
+   620→        pushErr(`anim ${type}: ${e instanceof Error ? e.message : String(e)}`);
+   621→      }
+   622→    }
+   623→    if (card.photo && !animated) {
+   624→      r = await apiSendPhoto(chat, card.text, card.photo, card.photoName ?? "flowradar-signal.png");
+   625→      if (!r.ok) {
+   626→        // photo failed (size/network) — retry once as plain HTML text so the
+   627→        // alert still lands; banner is presentation, the message is the payload
+   628→        r = await apiCall<unknown>("sendMessage", { chat_id: chat, text: card.text.slice(0, 3800), parse_mode: "HTML", disable_web_page_preview: true });
+   629→      }
+   630→    } else if (!card.photo && !animated) {
+   631→      r = await apiCall<unknown>("sendMessage", { chat_id: chat, text: card.text.slice(0, 3800), parse_mode: "HTML", disable_web_page_preview: true });
+   632→    }
+   633→    if (r && r.ok) {
+   634→      sentCount++;
+   635→      lastSentAt = Date.now();
+   636→    } else {
+   637→      failCount++;
+   638→      pushErr(`${type}: ${r?.error ?? "?"}`);
+   639→      console.error(`[NOTIFY] telegram relay send failed (${type}): ${r?.error ?? "?"}`);
+   640→    }
+   641→    // v12.8 — operator order «کانال چرخه‌ی کامل عمر سیگنال را نشان دهد»:
+   642→    // mirror EVERY final card (exactly what the operator chat got) to the
+   643→    // public signal channel — birth, rungs, stop, expiry, extension, afterlife.
+   644→    // relaySignalEvent's entry gate already restricts this to RELAYABLE_TYPES;
+   645→    // NOTE: rides on the operator chat being resolvable (resolved + persisted
+   646→    // for weeks) — unresolved-chat pending state skips the mirror too, by
+   647→    // design (one health gate).
+   648→    if (ENV_SIGNAL_CHANNEL) {
+   649→      try {
+   650→        await mirrorCardToChannel(card);
+   651→      } catch (e) {
+   652→        chFailCount++;
+   653→        pushErr(`channel: ${e instanceof Error ? e.message : String(e)}`);
+   654→      }
+   655→    }
+   656→  })();
+   657→}
+   658→
+   659→/** v6.3: module-state primer — Next dev compiles each route bundle separately,
+   660→ * so /api/notify's copy of this module starts with cold state even when the
+   661→ * engine's copy already resolved the chat. Call before reading relayHealth(). */
+   662→export async function primeRelayState(): Promise<void> {
+   663→  await resolveChat();
+   664→}
+   665→
+   666→/** Operator-initiated proof: send an arbitrary line to the resolved chat. */
+   667→export async function sendDirect(text: string): Promise<{ ok: boolean; error?: string; chatId?: string }> {
+   668→  const chat = await resolveChat();
+   669→  if (!TOKEN) return { ok: false, error: "TELEGRAM_BOT_TOKEN unset — relay dormant" };
+   670→  if (!chat) {
+   671→    if (botId !== null && (chatOverride ?? ENV_CHAT) === String(botId)) {
+   672→      return { ok: false, error: `TELEGRAM_CHAT_ID (${ENV_CHAT}) is the bot's own id — Telegram rejects bot→bot sends. Message the bot once from your account, then run discover.` };
+   673→    }
+   674→    return { ok: false, error: chatOverride || ENV_CHAT ? "chat unresolved (getMe pending or override pending)" : "TELEGRAM_CHAT_ID unset and no discovered chat yet" };
+   675→  }
+   676→  const r = await apiCall<unknown>("sendMessage", { chat_id: chat, text, disable_web_page_preview: true });
+   677→  if (r.ok) { sentCount++; lastSentAt = Date.now(); } else { failCount++; pushErr(`direct: ${r.error}`); }
+   678→  return { ok: r.ok, error: r.error, chatId: chat };
+   679→}
+   680→
+   681→// ── v6.4 DAILY PERFORMANCE REPORT (operator request 2026-09-07) ──────────
+   682→// «هر روز ساعت 00:00 یک گزارش کوتاه و مفید از عملکرد روزانه به تلگرام
+   683→//  بفرست با این تصویر» — the DAILY.jpg artwork ships as the photo, the
+   684→// compiled 24h performance digest rides as the HTML caption. Numbers come
+   685→// from the REAL db rows (lib/dailyReport.ts); DAILY.jpg was uploaded by the
+   686→// operator and lives in assets/telegram/.
+   687→const DAILY_ART = path.join(process.cwd(), "assets", "telegram", "DAILY.jpg");
+   688→let dailyArtCache: Buffer | null | undefined;
+   689→
+   690→export async function loadDailyArt(): Promise<Buffer | null> {
+   691→  if (dailyArtCache !== undefined) return dailyArtCache;
+   692→  try {
+   693→    dailyArtCache = await fs.readFile(DAILY_ART);
+   694→  } catch {
+   695→    dailyArtCache = null;
+   696→  }
+   697→  return dailyArtCache;
+   698→}
+   699→
+   700→/** Send the daily performance report — photo (v8.1 rendered poster; the
+   701→ * operator's DAILY.jpg remains the fallback) + caption. v10.20: filename
+   702→ * param so the weekly report reuses the same send path (WEEKLY.png). */
+   703→export async function sendDailyReport(text: string, poster?: Buffer | null, filename = "DAILY.jpg"): Promise<{ ok: boolean; error?: string; withPhoto: boolean }> {
+   704→  const chat = await resolveChat();
+   705→  if (!TOKEN) return { ok: false, error: "TELEGRAM_BOT_TOKEN unset — relay dormant", withPhoto: false };
+   706→  if (!chat) return { ok: false, error: "chat unresolved — message the bot once, then retry", withPhoto: false };
+   707→  let art = poster ?? null;
+   708→  if (!art && filename === "DAILY.jpg") art = await loadDailyArt();
+   709→  const r = art
+   710→    ? await apiSendPhoto(chat, text, art, filename)
+   711→    : await apiCall<unknown>("sendMessage", { chat_id: chat, text: text.slice(0, 3800), parse_mode: "HTML", disable_web_page_preview: true });
+   712→  if (r.ok) { sentCount++; lastSentAt = Date.now(); } else { failCount++; pushErr(`daily: ${r.error}`); }
+   713→  return { ok: r.ok, error: r.error, withPhoto: Boolean(art) };
+   714→}
+   715→
+   716→/** Design-preview channel — pushes any photo to the operator chat OUTSIDE the
+   717→ * daily-report dedup guard. Used by /api/report/daily/poster?send=1 so artwork
+   718→ * iterations can be reviewed live without consuming the once-per-day report. */
+   719→export async function sendPhotoDirect(caption: string, photo: Buffer, filename = "preview.jpg"): Promise<{ ok: boolean; error?: string }> {
+   720→  if (!TOKEN) return { ok: false, error: "TELEGRAM_BOT_TOKEN unset — relay dormant" };
+   721→  const chat = await resolveChat();
+   722→  if (!chat) return { ok: false, error: "chat unresolved — message the bot once, then retry" };
+   723→  const r = await apiSendPhoto(chat, caption, photo, filename);
+   724→  if (r.ok) { sentCount++; lastSentAt = Date.now(); } else { failCount++; pushErr(`photo-direct: ${r.error}`); }
+   725→  return r;
+   726→}
+   727→
+   728→/** v10.21 animation-preview channel — mirrors sendPhotoDirect for the motion
+   729→ * cards: operator-facing sendAnimation that bypasses the outcome budget
+   730→ * (proofs/reviews only; the live relay path keeps its 8/hour guard). */
+   731→export async function sendAnimationDirect(caption: string, mp4: Buffer, filename = "anim.mp4"): Promise<{ ok: boolean; error?: string }> {
+   732→  if (!TOKEN) return { ok: false, error: "TELEGRAM_BOT_TOKEN unset — relay dormant" };
+   733→  const chat = await resolveChat();
+   734→  if (!chat) return { ok: false, error: "chat unresolved — message the bot once, then retry" };
+   735→  const r = await apiSendAnimation(chat, caption, mp4, filename);
+   736→  if (r.ok) { sentCount++; lastSentAt = Date.now(); } else { failCount++; pushErr(`anim-direct: ${r.error}`); }
+   737→  return r;
+   738→}
+   739→
+   740→/** v6.3.2 operator proof: ALL SEVEN photo outcome cards with clearly-labelled
+   741→ * SAMPLE rows — never engine data, format verification only. */
+   742→export async function sendSampleCards(): Promise<{ ok: boolean; error?: string; detail?: string }> {
+   743→  const chat = await resolveChat();
+   744→  if (!TOKEN) return { ok: false, error: "TELEGRAM_BOT_TOKEN unset — relay dormant" };
+   745→  if (!chat) return { ok: false, error: "chat unresolved — message the bot once, then retry" };
+   746→  const mk = (over: Record<string, unknown>): SignalLike =>
+   747→    ({
+   748→      id: "sample", createdAt: new Date(), updatedAt: new Date(), closedAt: new Date(),
+   749→      symbol: "BTCUSDT", direction: "LONG", entryPrice: 65000, entryZoneLow: 64948, entryZoneHigh: 65052,
+   750→      tp1: 66000, tp2: 67500, tp3: 69000, stopLoss: 64000, leverage: 10, marginUsd: 12, confidence: 78, riskReward: 2.8,
+   751→      timeframe: "1h", strategy: "AI-SWING", status: "TP2", analysis: "", tags: "high-conviction,FLOW-CONFIRM,REGIME-TREND-UP",
+   752→      engine: "SAMPLE", serial: 0, factorsJson: null, flowJson: null, ttlMinutes: 120, expiresAt: new Date(Date.now() + 3600_000),
+   753→      pnlPercent: 27.3, maxPnlPercent: 31.4, feeUsd: 0.11, swapUsd: 0.01, reachedTp: 2, ttlExtensions: 0,
+   754→      afterlife: null, afterlifeAt: null, maxPostPnlPercent: 0, operatorNotes: "", notesUpdatedAt: null,
+   755→      ...over,
+   756→    } as unknown as SignalLike);
+   757→  const samples: Array<[string, SignalLike, string]> = [
+   758→    ["CREATED", mk({ serial: 1 }), "SAMPLE — new LONG deployment detected by the live engine (card-format proof, not a live signal)"],
+   759→    ["CREATED", mk({ serial: 2, direction: "SHORT", symbol: "ETHUSDT", strategy: "BREAKOUT", timeframe: "15m", entryPrice: 3120, entryZoneLow: 3118, entryZoneHigh: 3122, tp1: 3060, tp2: 2990, tp3: 2900, stopLoss: 3180, leverage: 8, marginUsd: 9.5, confidence: 71, riskReward: 2.6, tags: "confluence,FLOW-NEUTRAL,REGIME-CHOP" }), "SAMPLE — new SHORT deployment detected by the live engine (card-format proof, not a live signal)"],
+   760→    ["TP2", mk({ serial: 3, pnlPercent: 27.3, maxPnlPercent: 31.4, feeUsd: 0.11, swapUsd: 0.01, reachedTp: 2 }), "SAMPLE — TP2 reached — 80% booked, stop trailed to TP1 (card-format proof, not a live signal)"],
+   761→    ["TP3", mk({ serial: 4, symbol: "SOLUSDT", strategy: "AI-SWING", entryPrice: 184.2, entryZoneLow: 183.9, entryZoneHigh: 184.5, tp1: 191.2, tp2: 201.0, tp3: 214.0, stopLoss: 177.2, leverage: 6, marginUsd: 8.25, confidence: 68, riskReward: 3.1, pnlPercent: 48.9, maxPnlPercent: 52.1, reachedTp: 3, status: "TP3", closedAt: new Date() }), "SAMPLE — FULL TARGET achieved — ladder 3/3 banked (card-format proof, not a live signal)"],
+   762→    ["SL", mk({ serial: 5, direction: "SHORT", symbol: "ETHUSDT", strategy: "BREAKOUT", timeframe: "15m", entryPrice: 3120, entryZoneLow: 3118, entryZoneHigh: 3122, tp1: 3060, tp2: 2990, tp3: 2900, stopLoss: 3180, leverage: 8, marginUsd: 9.5, confidence: 71, riskReward: 2.6, pnlPercent: -29.8, reachedTp: 0, status: "SL", closedAt: new Date(), tags: "confluence,FLOW-NEUTRAL,REGIME-CHOP" }), "SAMPLE — stopped @ 3180 — risk contained (card-format proof, not a live signal)"],
+   763→    ["TTL_EXTENDED", mk({ serial: 6, symbol: "SOLUSDT", strategy: "AI-SWING", entryPrice: 184.2, entryZoneLow: 183.9, entryZoneHigh: 184.5, tp1: 191.2, tp2: 201.0, tp3: 214.0, stopLoss: 177.2, leverage: 6, marginUsd: 8.25, confidence: 68, riskReward: 3.1, ttlMinutes: 90, ttlExtensions: 1, tags: "confluence,FLOW-CONFIRM,REGIME-TREND-UP" }), "SAMPLE — TTL 90m extended +1 — expiry gate bought more room (card-format proof, not a live signal)"],
+   764→    ["TTL_EXPIRED", mk({ serial: 7, symbol: "SOLUSDT", strategy: "AI-SWING", entryPrice: 184.2, entryZoneLow: 183.9, entryZoneHigh: 184.5, tp1: 191.2, tp2: 201.0, tp3: 214.0, stopLoss: 177.2, leverage: 6, marginUsd: 8.25, confidence: 68, riskReward: 3.1, pnlPercent: 11.2, reachedTp: 1, ttlMinutes: 90, ttlExtensions: 1, status: "EXPIRED", closedAt: new Date(), tags: "confluence,FLOW-CONFIRM,REGIME-TREND-UP" }), "SAMPLE — TTL 90m +1 ext elapsed — auto-closed at mark (card-format proof, not a live signal)"],
+   765→  ];
+   766→  const results: string[] = [];
+   767→  for (const [type, sig, msg] of samples) {
+   768→    try {
+   769→      const text = `🧪 <b>SAMPLE — CARD FORMAT PROOF</b>\n\n${composeSignalText(type, sig, msg)}`;
+   770→      const banner = BANNER_STATUS[type];
+   771→      let r: { ok: boolean; error?: string } | null = null;
+   772→      const serial = `NX-${String(sig.serial).padStart(4, "0")}`;
+   773→      const pnl = sig.pnlPercent ?? 0;
+   774→      const photo = banner
+   775→        ? await renderSignalBannerV2({
+   776→            status: banner,
+   777→            title: `${sig.symbol} ${sig.direction}`,
+   778→            line1: `${serial} · ${pnl >= 0 ? "+" : ""}${pnl.toFixed(1)}% NET`,
+   779→            line2: banner === "NEW" || banner === "SHORT" ? `ENTRY ${fmtPrice(sig.entryPrice)} · RR 1:${sig.riskReward.toFixed(1)}` : `LADDER ${sig.reachedTp}/3 · RR 1:${sig.riskReward.toFixed(1)}`,
+   780→            ts: tehranStamp(),
+   781→            // v10.20: the sample proofs exercise the price-ladder strip too
+   782→            ladder: {
+   783→              direction: sig.direction === "SHORT" ? ("SHORT" as const) : ("LONG" as const),
+   784→              entry: sig.entryPrice,
+   785→              tp1: sig.tp1,
+   786→              tp2: sig.tp2,
+   787→              tp3: sig.tp3,
+   788→              sl: sig.stopLoss,
+   789→              reachedTp: sig.reachedTp ?? 0,
+   790→            },
+   791→          }).catch(() => null)
+   792→        : null;
+   793→      if (photo) r = await apiSendPhoto(chat, text, photo, `sample-${type.toLowerCase()}.png`);
+   794→      else {
+   795→        const art = banner ? await loadOperatorArt(banner) : null;
+   796→        if (art) r = await apiSendPhoto(chat, text, art, ART_FILES[banner!]);
+   797→        else r = await apiCall<unknown>("sendMessage", { chat_id: chat, text: text.slice(0, 3800), parse_mode: "HTML", disable_web_page_preview: true });
+   798→      }
+   799→      if (!r.ok) r = await apiCall<unknown>("sendMessage", { chat_id: chat, text: text.slice(0, 3800), parse_mode: "HTML", disable_web_page_preview: true });
+   800→      results.push(`${type}: ${r.ok ? "OK" : r.error}`);
+   801→    } catch (e) {
+   802→      results.push(`${type}: ${e instanceof Error ? e.message : String(e)}`);
+   803→    }
+   804→  }
+   805→  const okAll = results.every((r) => r.endsWith("OK"));
+   806→  if (okAll) { sentCount += samples.length; lastSentAt = Date.now(); } else failCount += results.filter((r) => !r.endsWith("OK")).length;
+   807→  return { ok: okAll, detail: results.join(" · ") };
+   808→}
+   809→
+   810→// ── v6.2.2 AUTO-DISCOVER (operator round) ─────────────────────────────────
+   811→// The operator's credential set shipped TELEGRAM_CHAT_ID === the bot's own id
+   812→// (Telegram hard-rejects bot→bot sends), leaving the relay stuck in ARMED
+   813→// (chat PENDING) until someone runs discoverChat() at exactly the right
+   814→// moment. Instead of babysitting, this loop polls getUpdates every 30s WHILE
+   815→// the chat is unresolved; the instant the operator messages the bot once,
+   816→// the chat id is learned, persisted, confirmed back, and the loop retires.
+   817→let autoDiscoverTimer: ReturnType<typeof setInterval> | null = null;
+   818→
+   819→function chatResolvedNow(): boolean {
+   820→  const chat = chatOverride ?? ENV_CHAT;
+   821→  return chat.length > 0 && botId !== null && chat !== String(botId);
+   822→}
+   823→
+   824→export function ensureAutoDiscover(): void {
+   825→  if (autoDiscoverTimer || !relayArmed()) return;
+   826→  // v8.3 BRIDGE COEXISTENCE: the chat id is already persisted (EngineSetting
+   827→  // telegram.chatId) since v6.2.2 — discovery is DONE. The legacy 30s
+   828→  // getUpdates probe now 409-terminates the v8.3 bridge long-poller, so the
+   829→  // loop may only start after a DB-backed override check FAILS, and each
+   830→  // tick re-checks the override BEFORE touching getUpdates.
+   831→  void (async () => {
+   832→    try {
+   833→      await ensureBotIdentity();
+   834→      await loadOverride();
+   835→    } catch {
+   836→      /* identity check is best-effort */
+   837→    }
+   838→    if (chatResolvedNow()) {
+   839→      // v10.16: rate-limit this line to once per 10min — it fired on every call
+   840→      // and produced ~3.5k dev.log lines/day (audit: unbounded log growth).
+   841→      const now = Date.now();
+   842→      if (now - lastAutoDiscoverSkipLog > 600_000) {
+   843→        lastAutoDiscoverSkipLog = now;
+   844→        console.log("[NOTIFY] auto-discover SKIPPED — chat already resolved (v8.3 bridge owns getUpdates)");
+   845→      }
+   846→      return;
+   847→    }
+   848→    const timer: ReturnType<typeof setInterval> = setInterval(() => {
+   849→      if (chatResolvedNow()) {
+   850→        clearInterval(timer);
+   851→        autoDiscoverTimer = null;
+   852→        return;
+   853→      }
+   854→      void (async () => {
+   855→        try {
+   856→          await ensureBotIdentity();
+   857→          await loadOverride();
+   858→        } catch {
+   859→          /* best-effort */
+   860→        }
+   861→        if (chatResolvedNow()) {
+   862→          clearInterval(timer);
+   863→          autoDiscoverTimer = null;
+   864→          return;
+   865→        }
+   866→        const r = await discoverChat();
+   867→        if (r && r.ok) {
+   868→          clearInterval(timer);
+   869→          autoDiscoverTimer = null;
+   870→          const proof = await sendDirect(
+   871→            `🟢 ${APP_NAME} relay ARMED — operator chat discovered and persisted.\nFrom now on CREATED / TP1-3 / SL / TTL_EXPIRED / TTL_EXTENDED / AFTERLIFE events mirror here as structured cards (WIN / STOP / EXPIRED outcomes also arrive as rendered banner images).`
+   872→          );
+   873→          console.log(`[NOTIFY] auto-discover complete — confirmation ${proof.ok ? "delivered" : `NOT delivered (${proof.error ?? "unknown"})`}`);
+   874→        }
+   875→        // ok:false → "no messages waiting" (benign, keep polling) or a
+   876→        // transient network error (silent retry on the next 30s pass).
+   877→      })();
+   878→    }, 30_000);
+   879→    autoDiscoverTimer = timer;
+   880→    console.log("[NOTIFY] auto-discover loop started — polling getUpdates every 30s until the operator messages the bot");
+   881→  })();
+   882→}
+   883→
+   884→/** Learn the operator chat from the bot's update stream — the operator sends
+   885→ * ANY message to the bot in Telegram, we read getUpdates and persist the chat. */
+   886→export async function discoverChat(): Promise<{ ok: boolean; error?: string; chatId?: string; from?: string; text?: string }> {
+   887→  if (!TOKEN) return { ok: false, error: "TELEGRAM_BOT_TOKEN unset — relay dormant" };
+   888→  await ensureBotIdentity();
+   889→  const r = await apiCall<Array<{ message?: { chat: { id: number; first_name?: string; username?: string }; text?: string } }>>("getUpdates", { limit: 10, timeout: 0 }, 8000);
+   890→  if (!r.ok || !r.result) return { ok: false, error: r.error ?? "getUpdates returned no payload" };
+   891→  const withMsg = r.result.filter((u) => u.message?.chat?.id !== undefined);
+   892→  if (withMsg.length === 0) return { ok: false, error: "no messages waiting — open the bot in Telegram, press START and send any message (e.g. «سلام»), then retry discover" };
+   893→  const last = withMsg[withMsg.length - 1].message!;
+   894→  const chatId = String(last.chat.id);
+   895→  chatOverride = chatId;
+   896→  overrideLoaded = true;
+   897→  await db.engineSetting.upsert({ where: { key: CHAT_OVERRIDE_KEY }, create: { key: CHAT_OVERRIDE_KEY, value: chatId }, update: { value: chatId } });
+   898→  console.log(`[NOTIFY] telegram chat DISCOVERED — id ${chatId} (${last.chat.first_name ?? last.chat.username ?? "unknown"}), persisted to ${CHAT_OVERRIDE_KEY}; relay fully ARMED`);
+   899→  return { ok: true, chatId, from: last.chat.first_name ?? last.chat.username, text: last.text };
+   900→}
+   901→
