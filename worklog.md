@@ -33692,3 +33692,32 @@ Task ID: WDGEN-RECYCLE-20261103
 - Heartbeat: PAUSED→OPEN (degraded) transition live; issued 749→750/2161.
 - Kept hard (disclosed): MEMORY probe hysteresis, BOTTOM-FADE, feed-fresh/sim-price/PHANTOM
   honesty rails, anti-sil spacing 10min, open-cap 8, PUMP_RADAR ban.
+
+## Task ID: SENTINEL-20261108-MIRROR-RESTORE (trace 1a1ba7c90514af9d)
+**Mission**: MIRROR-RESTORE — «چرا کارتهای سیگنال به کانال تلگرام mytradeneo ارسال نمی شود؟»
+
+### Root cause (verified)
+- The v12.8 mirror env line `TELEGRAM_SIGNAL_CHANNEL=@mytradeneo` was **lost in an .env revert**:
+  .env mtime 2026-11-02 05:18 (an old snapshot restored over the newer file — old mtime preserved
+  by the restore). TELEGRAM_BOT_TOKEN/CHAT_ID predate 11-02 → main relay fine; only the NEW line died.
+- The fundingByb heal boot (11-06 21:18:36Z) came up WITHOUT the mirror var →
+  `signalChannel.configured=false` for the ENTIRE gate-open issuance wave.
+- Result: 11-06 21:16 → 11-08 09:24 = **119 signals issued (issued 750→840/2251, last NX-3386),
+  ZERO cards mirrored**. RelayHealth ground truth: `signalChannel{configured:false,sent:0}`.
+
+### Fixes
+1. Restored `.env:13` TELEGRAM_SIGNAL_CHANNEL=@mytradeneo → Turbopack hot-reloaded env,
+   module re-instantiated → `/api/notify`: `configured:true target:@***eneo` (no restart needed).
+2. Backfill to @mytradeneo: consolidated 36h timeline (header + 3 parts, NX-3268→NX-3386 with
+   per-row status/time/pnl + FAPI-DEG markers, cohort stats 74 EXP · 33 SL · 4 TP3 · 4 TP1 · 4 LIVE,
+   TP≥1 8/settled) — all sends OK with 15s per-fetch abort.
+3. LIVE end-to-end proof through the real relay path: SL AVAXUSDT (NX-3384) 09:40:09Z →
+   `signalChannel sent=2 failed=0` + dev.log `[NOTIFY] signal-channel mirror LIVE → @***eneo`.
+
+### Hazards / watch
+- **P2 — .env revert hazard**: a snapshot-restore that carries .env wipes newer config lines
+  (old mtime hides the change). Boot-time mirror line in dev.log is the canary:
+  `signal-channel mirror → @***eneo` ABSENT at boot = mirror dead. Add .env to the restore
+  exclusion list or a boot assertion (next runbook).
+- First backfill attempt (per-card script, 119×1.4s) exceeded the 120s tool timeout — killed
+  mid-loop; consolidated 3-message timeline used instead (spam-safe, complete).
