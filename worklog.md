@@ -33721,3 +33721,32 @@ Task ID: WDGEN-RECYCLE-20261103
   exclusion list or a boot assertion (next runbook).
 - First backfill attempt (per-card script, 119×1.4s) exceeded the 120s tool timeout — killed
   mid-loop; consolidated 3-message timeline used instead (spam-safe, complete).
+
+## Task ID: SENTINEL-20261108-RESTART-PROOF-CARDS (trace 1a1ba99d0cb24dd9)
+**Operator order:** «توصیه‌های پیشنهادی را کامل و مهندسی اجرا کن» — full engineering implementation of the channel-cards recommendations (pending trace 1a1ba7c90514af9d) + P1 heals.
+
+### Root causes (evidence-first)
+1. **Cards-not-reaching-channel mystery → restart-window card loss.** The mirror code path was intact all along (proven: NX-3387 CREATED → @mytradeneo ok in 5s on a fresh boot, `/api/notify` channel sent=1). What actually ate the cards: the dev server recycles every ~6–14min (ram-shed lane-B controlled exits at RSS 2.4–2.5GB plateau — 09:33:02Z, 09:46:05Z — plus pulse-timeout restarts, e.g. 09:51:34Z pulse took exactly 5.0s). Every recycle wipes notify.ts module state and cuts in-flight fire-and-forget sends → silent, permanent card loss; counters reset each boot so the loss was invisible.
+2. **fundingByb phantom P1 recurrence, root-caused this time:** `node_modules/.prisma/client` was generated at 06:47:04Z while `prisma/schema.prisma` was edited at 06:47:21Z — a 17s generation/edit race left the client with 3 stale `fundingByb` refs. Heal: `bunx prisma generate` (0 refs verified) + controlled kill (10:28:35Z) → supervisor/dev-up heal → **0 errors post-boot** (all 3 occurrences sat pre-kill, in-memory stale client).
+3. **Supervisor false-restarts:** `app-supervisor-loop.sh` declared down on a 5s curl timeout; one restart fired on a pulse that took exactly 5.0s. Patched `-m 5` → `-m 10` (v2.1, in-file rationale).
+
+### Engineering changes
+- **notify.ts v12.9 — restart-proof delivery (outbox cursor over SignalEvent):**
+  - `SignalEvent` rows are the natural outbox (fireEvent writes the row BEFORE relaying) → every card has a durable SQLite receipt.
+  - Persisted cursor `EngineSetting telegram.relayCursor` + 90s sweeper (`sweepReplayOnce`) re-delivers every RELAYABLE event the cursor has not confirmed — **across restarts** (the exact loss window).
+  - Cursor advances ONLY on confirmed delivery (operator send ok AND channel mirror ok-or-unconfigured) → at-least-once, never silent loss; TTL-grant dedupe swallow counts as delivered; non-relatable rows (PUMP_RADAR ban) are cursor-skipped so the walk never stalls.
+  - CAS lease `telegram.relayLease` (25s TTL) keeps dev-mode multi-module-copy sweepers from double-sending; 3-attempt poison cap; bounded 6h catch-up.
+  - `relaySignalEvent` body extracted verbatim into `deliverSignalEvent` (live path + sweeper share one delivery body → replayed cards are byte-identical); live successes advance the cursor past the OLDEST matching unconfirmed row (never jumps an undelivered sibling of an identical re-fire).
+  - `relayHealth().replay {cursorAt, sent, fails, skipped, lastSweepAt}` exposed via `/api/notify`.
+- **scripts/app-supervisor-loop.sh v2.1:** pulse curl timeout 5s→10s (halves false downs; hung server still caught within one cycle).
+
+### Live verification (real signals, not mocks)
+- Fresh boot 10:28:40Z → **NX-3389 BNBUSDT SHORT AI-SWING issued 10:29:21Z → CREATED card in @mytradeneo at 10:29:27Z** (`signal-channel mirror LIVE`, channel sent=1, failed=0), outbox cursor confirmed past it at 10:29:23Z, sweeper armed (`lastSweepAt` set). NX-3387 card also verified earlier (10:03:18Z).
+- fundingByb: 0 occurrences post-heal; lint: src/ clean (21 pre-existing errors confined to legacy `scripts/*`).
+
+### Kept-hard rails
+- engine.ts untouched — FLAT-10 freeze intact (md5 eaf8be0776bdf7597a502a2d77fd8c3e). MEMORY gate self-re-arm escape untouched. Honesty contract: at-least-once delivery documented as the deliberate tradeoff (rare transient duplicates beat silent loss).
+
+### Watch list
+- RAM treadmill: lane-B controlled recycles every ~13min remain the designed RAM doctrine; v12.9 makes cards survive them. If recycle cadence worsens, next lever is the RSS plateau source (Turbopack cache), not the thresholds.
+- Watchdog `tbt` probe stays escalated (pre-existing, unrelated).

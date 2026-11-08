@@ -14,7 +14,13 @@ LOCK=/home/z/my-project/.data/app-supervisor.lock
 mkdir -p /home/z/my-project/.data
 exec 9>"$LOCK"
 flock -n 9 || exit 0  # a supervisor is already holding the watch
-down() { [ "$(curl -s -m 5 -o /dev/null -w '%{http_code}' http://localhost:3000/api/pulse 2>/dev/null || true)" != "200" ]; }
+down() { [ "$(curl -s -m 10 -o /dev/null -w '%{http_code}' http://localhost:3000/api/pulse 2>/dev/null || true)" != "200" ]; }
+# v2.1 (trace 1a1ba99d0cb24dd9, 2026-11-08): curl timeout 5s→10s. Evidence: the
+# 09:51:34Z restart fired on a pulse that took EXACTLY 5.0s (one slow poll right
+# after healthy 200s×N) — a sub-10s memory-squeeze stall, not a dead server.
+# A false "down" costs a full pkill + ~2min cold boot and (pre-notify-v12.9)
+# every card in flight was lost. 10s halves that class of restarts while a
+# genuinely hung server is still caught within one cycle.
 while true; do
   if down; then
     echo "[app-supervisor] app down $(date -u '+%H:%M:%SZ') — re-entering dev-up (STAB-20261029)" >> "$LOG"
