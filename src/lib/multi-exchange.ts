@@ -223,12 +223,27 @@ async function spotLadderBatch(symbols: string[], hosts: string[], plane: string
   const out = new Map<string, number>();
   const ready = spotHostsReady(hosts);
   if (ready.length === 0) return hit?.data ?? out;
+  // v14.2 CONSENSUS-STABILIZE (operator trace 1a1c1ecd9694a129, 2026-11-09): both REST
+  // spot planes (BINANCE-SPOT / BINANCE-GCP) sat at 32/32 NULL — every sweep pulled the
+  // FULL spot board (weight 200 × 2 planes on a 15s sweep cache) and the hosts answered
+  // 418/429 with long retry-after windows, so the EXCHANGE CONSENSUS card showed dead
+  // venues even while the WS planes were healthy (spotws file 439 fresh prints, TOOBIT ok).
+  // Fix: request ONLY the sweep's symbols via the ?symbols= filter — weight 4 (≤100
+  // symbols) instead of 200, a 50× weight cut with identical data for the consensus
+  // universe. Safety: symbols NOT proven spot-traded are excluded, because Binance
+  // rejects the WHOLE request with -1121 when any symbol is unknown (futures-only
+  // microcaps); the spotws print file — real Binance spot symbols pushed by price-ws
+  // :3003 — is the honest membership oracle. If the oracle is unreachable (price-ws
+  // down → empty file), fall back to the legacy full-board pull (old behavior).
+  const spotws = await spotwsFileQuotes().catch(() => new Map<string, { price: number; at: number }>());
+  const wanted = spotws.size > 0 ? symbols.filter((s) => spotws.has(s)).slice(0, 100) : [];
+  const symQ = wanted.length > 0 ? `?symbols=${encodeURIComponent(JSON.stringify(wanted))}` : "";
   for (const host of ready) {
     const t0 = Date.now();
     try {
       const ctrl = new AbortController();
       const t = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
-      const res = await fetch(`${host}/api/v3/ticker/24hr`, { signal: ctrl.signal, cache: "no-store", headers: { Connection: "close" } });
+      const res = await fetch(`${host}/api/v3/ticker/24hr${symQ}`, { signal: ctrl.signal, cache: "no-store", headers: { Connection: "close" } });
       clearTimeout(t);
       if (res.status === 418 || res.status === 429) {
         noteSpotHostThrottle(host, res.status, res.headers);

@@ -415,6 +415,19 @@ export async function runGovernorCycle(trigger: "auto" | "supervisor" = "auto"):
           ok = true;
         } else if (d.action === "set_regime_guard" && typeof d.value === "number") {
           // v6.3 REGIME FILTER HARDENING level (0 soft · 1 chop veto · 2 full guard)
+          // v13.0 OPERATOR PIN (trace 1a1c1ecd9694a129, 2026-11-09) — while regimeGuardPinned=1
+          // the governor may NOT move regimeGuard. Evidence: the governor silently re-hardened
+          // regimeGuard 0→2 after the operator's 2026-11-06 «تمام گیتهای ورودی را باز کن» order
+          // opened it — REGIME then vetoed 496 candidates in 6h and signal issuance stalled 6.2h
+          // (last serial NX-3495 before the audit). Operator orders are supreme (minScore PIN
+          // precedent v8.4.2). Unpin requires an explicit operator mandate.
+          const rgPinned = (await getGateSettings()).regimeGuardPinned === 1;
+          if (rgPinned) {
+            const live = (await getGateSettings()).regimeGuard;
+            console.log(`[GOVERNOR] set_regime_guard → ${d.value} SUPPRESSED — OPERATOR PIN active (regimeGuard fixed at L${live} by operator orders 2026-11-06 «تمام گیتهای ورودی را باز کن» + 2026-11-09 audit trace 1a1c1ecd9694a129)`);
+            applied.push({ action: d.action, value: d.value, rationale: `BLOCKED (OPERATOR PIN): regimeGuard is operator-owned and fixed at L${live} — standing order 2026-11-06 «تمام گیتهای ورودی را باز کن» + audit order 2026-11-09 trace 1a1c1ecd9694a129. Only an explicit operator mandate may move or unpin it.`, applied: false });
+            continue;
+          }
           const next = await putGateSettings({ regimeGuard: d.value });
           appliedVal = next.regimeGuard;
           ok = true;
