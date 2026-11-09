@@ -174,8 +174,17 @@ export function getFeedStatus(): FeedStatus {
     if (feedStatus.host !== FUT_HOST) {
       feedStatus.host = FUT_HOST;
       feedStatus.fallbackVenue = null; // native Binance futures plane — no fallback
-      feedStatus.consecutiveFailures = 0;
     }
+    // v14.3 STALE-DATA-DEPLOY-FIX (trace 1a1c1ecd9694a129): the reset used to fire
+    // only on HOST CHANGE — meanwhile every banned REST rung tick incremented
+    // consecutiveFailures, so after a few minutes failures≥3 flagged the feed
+    // "stale" in the deploy gate (engine.ts feedStalePre) while the exchange was
+    // pushing live prints every 3s. Raw evidence: failures=78 with lastOkAt 2s
+    // fresh, RAW-CAL refused with STALE_DATA for 6h (last serial NX-3495).
+    // WS-fresh ⇒ LIVE, full stop: REST-failure streaks are superseded data-path
+    // noise, not staleness. The counter still tells the truth whenever NO WS
+    // plane is fresh (the stale path below keeps accumulating it).
+    feedStatus.consecutiveFailures = 0;
     feedStatus.source = "LIVE";
     if (!feedStatus.lastOkAt || Date.now() - feedStatus.lastOkAt > 20_000) feedStatus.lastOkAt = futws.printAt ?? Date.now();
     return { ...feedStatus };
@@ -190,8 +199,8 @@ export function getFeedStatus(): FeedStatus {
     if (feedStatus.host !== "spot-ws-ring (price-ws :3003)") {
       feedStatus.host = "spot-ws-ring (price-ws :3003)";
       feedStatus.fallbackVenue = "SPOT-MIRROR";
-      feedStatus.consecutiveFailures = 0;
     }
+    feedStatus.consecutiveFailures = 0; // v14.3 — same WS-fresh ⇒ LIVE rule as the futws branch above
     feedStatus.source = "LIVE";
     if (!feedStatus.lastOkAt || Date.now() - feedStatus.lastOkAt > 20_000) feedStatus.lastOkAt = spotws.printAt ?? Date.now();
     return { ...feedStatus };

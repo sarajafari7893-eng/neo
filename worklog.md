@@ -33750,3 +33750,35 @@ Task ID: WDGEN-RECYCLE-20261103
 ### Watch list
 - RAM treadmill: lane-B controlled recycles every ~13min remain the designed RAM doctrine; v12.9 makes cards survive them. If recycle cadence worsens, next lever is the RSS plateau source (Turbopack cache), not the thresholds.
 - Watchdog `tbt` probe stays escalated (pre-existing, unrelated).
+
+## Task ID: SENTINEL-20261109-RELAY-REVIVE (trace 1a1c1ecd9694a129)
+**Operator order:** «وضعیت سیستم و عملکرد را ممیزی بررسی کن. ماژول EXCHANGE CONSENSUS نشان میدهد اتصال صرافی پایدار نیست. ماژول Shadow veto را به حال veto قرار بده. کارتهای سیگنال به کانال تلگرام ارسال نمی شود احیا و پایدار کن»
+
+### Audit verdict (pre-mission)
+AMBER — all 6 services up, DB integrity clean (0 orphans/stuck), backup ring fresh (<1h), but: tbt watchdog probe escalated + 53 error lines in dev.log window + EXCHANGE CONSENSUS 2/5 planes fully dead (BINANCE-SPOT & BINANCE-GCP 32/32 NULL) + signal issuance stalled 6.2h (last serial NX-3495, REGIME vetoing 496/6h) + shadow MODEL lane 0%/24h + channel mirror disarmed.
+
+### Root causes (evidence-first, each verified live)
+1. **P0 — TELEGRAM_SIGNAL_CHANNEL missing from `.env` entirely** (mtime Nov 2 — the var never lived there; earlier verified deliveries on 11-08 came from shell-exported env that dies with every RAM-lane recycle/restart). notify.ts module-scope `ENV_SIGNAL_CHANNEL` was empty → `mirrorCardToChannel` never armed → zero channel cards from any boot of 11-09. Fix: var written to `.env` (persistent across ALL restart paths incl. watchdog heal) + controlled restart → boot banner now prints `signal-channel mirror → @***eneo (full lifecycle)`; `relayHealth().signalChannel {configured:true, target:@***eneo}`.
+2. **P1 — spot-family IP ban churn kept 2 consensus planes dead.** The 418 responses carried host weight1m counters of 13,579–16,104/min. Forensics: engine tick = 3.5s; `fetchTickers` (64-symbol universe vs 43-mid futws ring) fell through to the FULL spot board (`/api/v3/ticker/24hr`, weight **200**) on EVERY tick while fapi was banned ≈ **11,400 weight/min** — the dominant hammer (plus flow-bridge board fallback ≈800/min worst case). Fix (market-feed.ts v14.3 TICKER-WEIGHT-DETENTE): new rung 2.5 = spotws print file (real Binance spot prints pushed by price-ws :3003 every 3s, ~439 symbols, ZERO REST weight) + rung 3 REST is oracle-gated `?symbols=` (weight 4) — futures-only microcaps were never in the spot response anyway (old code burned 200 weight to learn exactly that). Legacy full-board pull kept ONLY when the print file is unreadable (price-ws down). Also multi-exchange.ts v14.2: the consensus ladders (BINANCE-SPOT / BINANCE-GCP planes) now pull `?symbols=` (weight 4) with the same spotws-membership oracle.
+3. **P0 — STALE-DATA deploy freeze (the silent 6.2h issuance killer).** engine.ts entry gate: `feedStalePre = consecutiveFailures >= 3 || lastOkAt > 180s`. `getFeedStatus()` zeroed `consecutiveFailures` only on HOST-CHANGE, while every banned REST rung tick incremented it → observed failures=78 with lastOkAt 2s fresh (WS planes LIVE) → STALE_DATA "fail closed" on every RAW-CAL attempt for 6h (events 20:14/19:44/19:14Z + silent deduped retries). This also starved shadow-veto capture-observe (no deploys → no adjudications → MODEL 0%/24h, lastModelAgeH 33.3). Fix (market-feed.ts v14.3 STALE-DATA-DEPLOY-FIX, engine.ts untouched): WS-fresh ⇒ LIVE ⇒ `consecutiveFailures = 0` in both WS branches; the counter still accumulates truthfully when NO WS plane is fresh. Post-fix: failures 78→0, feed source LIVE.
+4. **P1 — fundingByb phantom returned** (45 occurrences incl. `[futures-settle]`): `node_modules/.prisma/client` carried stale `fundingByb` refs while schema.prisma + DB (28 cols) are clean → every full-row `futuresSnapshot.findFirst/findMany` SELECTed the missing column. Fix: `bunx prisma generate` (0 refs verified) + controlled restarts. Post-boot: 0 occurrences.
+5. **P1 — regimeGuard silently re-hardened 0→2 by the AI governor** (its `set_regime_guard` action; standing operator order 2026-11-06 «تمام گیتهای ورودی را باز کن» had set 0). REGIME then vetoed 496 candidates/6h. Fix: restored 0 via `.data/ops-pin-regimeguard-1109.mjs` + **v13.0 OPERATOR PIN** (`regimeGuardPinned` knob, default 1 — governor's `set_regime_guard` is SUPPRESSED while pinned, minScore-PIN precedent v8.4.2; unpin = explicit operator mandate). Verified live: `/api/settings` → regimeGuard 0, regimeGuardPinned 1.
+
+### Operator orders executed
+- **Shadow veto → mode VETO**: POST /api/ai/shadow-veto `{mode:"veto", force:true}` — evidence gate refused (wr-sep ✗, net ✗ +$40.85, seq-stop ABORT-EARLY "veto instinct counterproductive on epoch E-20260915") → operator override applied, audited: SignalEvent `SHADOW-VETO mode → VETO (OPERATOR FORCE — evidence gate overridden, audited)`; veto-only authority ACTIVE at the fence, fail-open, blocked trades paper-tracked for revocation pressure. autoPromote=false untouched. Honest caveat recorded: on the frozen epoch the would-veto cohort out-performed (+$40.85, WR 59.1% vs keep 24.6%) — epoch refresh / adjudicator re-tune recommended before trusting MODEL vetoes.
+- **Channel cards revived & stabilized**: root cause #1 fixed (env persistence), v12.9 outbox cursor (11-08) already guarantees restart-proof delivery; ops status card delivered to @mytradeneo ok:true (message_id 1082) via the same token/chat lane.
+
+### Live verification
+- Boot banners (×3 controlled restarts 20:29/20:33/20:45Z): `telegram relay ARMED … signal-channel mirror → @***eneo (full lifecycle)`.
+- `/api/notify` → `signalChannel {configured:true, target "@***eneo", failed:0}`; replay sweeper armed.
+- `/api/pulse` feed → source LIVE, failures 0 (was 78), futws fresh 43 rows, lastOk seconds.
+- `/api/settings` → REGIME-GUARD L0 + PINNED, minScore 12 [PINNED] unchanged.
+- fundingByb: 0 post-heal; lint: all edited files clean (21 pre-existing errors confined to legacy scripts/*).
+- OPS card ok:true in @mytradeneo (1082). NATURAL lifecycle card proof: pending the next fapi window (~21:06Z) / spot-ban lift (21:21Z) — the scan cannot build candles under BOTH bans simultaneously (honest no-candidate), the issuer retries every 35s.
+- engine.ts untouched — FLAT-10 freeze intact (md5 eaf8be0776bdf7597a502a2d77fd8c3e verified before/after).
+
+### Watch list
+- Spot-family IP ban until ~21:21Z — after expiry, the 50× weight cut should keep hosts un-banned; re-check 418s + SPOT/GCP plane freshness.
+- flow-bridge full-board fallback (800/min worst case during fapi bans) is next candidate for the same oracle-gating if weight counters climb again.
+- RAM treadmill (lane-B recycles) continues by design; v12.9 outbox keeps cards alive across recycles.
+- Governor hysteresis: watch next governor cycle logs the regimeGuard PIN suppression line.
