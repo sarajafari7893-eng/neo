@@ -33782,3 +33782,10 @@ AMBER — all 6 services up, DB integrity clean (0 orphans/stuck), backup ring f
 - flow-bridge full-board fallback (800/min worst case during fapi bans) is next candidate for the same oracle-gating if weight counters climb again.
 - RAM treadmill (lane-B recycles) continues by design; v12.9 outbox keeps cards alive across recycles.
 - Governor hysteresis: watch next governor cycle logs the regimeGuard PIN suppression line.
+
+### Final live verification (post-worklog completion, 21:00–21:25Z)
+- **NX-3496 ENAUSDT LONG AI-SWING issued 21:02Z** (RAW-CAL + FAPI-DEG, REGIME-GUARD L0 effective) → **CREATED card delivered to @mytradeneo via the REAL relay path**: dev.log `signal-channel mirror LIVE → @***eneo (first lifecycle card delivered)` (line 11002); `relayHealth.signalChannel {configured:true, sent:1, failed:0, lastSentAt:21:02:48Z}`.
+- **NX-3497 NEARUSDT LONG issued ~21:14Z** (cadence ~10min restored) → card delivered live pre-recycle; persisted outbox cursor advanced ONLY on confirmed delivery; post-recycle sweeper found NOTHING pending (sent 0, fails 0, 24 non-relatable rows skipped) — **v12.9 restart-proof delivery proven across a real RAM-lane recycle**.
+- **Shadow MODEL lane revived & grounded**: SV-12154 (ENAUSDT PASS→VETO) + SV-12155 (NEARUSDT PASS→VETO) both `label=MODEL audit=yes` (100% grounding) within minutes of issuance resumption — the MODEL starvation was purely downstream of the STALE-DATA deploy freeze.
+- Sentinel log forensics: errors 53→0, http500 9→0. Remaining anomaly: watchdog `tbt` probe escalated (pre-existing, unrelated — watch item).
+- EXCHANGE CONSENSUS: feed LIVE failures 0; composite 30/31 + FUTWS 22 + TOOBIT 31/31 real planes serving the robust median. BINANCE-SPOT/GCP stay honestly null until Binance lifts the family IP ban (~21:21Z window; the 50× weight cut keeps them stable after — watch item for the next 418 check).
