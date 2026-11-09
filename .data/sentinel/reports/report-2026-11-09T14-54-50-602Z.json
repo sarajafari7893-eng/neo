@@ -1,19 +1,19 @@
 {
  "schemaVersion": 1,
  "kind": "deep",
- "at": "2026-11-08T15:18:10.614Z",
- "tehran": "08/11/2026, 18:48:10",
+ "at": "2026-11-09T14:54:49.821Z",
+ "tehran": "09/11/2026, 18:24:49",
  "verdict": "AMBER",
  "anomalies": [
   {
    "sev": "warn",
    "area": "watchdog",
-   "msg": "layer-1 non-ok services: {\"app\":\"ok\",\"liq\":\"ok\",\"ws\":\"ok\",\"bridge\":\"ok\",\"trade\":\"ok\",\"sentinel\":\"ok\",\"armor\":\"ok\",\"cron\":\"ok\",\"stable\":\"ok\",\"kw\":\"ok\",\"mem\":\"ok\",\"warm\":\"ok\",\"tbt\":\"escalated\",\"cards\":\"ok\"}"
+   "msg": "layer-1 non-ok services: {\"app\":\"ok\",\"liq\":\"ok\",\"ws\":\"ok\",\"bridge\":\"ok\",\"trade\":\"ok\",\"sentinel\":\"ok\",\"armor\":\"ok\",\"cron\":\"degraded\",\"stable\":\"ok\",\"kw\":\"ok\",\"mem\":\"ok\",\"warm\":\"ok\",\"tbt\":\"degraded\",\"cards\":\"ok\"}"
   },
   {
    "sev": "warn",
    "area": "dev.log",
-   "msg": "33 error lines in recent log window"
+   "msg": "38 error lines in recent log window"
   }
  ],
  "services": [
@@ -22,74 +22,74 @@
    "label": "app :3000",
    "up": true,
    "status": 200,
-   "ms": 21
+   "ms": 47
   },
   {
    "key": "ws",
    "label": "price-ws :3003",
    "up": true,
    "status": 400,
-   "ms": 3
+   "ms": 8
   },
   {
    "key": "bridge",
    "label": "telegram-bridge :3005",
    "up": true,
    "status": 200,
-   "ms": 2
+   "ms": 8
   },
   {
    "key": "liq",
    "label": "liq :3010",
    "up": true,
    "status": 200,
-   "ms": 2
+   "ms": 8
   },
   {
    "key": "trade",
    "label": "trade :3011",
    "up": true,
    "status": 200,
-   "ms": 2
+   "ms": 8
   },
   {
    "key": "watchdog",
    "label": "p0-watchdog :3020",
    "up": true,
    "status": 200,
-   "ms": 2
+   "ms": 8
   }
  ],
  "mem": {
-  "availableMb": 551
+  "availableMb": 530
  },
  "disk": {
-  "rootFreeGb": 4.28,
-  "tmpFreeGb": 4.28
+  "rootFreeGb": 4.38,
+  "tmpFreeGb": 4.38
  },
  "db": {
   "ok": true,
-  "signals": 3406,
-  "events": 80208,
-  "prices": 95738,
+  "signals": 3495,
+  "events": 80470,
+  "prices": 103900,
   "assets": 34,
   "pumps": 2307,
-  "events1h": 1147,
-  "lastEventAgeMs": 4273,
+  "events1h": 1307,
+  "lastEventAgeMs": 794,
   "stuckActive": 0,
   "orphanEvents": 0,
   "stuckPumpTracks": 0,
-  "dbBytes": 59457536,
-  "walBytes": 4136512
+  "dbBytes": 60239872,
+  "walBytes": 4255992
  },
  "backup": {
   "ok": true,
   "dir": "/tmp/my-project/backups",
   "encCount": 12,
   "zipCount": 12,
-  "newestEncMs": 1794142229387.736,
-  "newestAnyMs": 1794142229387.736,
-  "encAgeMs": 8860883.263916016
+  "newestEncMs": 1794228631629.6597,
+  "newestAnyMs": 1794228631629.6597,
+  "encAgeMs": 7457669.340332031
  },
  "watchdog": {
   "ok": true,
@@ -102,23 +102,23 @@
    "trade": "ok",
    "sentinel": "ok",
    "armor": "ok",
-   "cron": "ok",
+   "cron": "degraded",
    "stable": "ok",
    "kw": "ok",
    "mem": "ok",
    "warm": "ok",
-   "tbt": "escalated",
+   "tbt": "degraded",
    "cards": "ok"
   },
-  "nonOk": 1,
+  "nonOk": 2,
   "memLevel": "ok",
-  "memAvailableMb": 561,
+  "memAvailableMb": 539,
   "paused": false
  },
  "log": {
-  "windowLines": 1352,
-  "errors": 33,
-  "http500": 1,
+  "windowLines": 1887,
+  "errors": 38,
+  "http500": 0,
   "oom": 0,
   "enospc": 0,
   "hydration": 0,
@@ -130,24 +130,24 @@
   "ok": true,
   "source": "live-api",
   "mode": "shadow",
-  "generatedAt": "2026-11-08T15:18:10.284Z",
+  "generatedAt": "2026-11-09T14:54:49.387Z",
   "stats": {
-   "total": 600,
-   "passSide": 399,
-   "rejectSide": 201,
-   "vetoCount": 573,
-   "tradeCount": 27,
-   "modelSharePct": 19,
+   "total": 10952,
+   "passSide": 6429,
+   "rejectSide": 4523,
+   "vetoCount": 7859,
+   "tradeCount": 3093,
+   "modelSharePct": 41.1,
    "modelGroundedPct": 100,
-   "avgConfidence": 59.3,
-   "gateAgreement": 187,
-   "paperOpen": 18,
-   "paperSettled": 1445,
+   "avgConfidence": 67.1,
+   "gateAgreement": 3079,
+   "paperOpen": 10,
+   "paperSettled": 1453,
    "recent24h": {
     "n": 283,
-    "modelSharePct": 6.7,
-    "lastModelAgeH": 4.4,
-    "lastVerdictAgeH": 0
+    "modelSharePct": 0,
+    "lastModelAgeH": 28,
+    "lastVerdictAgeH": 0.4
    }
   },
   "arms": [
@@ -158,7 +158,7 @@
     "pct": 100,
     "starved": false,
     "reachable": true,
-    "fed": 13,
+    "fed": 1649,
     "lastFedAgeH": null
    },
    {
@@ -168,7 +168,7 @@
     "pct": 100,
     "starved": false,
     "reachable": true,
-    "fed": 386,
+    "fed": 4780,
     "lastFedAgeH": null
    },
    {
@@ -198,27 +198,27 @@
   "tSum": 120,
   "nSumReach": 107,
   "tSumReach": 120,
-  "fenceEntries24hFloor": 514
+  "fenceEntries24hFloor": 494
  },
  "rawcal": {
   "armed": true,
-  "issued": 854,
-  "issuedTotal": 2272,
+  "issued": 917,
+  "issuedTotal": 2335,
   "target": 3217,
   "heartbeatAgeH": 0,
-  "heartbeatAt": "2026-11-08T1517Z OPEN (degraded) fapi ban active (fapi GLOBAL ban window live — 779s left) — issuer continues per operator orde"
+  "heartbeatAt": "2026-11-09T1454Z OPEN (degraded) fapi ban active (fapi GLOBAL ban window live — 245s left) — issuer continues per operator orde"
  },
  "cards": {
   "ok": true,
-  "sentinelAgeSec": 21,
-  "ticks": 319,
-  "refreshed1h": 4,
-  "failures1h": 17,
+  "sentinelAgeSec": 45,
+  "ticks": 43,
+  "refreshed1h": 1,
+  "failures1h": 36,
   "staleHot": 3,
   "worst": [
    {
-    "symbol": "PARTIUSDT",
-    "ageMin": 29,
+    "symbol": "RSRUSDT",
+    "ageMin": 3,
     "heat": "warm"
    },
    {
@@ -227,17 +227,17 @@
     "heat": "warm"
    },
    {
-    "symbol": "BMTUSDT",
+    "symbol": "ONEUSDT",
+    "ageMin": 2,
+    "heat": "hot"
+   },
+   {
+    "symbol": "AVAXUSDT",
     "ageMin": 1,
     "heat": "warm"
    },
    {
-    "symbol": "CYBERUSDT",
-    "ageMin": 1,
-    "heat": "hot"
-   },
-   {
-    "symbol": "HOTUSDT",
+    "symbol": "BMTUSDT",
     "ageMin": 1,
     "heat": "hot"
    }
@@ -252,6 +252,6 @@
   "failStreak": 0,
   "baselineMark": 0
  },
- "uptimeSec": 14400,
+ "uptimeSec": 1800,
  "ver": "nexus-sentinel 1.3.2"
 }
