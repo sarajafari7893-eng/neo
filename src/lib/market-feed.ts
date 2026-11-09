@@ -127,6 +127,43 @@ function spotPrintLiveness(): { fresh: boolean; printAt: number | null; rows: nu
   return spotwsProbe;
 }
 
+// v14.3 TICKER-WEIGHT-DETENTE (operator trace 1a1c1ecd9694a129, 2026-11-09) —
+// the spot REST overlay used to pull the FULL /api/v3/ticker/24hr board
+// (weight 200) on EVERY engine tick (3.5s) while fapi was banned, because the
+// futws ring (43 mids) never covers the whole 64-symbol universe. Measured
+// fallout: ~11,400+ spot weight/min → family-wide 418 ("IP banned until …",
+// host weight1m counters 13,5K–16,1K observed) — which is what kept the
+// BINANCE-SPOT / BINANCE-GCP consensus planes dead and the EXCHANGE CONSENSUS
+// card unstable even while the WS planes were healthy. New ladder inside
+// fetchTickers: rung 2.5 = THIS map (real Binance spot prints pushed by
+// price-ws :3003 every 3s — ~439 symbols, ZERO REST weight); rung 3 = REST
+// pull ONLY for symbols still missing AND proven spot-listed (membership
+// oracle = this file), via the ?symbols= filter (weight 4). Futures-only
+// microcaps were NEVER in the spot response (the old full-board pull filtered
+// them out locally) — they stay honestly missing, no invented data. If the
+// print file is unreadable (price-ws down), rung 3 falls back to the legacy
+// full-board pull (old behavior, old weight) so the overlay never goes dark.
+function spotwsPrintMap(): Map<string, number> {
+  const out = new Map<string, number>();
+  const now = Date.now();
+  try {
+    const raw = readFileSync(SPOTWS_FILE, "utf8");
+    const j = JSON.parse(raw) as { at?: number; rows?: Array<{ s?: string; p?: number; t?: number }> };
+    const payloadAt = Number(j.at) || 0;
+    if (!(payloadAt > 0) || now - payloadAt > SPOTWS_FRESH_MS + 10_000) return out; // stale file — rung skips honestly
+    for (const r of Array.isArray(j.rows) ? j.rows : []) {
+      const sym = String(r?.s ?? "").toUpperCase();
+      const p = Number(r?.p);
+      const t = Number(r?.t);
+      if (!sym.endsWith("USDT") || !(p > 0) || !(t > 0) || now - t > SPOTWS_FRESH_MS) continue;
+      out.set(sym, p);
+    }
+  } catch {
+    /* file missing/unreadable → empty map; legacy rung covers */
+  }
+  return out;
+}
+
 export function getFeedStatus(): FeedStatus {
   // v13.5 — futures bookTicker ring FIRST: a live Binance FUTURES plane beats
   // the spot mirror in the host label (operator mandate «دیتای زندهٔ بایننس
@@ -281,9 +318,44 @@ export async function fetchTickers(symbols: string[]): Promise<Map<string, Ticke
   }
   const stillMissingAfterFutws = symbols.filter((s) => !out.has(s));
   if (stillMissingAfterFutws.length > 0) {
+    // v14.3 rung 2.5 — spotws print file: real Binance spot prints (zero REST
+    // weight) cover spot-listed misses before any REST contact is made.
+    const spotws = spotwsPrintMap();
+    for (const s of stillMissingAfterFutws) {
+      const p = spotws.get(s);
+      if (p === undefined) continue;
+      const t: Ticker24h = {
+        symbol: s,
+        lastPrice: String(p),
+        priceChangePercent: "0", // print plane carries no 24h window — honest zero
+        highPrice: String(p),
+        lowPrice: String(p),
+        quoteVolume: "0", // no 24h volume on the print plane — consumers rank elsewhere
+        plane: "spot",
+      };
+      if (!zombie(t)) out.set(s, t);
+    }
+  }
+  const stillMissingAfterSpotws = symbols.filter((s) => !out.has(s));
+  if (stillMissingAfterSpotws.length > 0) {
     try {
-      const spot = await fetchJson<Ticker24h[]>("/api/v3/ticker/24hr");
-      for (const t of spot) if (want.has(t.symbol) && !out.has(t.symbol) && !zombie(t)) out.set(t.symbol, { ...t, plane: "spot" });
+      // v14.3 rung 3 — REST, oracle-gated: only symbols still missing AND
+      // present in the spotws membership file are requested (?symbols= filter,
+      // weight 4 instead of the 200-weight full board). Symbols missing from
+      // BOTH the futws ring and the spotws file are futures-only microcaps the
+      // spot board could never price — the old code burned weight 200 to learn
+      // exactly that. No spotws file at all (price-ws down) → legacy full-board
+      // fallback so the overlay never goes dark.
+      const spotws = spotwsPrintMap();
+      const restWant = stillMissingAfterSpotws.filter((s) => spotws.has(s)).slice(0, 100);
+      if (restWant.length > 0) {
+        const q = `?symbols=${encodeURIComponent(JSON.stringify(restWant))}`;
+        const spot = await fetchJson<Ticker24h[]>(`/api/v3/ticker/24hr${q}`);
+        for (const t of spot) if (want.has(t.symbol) && !out.has(t.symbol) && !zombie(t)) out.set(t.symbol, { ...t, plane: "spot" });
+      } else if (spotws.size === 0 && spotPrintLiveness().fresh === false) {
+        const spot = await fetchJson<Ticker24h[]>("/api/v3/ticker/24hr");
+        for (const t of spot) if (want.has(t.symbol) && !out.has(t.symbol) && !zombie(t)) out.set(t.symbol, { ...t, plane: "spot" });
+      }
     } catch {
       /* fallback rung below */
     }
