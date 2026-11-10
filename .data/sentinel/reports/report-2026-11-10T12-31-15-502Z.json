@@ -1,14 +1,19 @@
 {
  "schemaVersion": 1,
  "kind": "deep",
- "at": "2026-11-09T13:47:42.850Z",
- "tehran": "09/11/2026, 17:17:42",
+ "at": "2026-11-10T12:31:14.637Z",
+ "tehran": "10/11/2026, 16:01:14",
  "verdict": "AMBER",
  "anomalies": [
   {
    "sev": "warn",
    "area": "watchdog",
    "msg": "layer-1 non-ok services: {\"app\":\"ok\",\"liq\":\"ok\",\"ws\":\"ok\",\"bridge\":\"ok\",\"trade\":\"ok\",\"sentinel\":\"ok\",\"armor\":\"ok\",\"cron\":\"ok\",\"stable\":\"ok\",\"kw\":\"ok\",\"mem\":\"ok\",\"warm\":\"ok\",\"tbt\":\"escalated\",\"cards\":\"ok\"}"
+  },
+  {
+   "sev": "warn",
+   "area": "dev.log",
+   "msg": "50 error lines in recent log window"
   }
  ],
  "services": [
@@ -17,14 +22,14 @@
    "label": "app :3000",
    "up": true,
    "status": 200,
-   "ms": 22
+   "ms": 23
   },
   {
    "key": "ws",
    "label": "price-ws :3003",
    "up": true,
    "status": 400,
-   "ms": 2
+   "ms": 3
   },
   {
    "key": "bridge",
@@ -56,35 +61,35 @@
   }
  ],
  "mem": {
-  "availableMb": 622
+  "availableMb": 499
  },
  "disk": {
-  "rootFreeGb": 3.78,
-  "tmpFreeGb": 3.78
+  "rootFreeGb": 3.87,
+  "tmpFreeGb": 3.87
  },
  "db": {
   "ok": true,
-  "signals": 3494,
-  "events": 80157,
-  "prices": 103791,
-  "assets": 34,
+  "signals": 3563,
+  "events": 80723,
+  "prices": 102308,
+  "assets": 33,
   "pumps": 2307,
-  "events1h": 953,
-  "lastEventAgeMs": 3873,
+  "events1h": 1642,
+  "lastEventAgeMs": 7098,
   "stuckActive": 0,
   "orphanEvents": 0,
   "stuckPumpTracks": 0,
   "dbBytes": 60239872,
-  "walBytes": 4132392
+  "walBytes": 4474352
  },
  "backup": {
   "ok": true,
   "dir": "/tmp/my-project/backups",
   "encCount": 12,
   "zipCount": 12,
-  "newestEncMs": 1794228631629.6597,
-  "newestAnyMs": 1794228631629.6597,
-  "encAgeMs": 3431020.3403320312
+  "newestEncMs": 1794311813722.7388,
+  "newestAnyMs": 1794311813722.7388,
+  "encAgeMs": 2060458.2612304688
  },
  "watchdog": {
   "ok": true,
@@ -107,41 +112,41 @@
   },
   "nonOk": 1,
   "memLevel": "ok",
-  "memAvailableMb": 627,
+  "memAvailableMb": 510,
   "paused": false
  },
  "log": {
-  "windowLines": 872,
-  "errors": 17,
+  "windowLines": 1870,
+  "errors": 50,
   "http500": 0,
   "oom": 0,
   "enospc": 0,
   "hydration": 0,
-  "unhandled": 2,
+  "unhandled": 0,
   "settlementStalled": 0,
   "turbopackPanic": 0
  },
  "shadow": {
   "ok": true,
   "source": "live-api",
-  "mode": "shadow",
-  "generatedAt": "2026-11-09T13:47:42.665Z",
+  "mode": "veto",
+  "generatedAt": "2026-11-10T12:31:14.193Z",
   "stats": {
-   "total": 10949,
-   "passSide": 6426,
-   "rejectSide": 4523,
-   "vetoCount": 7857,
-   "tradeCount": 3092,
-   "modelSharePct": 41.1,
+   "total": 600,
+   "passSide": 423,
+   "rejectSide": 177,
+   "vetoCount": 510,
+   "tradeCount": 90,
+   "modelSharePct": 19.2,
    "modelGroundedPct": 100,
-   "avgConfidence": 67.1,
-   "gateAgreement": 3079,
-   "paperOpen": 10,
-   "paperSettled": 1453,
+   "avgConfidence": 59.1,
+   "gateAgreement": 143,
+   "paperOpen": 18,
+   "paperSettled": 1471,
    "recent24h": {
-    "n": 299,
-    "modelSharePct": 0,
-    "lastModelAgeH": 26.8,
+    "n": 247,
+    "modelSharePct": 38.9,
+    "lastModelAgeH": 8.1,
     "lastVerdictAgeH": 0.1
    }
   },
@@ -153,7 +158,7 @@
     "pct": 100,
     "starved": false,
     "reachable": true,
-    "fed": 1648,
+    "fed": 56,
     "lastFedAgeH": null
    },
    {
@@ -163,7 +168,7 @@
     "pct": 100,
     "starved": false,
     "reachable": true,
-    "fed": 4778,
+    "fed": 367,
     "lastFedAgeH": null
    },
    {
@@ -173,7 +178,7 @@
     "pct": 100,
     "starved": false,
     "reachable": true,
-    "fed": 1446,
+    "fed": 1472,
     "lastFedAgeH": null
    },
    {
@@ -193,48 +198,48 @@
   "tSum": 120,
   "nSumReach": 107,
   "tSumReach": 120,
-  "fenceEntries24hFloor": 488
+  "fenceEntries24hFloor": 384
  },
  "rawcal": {
   "armed": true,
-  "issued": 916,
-  "issuedTotal": 2334,
+  "issued": 979,
+  "issuedTotal": 2397,
   "target": 3217,
   "heartbeatAgeH": 0,
-  "heartbeatAt": "2026-11-09T1347Z OPEN (degraded) fapi ban active (fapi GLOBAL ban window live — 1010s left) — issuer continues per operator ord"
+  "heartbeatAt": "2026-11-10T1230Z OPEN (degraded) fapi ban active (fapi GLOBAL ban window live — 64s left) — issuer continues per operator order"
  },
  "cards": {
   "ok": true,
-  "sentinelAgeSec": 17,
-  "ticks": 668,
-  "refreshed1h": 7,
-  "failures1h": 45,
-  "staleHot": 3,
+  "sentinelAgeSec": 14,
+  "ticks": 640,
+  "refreshed1h": 9,
+  "failures1h": 116,
+  "staleHot": 5,
   "worst": [
    {
-    "symbol": "BMTUSDT",
-    "ageMin": 2,
+    "symbol": "CELRUSDT",
+    "ageMin": 2244,
+    "heat": "hot"
+   },
+   {
+    "symbol": "CYBERUSDT",
+    "ageMin": 1675,
+    "heat": "hot"
+   },
+   {
+    "symbol": "SYNUSDT",
+    "ageMin": 149,
     "heat": "warm"
    },
    {
-    "symbol": "HYPEUSDT",
-    "ageMin": 2,
-    "heat": "hot"
-   },
-   {
-    "symbol": "ONEUSDT",
-    "ageMin": 2,
-    "heat": "hot"
-   },
-   {
-    "symbol": "RSRUSDT",
-    "ageMin": 2,
+    "symbol": "PARTIUSDT",
+    "ageMin": 80,
     "heat": "warm"
    },
    {
-    "symbol": "HOTUSDT",
-    "ageMin": 1,
-    "heat": "hot"
+    "symbol": "SOPHUSDT",
+    "ageMin": 40,
+    "heat": "warm"
    }
   ]
  },
@@ -247,6 +252,6 @@
   "failStreak": 0,
   "baselineMark": 0
  },
- "uptimeSec": 30600,
+ "uptimeSec": 28800,
  "ver": "nexus-sentinel 1.3.2"
 }
