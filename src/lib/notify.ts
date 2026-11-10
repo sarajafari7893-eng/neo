@@ -60,6 +60,7 @@
 import { db } from "@/lib/db";
 import { APP_NAME } from "./brand";
 import fs from "node:fs/promises";
+import { readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -77,7 +78,40 @@ const ENV_CHAT = process.env.TELEGRAM_CHAT_ID ?? "";
 // VERBATIM to this channel: same card the operator chat receives. Fire-and-
 // forget, never blocks the engine or the operator send; empty/unset = mirror
 // dormant. Never echo the value.
-const ENV_SIGNAL_CHANNEL = process.env.TELEGRAM_SIGNAL_CHANNEL ?? "";
+// v13.0 CHANNEL-ENV SELF-HEAL (forensic audit 2026-11-10, trace 1a1c76eb…):
+// /api/notify reported signalChannel.configured=false for DAYS while manual
+// scripts to the same channel succeeded — root cause: the const below bound
+// process.env ONCE at module load, and the booting process had NO
+// TELEGRAM_SIGNAL_CHANNEL in its environment (.env carried zero such lines).
+// The target is now read DYNAMICALLY: process.env first, then a mtime-gated
+// .env re-scan (≤30s cadence) so a var added/restored mid-flight self-heals
+// without waiting for the next recycle. Never echo the value.
+let _sigChanCache: string | null = null;
+let _sigChanScanAt = 0;
+let _sigChanEnvMtime = 0;
+function signalChannelEnv(): string {
+  const fromEnv = process.env.TELEGRAM_SIGNAL_CHANNEL ?? "";
+  if (fromEnv) {
+    _sigChanCache = fromEnv;
+    _sigChanScanAt = Date.now();
+    return fromEnv;
+  }
+  const now = Date.now();
+  if (_sigChanCache !== null && now - _sigChanScanAt < 30_000) return _sigChanCache;
+  _sigChanScanAt = now;
+  try {
+    const p = path.join(process.cwd(), ".env");
+    const st = statSync(p);
+    if (st.mtimeMs !== _sigChanEnvMtime || _sigChanCache === null) {
+      _sigChanEnvMtime = st.mtimeMs;
+      const m = readFileSync(p, "utf8").match(/^TELEGRAM_SIGNAL_CHANNEL=(.*)$/m);
+      _sigChanCache = m ? m[1]!.trim().replace(/^["']|["']$/g, "") : "";
+    }
+  } catch {
+    _sigChanCache = _sigChanCache ?? "";
+  }
+  return _sigChanCache;
+}
 
 const CHAT_OVERRIDE_KEY = "telegram.chatId";
 const ERR_RING_CAP = 8;
@@ -147,6 +181,7 @@ export function relayHealth(): {
   replay: { cursorAt: number | null; sent: number; fails: number; skipped: number; lastSweepAt: number | null };
 } {
   const chat = chatOverride ?? ENV_CHAT;
+  const chan = signalChannelEnv(); // v13.0 dynamic read — health must reflect the LIVE env, not boot-time luck
   return {
     armed: relayArmed(),
     tokenValid: botId !== null ? true : null,
@@ -157,8 +192,8 @@ export function relayHealth(): {
     sent: sentCount, failed: failCount, lastSentAt, lastErrors: [...errRing],
     pumpDumpBlocked, animSent, animFails, createdPhotoBudgetSkip,
     signalChannel: {
-      configured: ENV_SIGNAL_CHANNEL.length > 0,
-      target: ENV_SIGNAL_CHANNEL ? `${ENV_SIGNAL_CHANNEL.slice(0, 1)}***${ENV_SIGNAL_CHANNEL.slice(-4)}` : null,
+      configured: chan.length > 0,
+      target: chan ? `${chan.slice(0, 1)}***${chan.slice(-4)}` : null,
       sent: chSentCount, failed: chFailCount, lastSentAt: chLastSentAt,
     },
     replay: {
@@ -198,7 +233,8 @@ async function ensureBotIdentity(): Promise<void> {
         bootLogged = true;
         const chat = chatOverride ?? ENV_CHAT;
         const selfRefused = chat === String(botId);
-        console.log(`[NOTIFY] telegram relay ${selfRefused ? "ARMED (chat PENDING)" : chat ? "ARMED" : "DORMANT (no chat)"} — bot @${botUsername} (#${botId})${selfRefused ? ` · TELEGRAM_CHAT_ID equals the bot's own id — Telegram rejects bot→bot sends; waiting for discoverChat()/override` : chat ? ` · chat ${chat.slice(0, 3)}***${chat.slice(-2)}` : " · TELEGRAM_CHAT_ID unset"}${ENV_SIGNAL_CHANNEL ? ` · signal-channel mirror → ${ENV_SIGNAL_CHANNEL.slice(0, 1)}***${ENV_SIGNAL_CHANNEL.slice(-4)} (full lifecycle)` : ""}`);
+        const chan = signalChannelEnv(); // v13.0 dynamic
+        console.log(`[NOTIFY] telegram relay ${selfRefused ? "ARMED (chat PENDING)" : chat ? "ARMED" : "DORMANT (no chat)"} — bot @${botUsername} (#${botId})${selfRefused ? ` · TELEGRAM_CHAT_ID equals the bot's own id — Telegram rejects bot→bot sends; waiting for discoverChat()/override` : chat ? ` · chat ${chat.slice(0, 3)}***${chat.slice(-2)}` : " · TELEGRAM_CHAT_ID unset"}${chan ? ` · signal-channel mirror → ${chan.slice(0, 1)}***${chan.slice(-4)} (full lifecycle)` : ""}`);
       }
     }
   } catch (e: unknown) {
@@ -543,7 +579,8 @@ async function buildCard(type: string, symbol: string | null, engineMessage: str
 // path. Own photo flood valve (≤6/hour, overflow → same card as text) mirrors
 // operator doctrine.
 async function mirrorCardToChannel(card: RelayCard): Promise<void> {
-  if (!ENV_SIGNAL_CHANNEL) return;
+  const chan = signalChannelEnv(); // v13.0 dynamic read — never depend on boot-time env luck
+  if (!chan) return;
   let out = card;
   if (out.photo) {
     const nowH = Date.now();
@@ -553,17 +590,17 @@ async function mirrorCardToChannel(card: RelayCard): Promise<void> {
   }
   let r: { ok: boolean; error?: string };
   if (out.photo) {
-    r = await apiSendPhoto(ENV_SIGNAL_CHANNEL, out.text, out.photo, out.photoName ?? "flowradar-signal.png");
-    if (!r.ok) r = await apiCall<unknown>("sendMessage", { chat_id: ENV_SIGNAL_CHANNEL, text: out.text.slice(0, 3800), parse_mode: "HTML", disable_web_page_preview: true });
+    r = await apiSendPhoto(chan, out.text, out.photo, out.photoName ?? "flowradar-signal.png");
+    if (!r.ok) r = await apiCall<unknown>("sendMessage", { chat_id: chan, text: out.text.slice(0, 3800), parse_mode: "HTML", disable_web_page_preview: true });
   } else {
-    r = await apiCall<unknown>("sendMessage", { chat_id: ENV_SIGNAL_CHANNEL, text: out.text.slice(0, 3800), parse_mode: "HTML", disable_web_page_preview: true });
+    r = await apiCall<unknown>("sendMessage", { chat_id: chan, text: out.text.slice(0, 3800), parse_mode: "HTML", disable_web_page_preview: true });
   }
   if (r.ok) {
     chSentCount++;
     chLastSentAt = Date.now();
     if (!chLiveLogged) {
       chLiveLogged = true;
-      console.log(`[NOTIFY] signal-channel mirror LIVE → ${ENV_SIGNAL_CHANNEL.slice(0, 1)}***${ENV_SIGNAL_CHANNEL.slice(-4)} (first lifecycle card delivered)`);
+      console.log(`[NOTIFY] signal-channel mirror LIVE → ${chan.slice(0, 1)}***${chan.slice(-4)} (first lifecycle card delivered)`);
     }
   } else {
     chFailCount++;
@@ -853,7 +890,7 @@ async function deliverSignalEvent(
   // NOTE: rides on the operator chat being resolvable (resolved + persisted
   // for weeks) — unresolved-chat pending state skips the mirror too, by
   // design (one health gate).
-  if (ENV_SIGNAL_CHANNEL) {
+  if (signalChannelEnv()) { // v13.0 dynamic — revive without restart when .env self-heals
     try {
       await mirrorCardToChannel(card);
     } catch (e) {
@@ -1057,6 +1094,29 @@ export async function sendSampleCards(): Promise<{ ok: boolean; error?: string; 
   const okAll = results.every((r) => r.endsWith("OK"));
   if (okAll) { sentCount += samples.length; lastSentAt = Date.now(); } else failCount += results.filter((r) => !r.endsWith("OK")).length;
   return { ok: okAll, detail: results.join(" · ") };
+}
+
+/** v13.0 operator proof for the SIGNAL-CHANNEL plane: one honest one-liner
+ * through the SAME apiCall the lifecycle mirror uses — proves env target + bot
+ * auth + channel reachability end-to-end in one shot (audit 2026-11-10:
+ * sample cards only prove the operator plane; the channel plane had no lever). */
+export async function sendChannelTest(): Promise<{ ok: boolean; configured: boolean; error?: string }> {
+  const chan = signalChannelEnv();
+  if (!chan) return { ok: false, configured: false, error: "TELEGRAM_SIGNAL_CHANNEL unset — mirror dormant (self-heal re-scans .env every 30s)" };
+  const r = await apiCall<unknown>("sendMessage", {
+    chat_id: chan,
+    text: `🧪 <b>${APP_NAME} — SIGNAL-CHANNEL TEST</b>\n${new Date().toISOString()} — mirror plane armed; full lifecycle cards (CREATED/TP1-3/SL/TTL/AFTERLIFE) mirror here.`,
+    parse_mode: "HTML",
+    disable_web_page_preview: true,
+  });
+  if (r?.ok) {
+    chSentCount++;
+    chLastSentAt = Date.now();
+  } else {
+    chFailCount++;
+    pushErr(`channeltest: ${r?.error ?? "?"}`);
+  }
+  return { ok: !!r?.ok, configured: true, error: r && !r.ok ? String(r.error) : undefined };
 }
 
 // ── v6.2.2 AUTO-DISCOVER (operator round) ─────────────────────────────────

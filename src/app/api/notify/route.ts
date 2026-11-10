@@ -1,10 +1,11 @@
 // ── FlowRadar Neo v6.3 TELEGRAM relay control + health ────────────────
 // GET  /api/notify                      → relay health (armed/bot/chat counters/errors)
 // POST /api/notify {action:"test"}      → operator-initiated delivery proof (plain line)
-// POST /api/notify {action:"sample"}    → v6.3.2 card-format proof (all 7 banner photos)
-// POST /api/notify {action:"discover"}  → learn the operator chat from getUpdates
+// POST /api/notify {action:"sample"}      → v6.3.2 card-format proof (all 7 banner photos)
+// POST /api/notify {action:"channeltest"} → v13.0 SIGNAL-CHANNEL plane proof (one-liner through the mirror's own apiCall)
+// POST /api/notify {action:"discover"}    → learn the operator chat from getUpdates
 import { NextResponse } from "next/server";
-import { relayHealth, sendDirect, discoverChat, sendSampleCards, primeRelayState } from "@/lib/notify";
+import { relayHealth, sendDirect, discoverChat, sendSampleCards, sendChannelTest, primeRelayState } from "@/lib/notify";
 import { APP_NAME } from "@/lib/brand";
 
 export const dynamic = "force-dynamic";
@@ -23,6 +24,7 @@ export async function POST(req: Request) {
   }
   if (body.action === "discover") return NextResponse.json(await discoverChat());
   if (body.action === "sample") return NextResponse.json(await sendSampleCards());
+  if (body.action === "channeltest") return NextResponse.json(await sendChannelTest());
   if (body.action === "test") {
     const r = await sendDirect(
       body.text?.slice(0, 500) ??

@@ -261,9 +261,23 @@ export async function maybeRawCalDeploy(): Promise<{ issued: boolean; serial?: n
   //    row carries the FAPI-DEG tag for per-cohort audit (the capture book can
   //    split FAPI-DEG vs clean rows exactly like the regime split).
   //    Reversible: re-enable a return here restores the v14.2 stand-down.
+  //    v14.5 PERFORMANCE MANDATE (operator 2026-11-10 trace 1a1c76eb7b64d83d
+  //    «دلیل افت شدید حساب و عملکرد ردیابی سیستم چیست؟ … بهترین روزها را
+  //    بازگردانیم؟») — the v14.4 continue-through-bans policy is now
+  //    EVIDENCE-COMPLETE and RETIRED. Measured (ops-audit-1110, settled ledger):
+  //    FAPI-DEG cohort = 196 settled · WR 25.5% · net −$39.62 · avg −$0.20/row,
+  //    vs clean RAW-CAL avg +$0.03 — degraded-tape issuance is proven
+  //    negative-expectancy and bled the account through every ban window.
+  //    Therefore during an ACTIVE ban the issuer STANDS DOWN for that window
+  //    (v14.2 semantics restored) — but the run loop, cadence and heartbeat
+  //    stay live and the next 10-min cycle retries automatically; bans are
+  //    intermittent ~24-min windows, not a total silence. Reversible: restore
+  //    the v14.4 continue block to re-enable degraded capture.
   const ban = fapiBanActivity();
   if (ban.active) {
-    touchRawcalHeartbeat(`OPEN (degraded) fapi ban active (${ban.reason?.slice(0, 60)}) — issuer continues per operator order 2026-11-06 «تمام گیتهای ورودی را باز کن», rows tagged FAPI-DEG`);
+    touchRawcalHeartbeat(`OPEN (protected) — fapi ban active (${ban.reason?.slice(0, 60)}): degraded FAPI-DEG issuance SUSPENDED per performance mandate 2026-11-10 (cohort proven 196 settled · −$39.62 net · avg −$0.20 vs clean +$0.03). Cadence live, next window retries — anti-sil intact.`);
+    noteRawCalBlock(`fapi-ban protected stand-down — ${ban.reason?.slice(0, 80) ?? "degraded tape"}`);
+    return { issued: false, note: "fapi-ban protected stand-down (v14.5 performance mandate)" };
   }
 
   // 1) progress check FIRST — Task 34-2 ARMS-COUPLED AUTO-CANCEL (2026-09-26

@@ -66,7 +66,7 @@ export const DEFLATED_EDGE_BASIS_HIGH = 15; // $/day on basis (×10 of $1.5)
 export const K2_MAX_WEEKLY_HITS_30D = 2;
 export const K3_WINDOW_TRADES = 300;
 export const K3_RUIN_BASIS = -BASIS_BANKROLL_USD;
-export const ENGINE_VERSION_STAMP = "NEXUS-LIVE v10.18"; // K4 reference
+export const ENGINE_VERSION_STAMP = "NEXUS-LIVE v13.3"; // K4 reference — refreshed 2026-11-10 audit: the stale v10.18 stamp made k4Invalid permanently TRUE (book has run v13.x for weeks), silently invalidating the whole K-suite advisory
 
 // BR-2.1 — daily/weekly rails are advisory-only by operator command. The lever
 // file re-arms them WITHOUT a redeploy (fail-safe default = command honored).
