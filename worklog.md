@@ -33789,3 +33789,51 @@ AMBER — all 6 services up, DB integrity clean (0 orphans/stuck), backup ring f
 - **Shadow MODEL lane revived & grounded**: SV-12154 (ENAUSDT PASS→VETO) + SV-12155 (NEARUSDT PASS→VETO) both `label=MODEL audit=yes` (100% grounding) within minutes of issuance resumption — the MODEL starvation was purely downstream of the STALE-DATA deploy freeze.
 - Sentinel log forensics: errors 53→0, http500 9→0. Remaining anomaly: watchdog `tbt` probe escalated (pre-existing, unrelated — watch item).
 - EXCHANGE CONSENSUS: feed LIVE failures 0; composite 30/31 + FUTWS 22 + TOOBIT 31/31 real planes serving the robust median. BINANCE-SPOT/GCP stay honestly null until Binance lifts the family IP ban (~21:21Z window; the 50× weight cut keeps them stable after — watch item for the next 418 check).
+
+---
+
+## SENTINEL-20261110-AUDIT-BESTDAYS-CARDREVIVE (trace 1a1c76eb7b64d83d)
+Operator order: «وضعیت سیستم را ممیزی بررسی کن، دلیل افت شدید حساب و عملکرد ردیابی سیستم چیست؟ ایا بهتر نیست تمام هسته موتور و فیلتر ها را به بهترین روزهای عملکرد بازگردانیم؟ یا این مشکل قابل شناسایی و برطرف شدن است؟»
+
+### Forensic audit (ops-audit-1110.mjs, read-only, clean ledger)
+- **Equity**: seed $100 → PEAK $145.00 @2026-10-18 → **now $46.89** (drawdown −$98.11). Trough $18.74 @10-08 was recovered to $131 @10-29 — the crash is TWO bleeding windows: week 10-19 (−$87.65) and the current slide 11-05→11-10 (−$68.45).
+- **Volume explosion × negative expectancy**: settled/day after the 11-06 gate-opening: 63→93→72→100 (+115 deployed last 24h) vs 1-11/day on 10-30..11-04. WR(tp-proven) collapsed to 13-32% while best days ran 44-55% at 3-10× lower volume. At negative avg/trade, volume multiplies the bleed.
+- **Cohort verdicts (3600 settled clean)**: AI-SCALP −$66.80 (WR 13.6%, n=492) · MEAN-REVERT −$46.06 (WR 18.9%, n=609) · **FAPI-DEG −$39.62 (avg −$0.20/row vs clean RAW-CAL +$0.03, n=196)** · PUMP −$18.73 · plain-auto −$52.09. BREAKOUT +$59.94 and AI-SWING ≈breakeven stay open.
+- **Direction split last 14d**: LONG 12.8% WR / −$24.48 · SHORT 25.4% WR / +$14.01 — longs bled in the chop tape.
+- **Fee drag**: last-14d fees+swap $55.41 vs net −$10.46 — gross was ≈ +$45; burn scales with deploy volume.
+- Top-losers board is wall-to-wall REGIME-CHOP AI-SWING — the 11-06 regimeGuard 1→0 reopen admitted exactly this cohort.
+- **K4 bug**: stale ENGINE_VERSION_STAMP v10.18 vs live v13.3 made k4Invalid permanently TRUE (K-suite advisory silently dead). Fixed (see below).
+
+### Root cause of EXCHANGE CONSENSUS "unstable"
+fapi 3-IP rolling ban cycle (bans.json: all 3 IPs banned, ~24min windows) starves the fapi-plane feeds → consensus venue rows go null ("—") / MAX DEV spikes → the card reads unstable. Confirmed with log lines: `[flow-scanner] kline starved on ALL Binance planes`, `[oi-funding] fapi premiumIndex starved`. Also: **fundingByb P2022 phantom returned** again (dev.log fresh hits 21:47Z) → `bunx prisma generate` (0 refs verified) + supervisor heal boot 21:58/21:59:46Z; post-boot occurrences 0.
+
+### Card relay — TRUE root cause found (revived + stabilized)
+`/api/notify` reported `signalChannel {configured:false, target:null}` for days while manual scripts succeeded. **`.env` carried ZERO `TELEGRAM_SIGNAL_CHANNEL=` lines** (the var was lost after the 11-09 revival — boot-time env binding in notify.ts:80 made the mirror sleep silently). Fixes:
+- **notify.ts v13.0**: channel target read DYNAMICALLY (process.env first, then mtime-gated .env re-scan ≤30s) → env loss/restore self-heals without restart; `.env` re-seeded with `TELEGRAM_SIGNAL_CHANNEL=@mytradeneo`.
+- **New ops lever**: POST /api/notify `{action:"channeltest"}` — one-liner through the mirror's own apiCall (the channel plane previously had NO proof lever; sample cards only exercise the operator plane).
+- v12.9 outbox cursor (11-09) retained → restart-proof at-least-once delivery across RAM-lane recycles.
+
+### Actions executed (best-days restoration — targeted config, NOT engine rollback)
+1. **regimeGuard 0→1** (+ governor PIN already suppresses AI flips; minScore 12 untouched) — ops-restore-bestdays-1110.mjs, readback verified via /api/settings.
+2. **AI-SCALP + MEAN-REVERT re-paused** (evidence fields carry ops-audit-1110 numbers; BREAKOUT/AI-SWING stay open).
+3. **raw-cal.ts v14.5 PROTECTED STAND-DOWN**: during an active fapi ban the degraded FAPI-DEG issuance is SUSPENDED (196 settles prove −$0.20/row) — cadence/heartbeat stay live, bans are intermittent ~24min windows; live-verified 22:06Z heartbeat `OPEN (protected) — degraded FAPI-DEG issuance SUSPENDED`.
+4. **Shadow-veto → VETO** (operator order reiterated): POST mode=veto force:true — audited SignalEvent, config persisted (mode:"veto", patternVeto on, fail-open rails intact). Honest caveat from 11-09 stands: on frozen epoch E-20260915 the would-veto cohort out-performed (+$40.85) — revocation pressure stays measurable via paper-tracking.
+5. **bankroll.ts K4 stamp** v10.18→v13.3 — K-suite advisory restored to meaning.
+
+### Instrumentation delivered
+- `.data/ops-audit-1110.mjs` — full forensic audit (rerunnable).
+- `.data/wr-cohorts-1110.mjs` — FAPI-DEG vs clean-cohort WR comparison with Wilson LB/UB95 + POST-MANDATE regression tracker (promises ZERO new FAPI-DEG rows; currently 0 ✓). First run: WR-separation NOT yet statistically proven (UB95 32.0% vs clean 21.9%) but **negative expectancy CONFIRMED** (avg −$0.20 vs +$0.03).
+
+### Live verification
+- healthz ok:true (boot 22:10:41Z); NOTIFY boot banner `signal-channel mirror → @***eneo (full lifecycle)`.
+- channeltest ok:true → card delivered to @mytradeneo via the app's own mirror path; `/api/notify` → `{configured:true, sent:1, failed:0}`.
+- Shadow-veto GET → `config.mode:"veto"` persisted; /api/settings → regimeGuard 1, pinned 1, minScore 12.
+- Fresh log window: fundingByb/P2022 **0** occurrences; sentinel report AMBER only on fresh-boot transient + pre-existing tbt escalation; services/db/backups/log all green.
+- Browser: `/` renders (Signal Command deck, ledger #3612, TOTAL PNL 7D −$24.57), zero console errors (recycle churn interrupts long sessions — documented RAM doctrine).
+- engine.ts untouched — FLAT-10 freeze intact.
+
+### Watch list
+- Next natural CREATED card mirrors to @mytradeneo automatically (11-09 pattern NX-3496/97 proven; env self-heal + outbox sweeper now guard it).
+- FAPI-DEG counter must stay 0 — any regrowth = raw-cal gate regression alarm (wr-cohorts tracker).
+- LONG-side WR 12.8% in chop — if SHORT/long skew persists after regimeGuard restore, consider a direction-aware confidence lift (needs operator mandate).
+- Governor PIN must survive governor cycles — check suppression line on next cycle.
