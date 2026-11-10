@@ -1,56 +1,13 @@
 {
- "at": "2026-11-09T23:49:18.190Z",
- "tehran": "10/11/2026, 03:19:18",
- "status": "ok",
- "err": null,
- "review": {
-  "verdict": "AMBER",
-  "summary": "سیستم با وجود وضعیت AMBER، عملکردی پایدار با وین‌ریت 26% و PNL منفی روزانه -$11.63 دارد. مشکلات اصلی در تأمین نقدینگی و کیفیت سیگنال‌ها وجود دارد.",
-  "findings": [
-   {
-    "sev": "P1",
-    "area": "کیفیت سیگنال",
-    "evidence": "qualityGate.verdict: RED · qualityInformativePct: 47.4% (< 50%)",
-    "impact": "کاهش وین‌ریت و PNL به دلیل سیگنال‌های کم‌کیفیت"
-   },
-   {
-    "sev": "P1",
-    "area": "تأمین نقدینگی",
-    "evidence": "pulseStats.pnl24hUsd: -11.63 · pulseStats.totalPnlUsd: -7.88",
-    "impact": "از دست رفتن سرمایه در 24 ساعت گذشته"
-   },
-   {
-    "sev": "P2",
-    "area": "منابع سیستم",
-    "evidence": "mem.availableMb: 679 · disk.rootFreeGb: 3.81",
-    "impact": "پتانسیل کمبود منابع در آینده نزدیک"
-   }
-  ],
-  "top_actions": [
-   {
-    "action": "بهبود کیفیت سیگنال‌ها با افزایش حد آستانه اطلاع‌رسانی",
-    "expected_effect_on_winrate_or_pnl": "افزایش وین‌ریت و PNL با کاهش سیگنال‌های کم‌کیفیت",
-    "effort": "M",
-    "risk": "ریسک کاهش حجم معاملات"
-   },
-   {
-    "action": "بهینه‌سازی مدیریت ریسک در معاملات",
-    "expected_effect_on_winrate_or_pnl": "کاهش ضررهای روزانه و بهبود PNL",
-    "effort": "S",
-    "risk": "ریسک از دست رفتن فرصت‌های معاملاتی"
-   },
-   {
-    "action": "پایش و مدیریت منابع سیستم",
-    "expected_effect_on_winrate_or_pnl": "جلوگیری از خرابی سیستم به دلیل کمبود منابع",
-    "effort": "S",
-    "risk": "ریسک عملیاتی"
-   }
-  ]
- },
+ "at": "2026-11-10T11:49:12.395Z",
+ "tehran": "10/11/2026, 15:19:12",
+ "status": "llm_unavailable",
+ "err": "Error: API request failed with status 401: {\"error\":\"missing X-Token header\"}",
+ "review": null,
  "telemetrySnapshot": {
-  "generatedAt": "2026-11-09T23:49:11.965Z",
+  "generatedAt": "2026-11-10T11:49:12.374Z",
   "liveExecution": "DISABLED (paper/research-only; SUPPRESSED engine path — honesty contract)",
-  "strategyValidationStatus": "PROMOTE gate = FAIL-OPEN-GAPS — gating leg(s): MOMENTUM 20/60 (33.3%) · total OOS 2920/300 (100%) · pace 23.4/day · ETA 112d (slowest open leg MOMENTUM (40 left @ 0.4/day)) · OPERATOR-BAR(300/leg): blocked: MOMENTUM 20/300 (ETA 784d) (protocol STRATEGY-VALIDATION-PROTOCOL.md; sample-size leg only) — recommend only evidence-respecting actions",
+  "strategyValidationStatus": "PROMOTE gate = FAIL-OPEN-GAPS — gating leg(s): MOMENTUM 21/60 (35%) · total OOS 2977/300 (100%) · pace 27.5/day · ETA 91d (slowest open leg MOMENTUM (39 left @ 0.4/day)) · OPERATOR-BAR(300/leg): blocked: MOMENTUM 21/300 (ETA 651d) (protocol STRATEGY-VALIDATION-PROTOCOL.md; sample-size leg only) — recommend only evidence-respecting actions",
   "sentinel": {
    "verdict": "AMBER",
    "anomalies": [
@@ -58,10 +15,15 @@
      "sev": "warn",
      "area": "watchdog",
      "msg": "layer-1 non-ok services: {\"app\":\"ok\",\"liq\":\"ok\",\"ws\":\"ok\",\"bridge\":\"ok\",\"trade\":\"ok\",\"sentinel\":\"ok\",\"armor\":\"ok\",\"cron\":\"ok\",\"stable\":\"ok\",\"kw\":\"ok\",\"mem\":\"ok\",\"warm\":\"ok\",\"tbt\":\"escalated\",\"cards\":\"ok\"}"
+    },
+    {
+     "sev": "warn",
+     "area": "dev.log",
+     "msg": "37 error lines in recent log window"
     }
    ],
    "mem": {
-    "availableMb": 679
+    "availableMb": 490
    },
    "disk": {
     "rootFreeGb": 3.81,
@@ -72,44 +34,44 @@
     "dir": "/tmp/my-project/backups",
     "encCount": 12,
     "zipCount": 12,
-    "newestEncMs": 1794257477236.8342,
-    "newestAnyMs": 1794257477236.8342,
-    "encAgeMs": 10671387.165771484
+    "newestEncMs": 1794300674618.8787,
+    "newestAnyMs": 1794300674618.8787,
+    "encAgeMs": 10619942.12133789
    },
    "rawcal": {
     "armed": true,
-    "issued": 924,
-    "issuedTotal": 2342,
+    "issued": 975,
+    "issuedTotal": 2393,
     "target": 3217,
     "heartbeatAgeH": 0,
-    "heartbeatAt": "2026-11-09T2348Z OPEN (degraded) fapi ban active (fapi GLOBAL ban window live — 10s left) — issuer continues per operator order"
+    "heartbeatAt": "2026-11-10T1147Z ARMED issued=975/2386 target=3217"
    }
   },
-  "deepSweepQuick": "# NEXUS-SENTINEL DEEP SWEEP — 2026-11-09T23:49:10Z\n\n\n## 1 · LIVE VERDICT — AMBER\n- verdict: AMBER · scan: 2026-11-09T23:49:08.765Z\n  · app       UP  http=200 39ms\n  · ws        UP  http=400 2ms\n  · bridge    UP  http=200 2ms\n  · liq       UP  http=200 2ms\n  · trade     UP  http=200 2ms\n  · watchdog  UP  http=200 2ms\n- mem: 679 MB avail · disk root: 3.81 GB · /tmp: 3.81 GB\n  - [warn] watchdog: layer-1 non-ok services: {\"app\":\"ok\",\"liq\":\"ok\",\"ws\":\"ok\",\"bridge\":\"ok\",\"trade\":\"ok\",\"sentinel\":\"ok\",\"armor\":\"ok\",\"cron\":\"ok\",\"stable\":\"ok\",\"kw\":\"ok\",\"mem\":\"ok\",\"warm\":\"ok\",\"tbt\":\"escalated\",\"cards\":\"ok\"}\n",
+  "deepSweepQuick": "# NEXUS-SENTINEL DEEP SWEEP — 2026-11-10T11:49:10Z\n\n\n## 1 · LIVE VERDICT — AMBER\n- verdict: AMBER · scan: 2026-11-10T11:48:14.708Z\n  · app       UP  http=200 21ms\n  · ws        UP  http=400 2ms\n  · bridge    UP  http=200 2ms\n  · liq       UP  http=200 2ms\n  · trade     UP  http=200 2ms\n  · watchdog  UP  http=200 3ms\n- mem: 490 MB avail · disk root: 3.81 GB · /tmp: 3.81 GB\n  - [warn] watchdog: layer-1 non-ok services: {\"app\":\"ok\",\"liq\":\"ok\",\"ws\":\"ok\",\"bridge\":\"ok\",\"trade\":\"ok\",\"sentinel\":\"ok\",\"armor\":\"ok\",\"cron\":\"ok\",\"stable\":\"ok\",\"kw\":\"ok\",\"mem\":\"ok\",\"warm\":\"ok\",\"tbt\":\"escalated\",\"cards\":\"ok\"}\n  - [warn] dev.log: 37 error lines in recent log window\n",
   "pulseStats": {
-   "winRate": 26,
-   "totalSignals": 260,
-   "wins": 65,
-   "losses": 62,
-   "pnl24hUsd": -11.63,
-   "totalPnlUsd": -7.88,
-   "avgPnlPercent": -0.31,
+   "winRate": 23,
+   "totalSignals": 313,
+   "wins": 72,
+   "losses": 74,
+   "pnl24hUsd": -13.94,
+   "totalPnlUsd": -15.46,
+   "avgPnlPercent": -0.5,
    "streak": {
     "type": "loss",
     "count": 0
    },
    "account": {
     "startBalance": 100,
-    "balance": 310.67,
-    "equity": 309.98,
-    "unrealizedPnl": -0.69,
-    "unrealizedPnlAllRows": -0.65,
+    "balance": 303.3,
+    "equity": 303.99,
+    "unrealizedPnl": 0.69,
+    "unrealizedPnlAllRows": 1.14,
     "unsafeOpenRows": 0,
     "exposureUsd": 60,
-    "freeMargin": 249.98,
-    "marginUsedPct": 19.4,
+    "freeMargin": 243.99,
+    "marginUsedPct": 19.7,
     "openPositions": 6,
-    "feesPaid": 237.129,
+    "feesPaid": 244.318,
     "closeAll": {
      "enabled": true,
      "targetUsd": 20,
@@ -119,30 +81,30 @@
    },
    "window24h": {
     "n": 54,
-    "wins": 30,
-    "winRatePct": 55.6,
-    "pnlUsd": -11.76
+    "wins": 23,
+    "winRatePct": 42.6,
+    "pnlUsd": -7.2
    },
    "window7d": {
     "n": 54,
-    "wins": 30,
-    "winRatePct": 55.6,
-    "pnlUsd": -11.76
+    "wins": 23,
+    "winRatePct": 42.6,
+    "pnlUsd": -7.2
    },
    "byStrategy": [
     {
      "strategy": "AI-SWING",
-     "count": 173,
-     "wins": 55,
-     "pnl": 6.48,
-     "avgConfidence": 67
+     "count": 192,
+     "wins": 59,
+     "pnl": 5.35,
+     "avgConfidence": 68
     },
     {
      "strategy": "MEAN-REVERT",
-     "count": 43,
-     "wins": 9,
-     "pnl": -1.3,
-     "avgConfidence": 81
+     "count": 73,
+     "wins": 12,
+     "pnl": -3.37,
+     "avgConfidence": 79
     },
     {
      "strategy": "BREAKOUT",
@@ -153,85 +115,85 @@
     },
     {
      "strategy": "MOMENTUM",
-     "count": 5,
+     "count": 6,
      "wins": 0,
-     "pnl": -2.03,
-     "avgConfidence": 80
+     "pnl": -1.96,
+     "avgConfidence": 79
     },
     {
      "strategy": "AI-SCALP",
-     "count": 29,
+     "count": 34,
      "wins": 1,
-     "pnl": -8.94,
-     "avgConfidence": 73
+     "pnl": -11.43,
+     "avgConfidence": 72
     }
    ],
    "equityCurveTail": [
     {
      "date": "11-03",
-     "cum": 1.87,
-     "daily": 1.87
+     "cum": 1.66,
+     "daily": 1.66
     },
     {
      "date": "11-04",
-     "cum": 0.47,
+     "cum": 0.26,
      "daily": -1.4
     },
     {
      "date": "11-05",
-     "cum": 2.25,
+     "cum": 2.04,
      "daily": 1.78
     },
     {
      "date": "11-06",
-     "cum": 2.95,
+     "cum": 2.74,
      "daily": 0.7
     },
     {
      "date": "11-07",
-     "cum": -2.94,
+     "cum": -3.16,
      "daily": -5.89
     },
     {
      "date": "11-08",
-     "cum": -6.85,
+     "cum": -7.06,
      "daily": -3.91
     },
     {
      "date": "11-09",
-     "cum": -7.51,
+     "cum": -7.72,
      "daily": -0.65
     },
     {
      "date": "11-10",
-     "cum": -7.88,
-     "daily": -0.38
+     "cum": -15.46,
+     "daily": -7.74
     }
    ]
   },
   "rawcal": {
    "armed": true,
    "target": 3217,
-   "settledN": 2353,
-   "openRaw": 4,
-   "rawWinRatePct": 22.5,
+   "settledN": 2410,
+   "openRaw": 6,
+   "rawWinRatePct": 22.4,
    "disarmReason": "",
-   "paceSettledE2": 2353,
-   "paceSettleRate3h": 1,
-   "paceNeeded": 864,
-   "qualityInformativePct": 47.4,
-   "qualityHealthyPct": 79.6,
+   "paceSettledE2": 2410,
+   "paceSettleRate3h": 4.67,
+   "paceNeeded": 807,
+   "qualityInformativePct": 46.9,
+   "qualityHealthyPct": 66.3,
    "qualityGate": {
     "verdict": "RED",
     "healthFloor": 85,
     "blockers": [
-     "epoch-window informative 47.4% < 50% (n=196) — censoring regime"
+     "epoch-window informative 46.9% < 50% (n=196) — censoring regime"
     ],
     "window": {
      "since": "2026-09-15T11:30:00.000Z",
      "settled": 196,
-     "healthyPct": 79.6,
-     "informativePct": 47.4
+     "healthyPct": 66.3,
+     "informativePct": 46.9
     }
    }
   },
@@ -257,7 +219,7 @@
     "n": 30,
     "target": 30,
     "fillPct": 100,
-    "winRatePct": 40,
+    "winRatePct": 6.7,
     "starved": false
    },
    {
@@ -270,62 +232,26 @@
    }
   ],
   "shadowVetoStats": {
-   "total": 10973,
-   "passSide": 6442,
-   "rejectSide": 4531,
-   "vetoCount": 7877,
-   "tradeCount": 3096,
-   "modelSharePct": 41.2,
+   "total": 600,
+   "passSide": 430,
+   "rejectSide": 170,
+   "vetoCount": 512,
+   "tradeCount": 88,
+   "modelSharePct": 19.2,
    "modelGroundedPct": 100,
-   "avgConfidence": 67.1,
-   "gateAgreement": 3086,
-   "paperOpen": 11,
-   "paperSettled": 1453,
+   "avgConfidence": 59.1,
+   "gateAgreement": 136,
+   "paperOpen": 19,
+   "paperSettled": 1470,
    "recent24h": {
-    "n": 184,
-    "modelSharePct": 10.9,
-    "lastModelAgeH": 0,
+    "n": 250,
+    "modelSharePct": 38.4,
+    "lastModelAgeH": 7.3,
     "lastVerdictAgeH": 0
    }
   },
   "futures": {
-   "maturity": {
-    "settled": 10101,
-    "target": 720,
-    "progressPct": 100
-   },
-   "bestFilter": {
-    "filter": "BLOCK LONG in Q2_SQUEEZE",
-    "family": "D",
-    "rule": "LONG signals issued in Q2_SQUEEZE context averaged -4.21% levered net (n=32, win 34.4%)",
-    "edge": -4.21,
-    "n": 32,
-    "confidence": "LOW",
-    "source": "BOOK-EDGE"
-   },
-   "counts": {
-    "total": 10125,
-    "live": 10125,
-    "backfill": 0,
-    "settled1h": 10101,
-    "last24h": 70
-   },
-   "tape": {
-    "reachable": true,
-    "connected": true,
-    "source": "SPOT-MIRROR",
-    "symbols": 2,
-    "trades": 183810,
-    "dataStalled": false
-   },
-   "taxonomyBackfill": {
-    "at": "2026-09-23T00:25:06.827Z",
-    "symbols": [
-     "BTCUSDT",
-     "ETHUSDT"
-    ],
-    "rows": 672
-   }
+   "error": "unavailable"
   },
   "tradeService": {
    "ok": true,
@@ -336,18 +262,18 @@
    "watch": 2,
    "lastFrameAt": null,
    "spotConnected": true,
-   "spotFrames": 182809,
-   "spotLastFrameAt": 1794268150787,
+   "spotFrames": 335627,
+   "spotLastFrameAt": 1794311350458,
    "spotStreams": 2,
    "spotReconnects": 0,
-   "restBannedUntil": 1794274048655,
-   "restProbeConsecutiveFails": 1,
+   "restBannedUntil": 1794317456176,
+   "restProbeConsecutiveFails": 2,
    "symbols": 2,
-   "trades": 183809,
-   "restPolls": 5,
+   "trades": 339777,
+   "restPolls": 9,
    "restErrors": 4,
    "reconnects": 0,
-   "uptimeMs": 15722597
+   "uptimeMs": 26160199
   },
   "lastSweepAnomalies": [
    {
@@ -356,7 +282,7 @@
     "msg": "sentinel :3030 verdict AMBER"
    }
   ],
-  "lastReviewAt": "2026-11-09T11:49:12.161Z"
+  "lastReviewAt": "2026-11-09T23:49:18.190Z"
  },
- "deepSweepChars": 601
+ "deepSweepChars": 657
 }
