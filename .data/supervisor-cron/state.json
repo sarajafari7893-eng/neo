@@ -2,15 +2,15 @@
  "ver": "supervisor-cron 1.7.0",
  "pid": 2218,
  "startedAt": "2026-11-11T07:52:49.536Z",
- "updatedAt": "2026-11-11T13:37:57.500Z",
+ "updatedAt": "2026-11-11T13:47:57.456Z",
  "jobs": {
   "sweep": {
-   "lastRunAt": 1794404277415,
-   "nextRunAt": 1794404277414,
+   "lastRunAt": 1794404877414,
+   "nextRunAt": 1794404877414,
    "lastStatus": "ok",
-   "lastDurationMs": 85,
+   "lastDurationMs": 42,
    "lastError": null,
-   "runs": 1185,
+   "runs": 1186,
    "failures": 0
   },
   "progress": {
@@ -59,29 +59,29 @@
    "failures": 0
   },
   "keepwarm": {
-   "lastRunAt": 1794404277414,
-   "nextRunAt": 1794404577414,
+   "lastRunAt": 1794404877414,
+   "nextRunAt": 1794405177414,
    "lastStatus": "ok",
-   "lastDurationMs": 66,
+   "lastDurationMs": 24,
    "lastError": null,
-   "runs": 2293,
-   "failures": 138
+   "runs": 2295,
+   "failures": 139
   }
  },
  "lastSweep": {
-  "at": "2026-11-11T13:37:57.500Z",
+  "at": "2026-11-11T13:47:57.456Z",
   "verdict": "AMBER",
   "reason": "sentinel :3030 verdict AMBER",
   "services": {
    "app": {
     "up": true,
     "status": 200,
-    "ms": 70
+    "ms": 28
    },
    "liq": {
     "up": true,
     "status": 200,
-    "ms": 0
+    "ms": 1
    },
    "trade": {
     "up": true,
@@ -96,22 +96,22 @@
    "watchdog": {
     "up": true,
     "status": 200,
-    "ms": 1
+    "ms": 0
    },
    "sentinel": {
     "up": true,
     "status": 200,
-    "ms": 0
+    "ms": 1
    },
    "ws": {
     "up": true,
     "status": 400,
-    "ms": 2
+    "ms": 1
    },
    "bridge": {
     "up": true,
     "status": 200,
-    "ms": 0
+    "ms": 1
    }
   },
   "anomalies": [
@@ -144,11 +144,11 @@
   "newN": 3
  },
  "lastKeepwarm": {
-  "at": "2026-11-11T13:37:57.480Z",
+  "at": "2026-11-11T13:47:57.438Z",
   "ok": true,
-  "ms": 66,
-  "bootAt": "2026-11-11T13:22:58.837Z",
-  "gitSha": "3026e47",
+  "ms": 24,
+  "bootAt": "2026-11-11T13:42:57.096Z",
+  "gitSha": "a1386e6",
   "coldStreak": 0
  },
  "coldStreak": 0,
@@ -162,27 +162,6 @@
  "wsDownStreak": 0,
  "staleStreak": 0,
  "history": [
-  {
-   "id": "sweep",
-   "at": 1794395277414,
-   "status": "ok",
-   "durationMs": 42,
-   "detail": "AMBER: sentinel :3030 verdict AMBER"
-  },
-  {
-   "id": "keepwarm",
-   "at": 1794395577414,
-   "status": "ok",
-   "durationMs": 23,
-   "detail": "HEARTBEAT OK 23ms boot=11:02:08Z sha=3e7cd18"
-  },
-  {
-   "id": "sweep",
-   "at": 1794395877414,
-   "status": "ok",
-   "durationMs": 186,
-   "detail": "AMBER: sentinel :3030 verdict AMBER"
-  },
   {
    "id": "keepwarm",
    "at": 1794395877414,
@@ -510,6 +489,27 @@
    "at": 1794404277415,
    "status": "ok",
    "durationMs": 85,
+   "detail": "AMBER: sentinel :3030 verdict AMBER"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1794404577414,
+   "status": "error",
+   "durationMs": 3,
+   "detail": "HEARTBEAT COLD app:3000 1ms streak=1"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1794404877414,
+   "status": "ok",
+   "durationMs": 24,
+   "detail": "HEARTBEAT OK 24ms boot=13:42:57Z sha=a1386e6"
+  },
+  {
+   "id": "sweep",
+   "at": 1794404877414,
+   "status": "ok",
+   "durationMs": 42,
    "detail": "AMBER: sentinel :3030 verdict AMBER"
   }
  ],
