@@ -2,15 +2,15 @@
  "ver": "supervisor-cron 1.7.0",
  "pid": 2218,
  "startedAt": "2026-11-11T07:52:49.536Z",
- "updatedAt": "2026-11-11T08:37:57.454Z",
+ "updatedAt": "2026-11-11T08:51:16.585Z",
  "jobs": {
   "sweep": {
-   "lastRunAt": 1794386277414,
-   "nextRunAt": 1794386277414,
+   "lastRunAt": 1794386877415,
+   "nextRunAt": 1794387477414,
    "lastStatus": "ok",
-   "lastDurationMs": 40,
+   "lastDurationMs": 71,
    "lastError": null,
-   "runs": 1155,
+   "runs": 1156,
    "failures": 0
   },
   "progress": {
@@ -41,12 +41,12 @@
    "failures": 0
   },
   "backup": {
-   "lastRunAt": 1794376257129,
+   "lastRunAt": 1794387057130,
    "nextRunAt": 1794387057129,
    "lastStatus": "ok",
-   "lastDurationMs": 22387,
+   "lastDurationMs": 19455,
    "lastError": null,
-   "runs": 64,
+   "runs": 65,
    "failures": 1
   },
   "digest": {
@@ -59,24 +59,24 @@
    "failures": 0
   },
   "keepwarm": {
-   "lastRunAt": 1794386277414,
-   "nextRunAt": 1794386577414,
-   "lastStatus": "ok",
-   "lastDurationMs": 27,
-   "lastError": null,
-   "runs": 2233,
-   "failures": 132
+   "lastRunAt": 1794386877415,
+   "nextRunAt": 1794387177414,
+   "lastStatus": "error",
+   "lastDurationMs": 232,
+   "lastError": "HEARTBEAT COLD app:3000 226ms streak=1",
+   "runs": 2235,
+   "failures": 133
   }
  },
  "lastSweep": {
-  "at": "2026-11-11T08:37:57.454Z",
+  "at": "2026-11-11T08:47:57.486Z",
   "verdict": "AMBER",
   "reason": "sentinel :3030 verdict AMBER",
   "services": {
    "app": {
     "up": true,
     "status": 200,
-    "ms": 24
+    "ms": 27
    },
    "liq": {
     "up": true,
@@ -106,12 +106,12 @@
    "ws": {
     "up": true,
     "status": 400,
-    "ms": 2
+    "ms": 1
    },
    "bridge": {
     "up": true,
     "status": 200,
-    "ms": 1
+    "ms": 0
    }
   },
   "anomalies": [
@@ -144,14 +144,14 @@
   "newN": 0
  },
  "lastKeepwarm": {
-  "at": "2026-11-11T08:37:57.441Z",
-  "ok": true,
-  "ms": 27,
-  "bootAt": "2026-11-11T08:20:13.502Z",
-  "gitSha": "60018ca",
-  "coldStreak": 0
+  "at": "2026-11-11T08:47:57.647Z",
+  "ok": false,
+  "ms": 226,
+  "bootAt": null,
+  "gitSha": null,
+  "coldStreak": 1
  },
- "coldStreak": 0,
+ "coldStreak": 1,
  "alertLedger": {
   "sentinel-red": 1794349677674,
   "review-llm-unavailable": 1794311352397,
@@ -162,34 +162,6 @@
  "wsDownStreak": 0,
  "staleStreak": 0,
  "history": [
-  {
-   "id": "sweep",
-   "at": 1794376077415,
-   "status": "ok",
-   "durationMs": 37,
-   "detail": "AMBER: sentinel :3030 verdict AMBER"
-  },
-  {
-   "id": "backup",
-   "at": 1794376257129,
-   "status": "ok",
-   "durationMs": 22387,
-   "detail": "snapshot ok in 22s: SNAPSHOT OK — nexus-snapshot-20261111-055057.zip (48M) · 12 snapshots retained (max 12) · wal:VACUUM-COPY-CONSISTENT+CHECKPOINTED · cal:OK · enc:ENCRYPTED · off-site: DISABLED(oper"
-  },
-  {
-   "id": "progress",
-   "at": 1794376347135,
-   "status": "ok",
-   "durationMs": 1357,
-   "detail": "sent 16 lines"
-  },
-  {
-   "id": "keepwarm",
-   "at": 1794376377428,
-   "status": "ok",
-   "durationMs": 111,
-   "detail": "HEARTBEAT OK 110ms boot=05:44:23Z sha=f8fcdeb"
-  },
   {
    "id": "sweep",
    "at": 1794376677414,
@@ -511,6 +483,34 @@
    "status": "ok",
    "durationMs": 40,
    "detail": "AMBER: sentinel :3030 verdict AMBER"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1794386577414,
+   "status": "ok",
+   "durationMs": 35,
+   "detail": "HEARTBEAT OK 34ms boot=08:41:20Z sha=9851451"
+  },
+  {
+   "id": "sweep",
+   "at": 1794386877415,
+   "status": "ok",
+   "durationMs": 71,
+   "detail": "AMBER: sentinel :3030 verdict AMBER"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1794386877415,
+   "status": "error",
+   "durationMs": 232,
+   "detail": "HEARTBEAT COLD app:3000 226ms streak=1"
+  },
+  {
+   "id": "backup",
+   "at": 1794387057130,
+   "status": "ok",
+   "durationMs": 19455,
+   "detail": "snapshot ok in 19s: SNAPSHOT OK — nexus-snapshot-20261111-085057.zip (48M) · 12 snapshots retained (max 12) · wal:VACUUM-COPY-CONSISTENT+CHECKPOINTED · cal:OK · enc:ENCRYPTED · off-site: DISABLED(oper"
   }
  ],
  "watchRuns": [
