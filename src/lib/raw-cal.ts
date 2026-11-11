@@ -226,6 +226,62 @@ export async function disarmRawCal(reason: string, auto = false): Promise<RawCal
   return state;
 }
 
+// ── v14.6 WINNER-LANE AUTO-ABORT GUARD ──────────────────────────────────────
+// The honest rail behind the v14.6 reopen: FAPI-DEG-W rows are accounted
+// separately, and the moment ≥20 of them settle with avg net ≤ −$0.10 the
+// v14.5 protected stand-down re-arms ITSELF (persisted in rawcal.v146) — no
+// operator vigilance required, the bleed cannot restart silently.
+const V146_KEY = "rawcal.v146";
+export interface V146GuardState {
+  suspended: boolean;
+  reason: string | null;
+  at: string | null;
+  cohortN: number;
+  cohortAvgNet: number | null;
+  checkedAt: string | null;
+}
+const V146_DEFAULT: V146GuardState = { suspended: false, reason: null, at: null, cohortN: 0, cohortAvgNet: null, checkedAt: null };
+
+async function readV146Row(): Promise<V146GuardState> {
+  try {
+    const row = await db.engineSetting.findUnique({ where: { key: V146_KEY } });
+    if (!row) return { ...V146_DEFAULT };
+    return { ...V146_DEFAULT, ...(JSON.parse(row.value) as Partial<V146GuardState>) };
+  } catch {
+    return { ...V146_DEFAULT };
+  }
+}
+
+export async function getV146Guard(): Promise<V146GuardState> {
+  const st = await readV146Row();
+  st.checkedAt = new Date().toISOString();
+  try {
+    const rows = await db.signal.findMany({
+      where: { tags: { contains: "FAPI-DEG-W" }, status: { in: ["TP1", "TP2", "TP3", "SL", "EXPIRED", "CLOSED"] } },
+      select: { marginUsd: true, pnlPercent: true },
+    });
+    let net = 0;
+    for (const r of rows) net += (r.marginUsd * r.pnlPercent) / 100;
+    st.cohortN = rows.length;
+    st.cohortAvgNet = rows.length ? Number((net / rows.length).toFixed(3)) : null;
+    if (!st.suspended && rows.length >= 20 && st.cohortAvgNet !== null && st.cohortAvgNet <= -0.1) {
+      st.suspended = true;
+      st.reason = `AUTO-ABORT: FAPI-DEG-W cohort n=${rows.length} avg net $${st.cohortAvgNet}/row ≤ −$0.10 — winner-lane degraded capture re-suspended (v14.5 semantics)`;
+      st.at = st.checkedAt;
+      await db.engineSetting.upsert({
+        where: { key: V146_KEY },
+        create: { key: V146_KEY, value: JSON.stringify(st) },
+        update: { value: JSON.stringify(st) },
+      });
+      const { fireEvent } = await import("./engine");
+      void fireEvent(null, null, "ENGINE", "warn", `RAW-CAL v14.6 AUTO-ABORT: FAPI-DEG-W winner-lane cohort n=${rows.length} settled, avg net $${st.cohortAvgNet}/row ≤ −$0.10 — degraded-winner capture SUSPENDED, v14.5 protected stand-down re-armed.`).catch(() => undefined);
+    }
+  } catch {
+    // fail-open: guard probe errors never block the issuer (rows stay tagged)
+  }
+  return st;
+}
+
 /**
  * Tick hook — engine.ts calls this every 10 ticks (fire-and-forget).
  * Issues ONE raw capture record when: armed, spacing respected, under the
@@ -245,39 +301,41 @@ export async function maybeRawCalDeploy(): Promise<{ issued: boolean; serial?: n
     return { issued: false, note: "not armed" };
   }
 
-  // 0) v14.4 FAPI-BAN DEGRADED-CAPTURE (operator order 2026-11-06 trace
-  //    1a1a66a9881d011 «تمام گیتهای ورودی را باز کن», reiterated trace
-  //    1a1b2af7bcc328fd) — SUPERSEDES the v14.2 hard stand-down. ─────────────
-  //    WHY the flip: v14.2's premise died in the 3-IP rolling-ban era. Measured
-  //    2026-11-06: the fapi plane is ban-active ~100% of the wall clock (the
-  //    all-banned streak + probe contacts re-arm the global window every
-  //    ~24min), so the stand-down became a PERMANENT issuance freeze — issued
-  //    frozen at 749 for 18.4h, stall alert fired 19:34Z. The poison v14.2
-  //    feared is now contained at the DATA layer instead: v13.3 ①-ب
-  //    SPOT-MIRROR demote (flow evidence scores 0, INFORMATIONAL-ONLY while
-  //    ban-active) + the honesty rails that stay hard inside deploySignal
-  //    (feed-fresh guard, sim-price ban, PHANTOM-FEED). So the issuer now
-  //    CONTINUES through ban windows on the degraded tape, and every degraded
-  //    row carries the FAPI-DEG tag for per-cohort audit (the capture book can
-  //    split FAPI-DEG vs clean rows exactly like the regime split).
-  //    Reversible: re-enable a return here restores the v14.2 stand-down.
-  //    v14.5 PERFORMANCE MANDATE (operator 2026-11-10 trace 1a1c76eb7b64d83d
-  //    «دلیل افت شدید حساب و عملکرد ردیابی سیستم چیست؟ … بهترین روزها را
-  //    بازگردانیم؟») — the v14.4 continue-through-bans policy is now
-  //    EVIDENCE-COMPLETE and RETIRED. Measured (ops-audit-1110, settled ledger):
-  //    FAPI-DEG cohort = 196 settled · WR 25.5% · net −$39.62 · avg −$0.20/row,
-  //    vs clean RAW-CAL avg +$0.03 — degraded-tape issuance is proven
-  //    negative-expectancy and bled the account through every ban window.
-  //    Therefore during an ACTIVE ban the issuer STANDS DOWN for that window
-  //    (v14.2 semantics restored) — but the run loop, cadence and heartbeat
-  //    stay live and the next 10-min cycle retries automatically; bans are
-  //    intermittent ~24-min windows, not a total silence. Reversible: restore
-  //    the v14.4 continue block to re-enable degraded capture.
+  // 0) v14.6 WINNER-LANE DEGRADED CAPTURE (operator order 2026-11-11 trace
+  //    1a1ca1b0320831a9 «…بررسی ممیزی از عملکرد سیگنالهای برنده و استفاده و باز
+  //    گذاشتن ویژگی های شاخص برای گیت و تایید سیگنال…») — SUPERSEDES the v14.5
+  //    hard stand-down. ─────────────
+  //    WHY the flip back (evidence, ops-audit-1111):
+  //    · v14.5's premise ("bans are intermittent ~24-min windows") DIED —
+  //      ban.active held ~100% of the wall clock for 14h+ (rolling named-IP
+  //      renewals on the external 3-IP egress pool; heartbeat 08:57→10:15Z all
+  //      protected; scan-no-candidate events ceased 20:41Z; stall alert 08:36Z),
+  //      so the stand-down became the exact total-issuance freeze it replaced.
+  //    · The scoring lane is HEALTHY during bans: 2,788 candidates PASSed in
+  //      24h — 100% SHORT, AI-SWING-dominated — exactly the proven winner
+  //      cohort (CHOP|AI-SWING|SHORT n=230 · WR 30.4% · +$49.56/14d; CHOP
+  //      all-time +$125.26). The wall sits ONLY in this ban check.
+  //    · The v14.5 FAPI-DEG loss cohort (−$0.20/row) was accumulated 11-06→11-10
+  //      while AI-SCALP + MEAN-REVERT were OPEN and CHOP-LONGs flowed — those
+  //      cohorts are now BLOCKED UPSTREAM (strat-pause 11-10, regimeGuard L1,
+  //      memory gate), so a ban-window row today is a different, winner-shaped
+  //      cohort. The WS tape is LIVE during bans (feed failures=0, futws fresh
+  //      43 rows) — only the flow bundle is demoted (blind flow,
+  //      INFORMATIONAL-ONLY, historically non-negative).
+  //    · GUARDRAIL (the honest part): rows carry FAPI-DEG + FAPI-DEG-W tags for
+  //      separate cohort accounting, and an AUTO-ABORT re-arms the v14.5
+  //      stand-down by itself once ≥20 FAPI-DEG-W rows settle with avg net
+  //      ≤ −$0.10 (persisted rawcal.v146) — the drought ends, the bleed cannot
+  //      restart silently. Reversible by writing rawcal.v146 {suspended:false}.
   const ban = fapiBanActivity();
   if (ban.active) {
-    touchRawcalHeartbeat(`OPEN (protected) — fapi ban active (${ban.reason?.slice(0, 60)}): degraded FAPI-DEG issuance SUSPENDED per performance mandate 2026-11-10 (cohort proven 196 settled · −$39.62 net · avg −$0.20 vs clean +$0.03). Cadence live, next window retries — anti-sil intact.`);
-    noteRawCalBlock(`fapi-ban protected stand-down — ${ban.reason?.slice(0, 80) ?? "degraded tape"}`);
-    return { issued: false, note: "fapi-ban protected stand-down (v14.5 performance mandate)" };
+    const v146 = await getV146Guard();
+    if (v146.suspended) {
+      touchRawcalHeartbeat(`OPEN (protected) — v14.6 auto-abort live: winner-lane degraded capture suspended (${(v146.reason ?? "winner cohort bled").slice(0, 70)})`);
+      noteRawCalBlock(`v14.6 auto-abort — ${(v146.reason ?? "winner cohort bled").slice(0, 80)}`);
+      return { issued: false, note: "v14.6 winner-lane auto-abort" };
+    }
+    touchRawcalHeartbeat(`OPEN (degraded-winner) — fapi ban active (${ban.reason?.slice(0, 50)}): capture continues on WS-live tape, tagged FAPI-DEG-W (auto-abort armed: n≥20 & avg ≤ −$0.10) — operator order 2026-11-11 «باز گذاشتن ویژگی های شاخص»`);
   }
 
   // 1) progress check FIRST — Task 34-2 ARMS-COUPLED AUTO-CANCEL (2026-09-26
@@ -352,13 +410,13 @@ export async function maybeRawCalDeploy(): Promise<{ issued: boolean; serial?: n
 
   // 4) issue the capture record through the engine scan (honesty rails stay
   //    hard inside deploySignal: feed-fresh guard + sim-price ban)
-  //    v14.4 — during a live fapi ban the row is tagged FAPI-DEG (degraded
-  //    spot-mirror tape) so the capture book can audit the cohort separately.
+  //    v14.6 — during a live fapi ban the row is tagged FAPI-DEG (cohort
+  //    continuity) + FAPI-DEG-W (winner-lane window, auto-abort accounting).
   const { deploySignal } = await import("./engine");
   const res = await deploySignal(undefined, undefined, {
     calCapture: true,
     triggerTag: "RAW-CAL",
-    ...(ban.active ? { extraTags: ["FAPI-DEG"] } : {}),
+    ...(ban.active ? { extraTags: ["FAPI-DEG", "FAPI-DEG-W"] } : {}),
   });
   if (!res.signal) {
     // rate-limit the "scan found nothing" chatter — one event / 30min
@@ -465,6 +523,8 @@ export async function rawCalStatus() {
     .catch(() => null);
   // v11.5 capture-book regime gauge (operator question: رژیم‌سنجی قبل از اعتماد)
   const regimeSplit = await captureBookRegimeSplit().catch(() => []);
+  // v14.6 winner-lane auto-abort guard (observability on /api/rawcal)
+  const v146 = await getV146Guard().catch(() => null);
   return {
     ...state,
     settledN,
@@ -478,5 +538,6 @@ export async function rawCalStatus() {
     maxOpen: state.maxOpen,
     armsCompletion,
     regimeSplit,
+    v146,
   };
 }
