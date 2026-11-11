@@ -2,15 +2,15 @@
  "ver": "supervisor-cron 1.7.0",
  "pid": 2218,
  "startedAt": "2026-11-11T07:52:49.536Z",
- "updatedAt": "2026-11-11T13:47:57.456Z",
+ "updatedAt": "2026-11-11T13:57:57.704Z",
  "jobs": {
   "sweep": {
-   "lastRunAt": 1794404877414,
-   "nextRunAt": 1794404877414,
+   "lastRunAt": 1794405477414,
+   "nextRunAt": 1794405477414,
    "lastStatus": "ok",
-   "lastDurationMs": 42,
+   "lastDurationMs": 290,
    "lastError": null,
-   "runs": 1186,
+   "runs": 1187,
    "failures": 0
   },
   "progress": {
@@ -50,75 +50,75 @@
    "failures": 1
   },
   "digest": {
-   "lastRunAt": 1794398101536,
-   "nextRunAt": 1794405301536,
+   "lastRunAt": 1794405301536,
+   "nextRunAt": 1794412501536,
    "lastStatus": "ok",
-   "lastDurationMs": 256,
+   "lastDurationMs": 320,
    "lastError": null,
-   "runs": 3,
+   "runs": 4,
    "failures": 0
   },
   "keepwarm": {
-   "lastRunAt": 1794404877414,
-   "nextRunAt": 1794405177414,
+   "lastRunAt": 1794405477415,
+   "nextRunAt": 1794405777414,
    "lastStatus": "ok",
-   "lastDurationMs": 24,
+   "lastDurationMs": 43,
    "lastError": null,
-   "runs": 2295,
+   "runs": 2297,
    "failures": 139
   }
  },
  "lastSweep": {
-  "at": "2026-11-11T13:47:57.456Z",
-  "verdict": "AMBER",
-  "reason": "sentinel :3030 verdict AMBER",
+  "at": "2026-11-11T13:57:57.456Z",
+  "verdict": "RED",
+  "reason": "sentinel verdict RED",
   "services": {
    "app": {
     "up": true,
     "status": 200,
-    "ms": 28
+    "ms": 27
    },
    "liq": {
     "up": true,
     "status": 200,
-    "ms": 1
+    "ms": 0
    },
    "trade": {
     "up": true,
     "status": 200,
-    "ms": 0
+    "ms": 1
    },
    "armor": {
     "up": true,
     "status": 200,
-    "ms": 1
+    "ms": 0
    },
    "watchdog": {
     "up": true,
     "status": 200,
-    "ms": 0
+    "ms": 1
    },
    "sentinel": {
     "up": true,
     "status": 200,
-    "ms": 1
+    "ms": 0
    },
    "ws": {
     "up": true,
     "status": 400,
-    "ms": 1
+    "ms": 3
    },
    "bridge": {
     "up": true,
     "status": 200,
-    "ms": 1
+    "ms": 0
    }
   },
   "anomalies": [
    {
-    "class": "sentinel-amber",
-    "sev": "warn",
-    "msg": "sentinel :3030 verdict AMBER"
+    "class": "sentinel-red",
+    "sev": "crit",
+    "msg": "sentinel :3030 verdict RED"
    }
   ],
   "data": {
@@ -139,21 +139,21 @@
   "ok": true
  },
  "lastDigest": {
-  "at": "2026-11-11T11:55:01.792Z",
+  "at": "2026-11-11T13:55:01.856Z",
   "ok": true,
-  "newN": 3
+  "newN": 8
  },
  "lastKeepwarm": {
-  "at": "2026-11-11T13:47:57.438Z",
+  "at": "2026-11-11T13:57:57.458Z",
   "ok": true,
-  "ms": 24,
+  "ms": 43,
   "bootAt": "2026-11-11T13:42:57.096Z",
-  "gitSha": "a1386e6",
+  "gitSha": "39e3a90",
   "coldStreak": 0
  },
  "coldStreak": 0,
  "alertLedger": {
-  "sentinel-red": 1794349677674,
+  "sentinel-red": 1794405477703,
   "review-llm-unavailable": 1794311352397,
   "app-down": 1794230878072,
   "data-stale": 1793753878331,
@@ -162,34 +162,6 @@
  "wsDownStreak": 0,
  "staleStreak": 0,
  "history": [
-  {
-   "id": "keepwarm",
-   "at": 1794395877414,
-   "status": "ok",
-   "durationMs": 209,
-   "detail": "HEARTBEAT OK 209ms boot=11:02:08Z sha=3e7cd18"
-  },
-  {
-   "id": "keepwarm",
-   "at": 1794396177414,
-   "status": "error",
-   "durationMs": 2,
-   "detail": "HEARTBEAT COLD app:3000 1ms streak=1"
-  },
-  {
-   "id": "keepwarm",
-   "at": 1794396477415,
-   "status": "ok",
-   "durationMs": 51,
-   "detail": "HEARTBEAT OK 51ms boot=11:22:56Z sha=6a99188"
-  },
-  {
-   "id": "sweep",
-   "at": 1794396477414,
-   "status": "ok",
-   "durationMs": 65,
-   "detail": "AMBER: sentinel :3030 verdict AMBER"
-  },
   {
    "id": "keepwarm",
    "at": 1794396777414,
@@ -511,6 +483,34 @@
    "status": "ok",
    "durationMs": 42,
    "detail": "AMBER: sentinel :3030 verdict AMBER"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1794405177414,
+   "status": "ok",
+   "durationMs": 234,
+   "detail": "HEARTBEAT OK 234ms boot=13:42:57Z sha=39e3a90"
+  },
+  {
+   "id": "digest",
+   "at": 1794405301536,
+   "status": "ok",
+   "durationMs": 320,
+   "detail": "digest new=8 settled=2 bridge=ok"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1794405477415,
+   "status": "ok",
+   "durationMs": 43,
+   "detail": "HEARTBEAT OK 43ms boot=13:42:57Z sha=39e3a90"
+  },
+  {
+   "id": "sweep",
+   "at": 1794405477414,
+   "status": "ok",
+   "durationMs": 290,
+   "detail": "RED: sentinel verdict RED"
   }
  ],
  "watchRuns": [
