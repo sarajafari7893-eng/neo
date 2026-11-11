@@ -33837,3 +33837,39 @@ fapi 3-IP rolling ban cycle (bans.json: all 3 IPs banned, ~24min windows) starve
 - FAPI-DEG counter must stay 0 — any regrowth = raw-cal gate regression alarm (wr-cohorts tracker).
 - LONG-side WR 12.8% in chop — if SHORT/long skew persists after regimeGuard restore, consider a direction-aware confidence lift (needs operator mandate).
 - Governor PIN must survive governor cycles — check suppression line on next cycle.
+
+## SENTINEL-20261111-DROUGHT-WINNERS (trace 1a1ca1b0320831a9)
+Operator order: «دلیل خشکسالی چیست؟ چرا سیگنالی ردیابی نمی شود؟ ایا رژیم chop کامل مسدود شده؟ یک بررسی ممیزی از عملکرد سیگنالهای برنده و استفاده و باز گذاشتن ویژگی های شاخص برای گیت و تایید سیگنال انجام بده»
+
+### Drought forensics (ops-audit-1111-v2.mjs, read-only)
+- **Drought measured**: last signal NX-3612 @ 2026-11-10T21:45:58Z → 14h+ zero issuance; stall alert 08:36:38Z; scan-no-candidate events ceased 20:41:50Z (the issuer never even reached the scan — blocked at the ban gate).
+- **Root cause = premise falsification**: raw-cal v14.5 protected stand-down assumed "bans are intermittent ~24-min windows" — measured 2026-11-11: `fapiBanActivity().active` held ~100% of the wall clock for 14h+ (rolling named-IP renewals on the external 3-IP egress pool; heartbeat 08:57→10:15Z all "OPEN (protected)"). The stand-down became the exact total-issuance freeze it replaced.
+- **NOT a scoring drought**: gate-journal 24h = 8,079 rows; **2,788 candidates PASSed scoring — 100% SHORT, AI-SWING-dominated** (sample ZECUSDT SHORT AI-SWING). The wall sat ONLY in maybeRawCalDeploy's ban check.
+- **CHOP answer**: NOT fully blocked. regimeGuard L1 (restored+pinned 11-10) vetoes CHOP-LONG + BREAKOUT/MOMENTUM-in-chop; CHOP|SHORT passes freely. Evidence for keeping L1: CHOP|LONG 7d n=64 WR 6.3% net −$15.94; EQ-100 ledger LONG −$111.22 Oct. 24h veto sample: TAOUSDT LONG "CHOP … LONG vetoed at guard L1".
+- **Memory gate hyperactive but irrelevant behind the wall**: 11,903 skips/12h (ZEC 2461, UNI 1839, ARB 1063…); ENGINE event flood 39,304/26h — watch item.
+
+### Winner audit (settled clean ledger, 3,610 rows)
+- **Top cell 14d: CHOP|AI-SWING|SHORT n=230 · WR 30.4% · +$49.56 (avg +2.15%)** — the entire 24h PASS population is exactly this cohort. TREND-DOWN|AI-SWING|SHORT +$11.20. All-time regime: CHOP +$125.26 (biggest earner) · TREND-UP +$51.35 · VOLATILE −$8.79 (loser).
+- Losers (kept blocked, evidence): AI-SCALP 7d WR 2.9% (−$11.30) · MEAN-REVERT 7d WR 15.4% · CHOP|MEAN-REVERT|LONG 14d WR 3.6% · VOLATILE 7d WR 0% (n=27).
+- **FAPI-DEG all-time −$16.36 (avg −$0.80/row, n=204) vs CLEAN +$207.28 (avg +$0.55)** — v14.5's cohort evidence stands.
+- **Confirmation-feature lifts (7d)**: MTF-CONSENSUS WR 29.9% vs 19.1% without (+10.8pp) · SURR-CAP +11.4pp · EVENT-TRIGGER +8.0pp · **"high-conviction" tag is INVERSE-predictive (WR 9.5% vs 23.8%)** — recommendation flag for the frozen-core ledger.
+- Window aggregates: 7d n=365 net −$28.99 · 24h n=59 net −$13.81 (WR 11.9%) — the 11-10 protective stack slowed but did not stop the bleed; the drought stopped it by starvation.
+
+### Engineering changes (engine.ts FROZEN untouched — md5 verified eaf8be0776bdf7597a502a2d77fd8c3e before/after)
+1. **raw-cal.ts v14.6 WINNER-LANE DEGRADED CAPTURE** (supersedes v14.5 with operator order citation): during ban.active the issuer CONTINUES on the WS-live tape (feed LIVE, failures 0, futws fresh 43 rows — only the flow bundle stays demoted INFORMATIONAL-ONLY); rows tagged `FAPI-DEG` + `FAPI-DEG-W`. **AUTO-ABORT guardrail** (`rawcal.v146` EngineSetting): ≥20 settled FAPI-DEG-W rows with avg net ≤ −$0.10 ⇒ v14.5 stand-down re-arms ITSELF + ENGINE warn event; surfaced on /api/rawcal `v146` field. Rationale documented in-file: the v14.5 loss cohort was accumulated while AI-SCALP/MEAN-REVERT/CHOP-LONG were OPEN — all now blocked upstream, so ban-window rows are winner-shaped today.
+2. **P0 channel-mirror revival (second recurrence, TRUE root cause)**: `/api/notify` reported `signalChannel {configured:false}`; `.env` (mtime 2026-11-02!) carried ZERO `TELEGRAM_SIGNAL_CHANNEL` — the 11-10 "re-seed" never landed on disk. Re-seeded (line 13) → notify v13.0 dynamic re-scan self-healed WITHOUT restart (`configured:true, target:@***eneo` ≤45s) → `channeltest ok:true` → boot banners now print `signal-channel mirror → @***eneo (full lifecycle)`.
+3. Instrumentation kept: `.data/ops-audit-1111.mjs` + `ops-audit-1111-v2.mjs` (rerunnable; v2 carries the SQLite ms-binding lesson — SignalEvent/DateTime columns are INTEGER ms, ISO-string binds silently match nothing).
+
+### Live verification (real flow, not mocks)
+- **NX-3613 INITUSDT SHORT AI-SWING @ 0.20645 issued 10:32:28Z** — first signal after the 14h drought, issued DURING an active ban window via v14.6, tagged `FAPI-DEG,FAPI-DEG-W,REGIME-CHOP,EVENT-TRIGGER,STRAT-PROB-x0.50,RISK-DD,RAW-CAL` (score 74%). Heartbeat: `OPEN (degraded-winner) … ISSUE NX-3613 raw open 1/8`.
+- **CREATED card delivered to @mytradeneo on the real relay path**: dev.log `signal-channel mirror LIVE → @***eneo (first lifecycle card delivered)`; durable outbox cursor `telegram.relayCursor` advanced to the NX-3613 CREATED event id (10:32:29.523Z, by "live").
+- Lint: raw-cal.ts clean. engine.ts untouched.
+- Shadow veto: verified already in `mode:"veto"` (shadowveto.config, patternVeto on) — the 11-09/11-10 operator-force persists; fail-open rails intact.
+- EXCHANGE CONSENSUS (standing trace 1a1c1ecd9694a129, diagnosis): the "unstable" reading = REST-plane starvation from the same external IP-ban cycle — BINANCE-FUTWS venue null on non-ring symbols, BINANCE-SPOT/GCP mirrored, plus TOOBIT phantom outliers (PUMPUSDT 136,809 bps, INITUSDT 887.5 bps) that PHANTOM-FEED correctly rejects. Robust-median consensus is FUNCTIONING; core feed LIVE 58ms failures 0.
+
+### Watch list
+- v14.6 auto-abort: FAPI-DEG-W cohort must stay ≥ −$0.10/row avg — abort fires automatically at n≥20; verify via /api/rawcal `v146`.
+- RAM-lane recycles ran ×3 within ~5min around 10:32Z — counters reset (documented doctrine); v12.9 cursor + v13.0 env self-heal keep cards/env alive; replay sweeper lazy-arms in fresh instances (lastSweepAt null until first event flow).
+- ENGINE event flood (memory-gate skips ~25/min) — observability debt, needs an engine-side throttle (frozen core → next mandate).
+- LLM auth failures (#1894, supervisor) — neural link degraded, stack on heuristics; watch the .z-ai-config reload heal.
+- "high-conviction" tag inversion + MTF-CONSENSUS as a required confirmation: both need an engine-core decision (FLAT-10) — parked as recommendations.
