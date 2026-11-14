@@ -2,15 +2,15 @@
  "ver": "supervisor-cron 1.7.0",
  "pid": 2656,
  "startedAt": "2026-11-14T17:12:41.440Z",
- "updatedAt": "2026-11-14T19:07:57.452Z",
+ "updatedAt": "2026-11-14T19:17:57.624Z",
  "jobs": {
   "sweep": {
-   "lastRunAt": 1794683277414,
-   "nextRunAt": 1794683877414,
+   "lastRunAt": 1794683877414,
+   "nextRunAt": 1794684477414,
    "lastStatus": "ok",
-   "lastDurationMs": 36,
+   "lastDurationMs": 127,
    "lastError": null,
-   "runs": 1484,
+   "runs": 1485,
    "failures": 0
   },
   "progress": {
@@ -50,33 +50,33 @@
    "failures": 1
   },
   "digest": {
-   "lastRunAt": 1794676493442,
-   "nextRunAt": 1794683693442,
+   "lastRunAt": 1794683693442,
+   "nextRunAt": 1794690893442,
    "lastStatus": "ok",
-   "lastDurationMs": 732,
+   "lastDurationMs": 694,
    "lastError": null,
-   "runs": 1,
+   "runs": 2,
    "failures": 0
   },
   "keepwarm": {
-   "lastRunAt": 1794683277414,
-   "nextRunAt": 1794683277414,
-   "lastStatus": "ok",
-   "lastDurationMs": 38,
-   "lastError": null,
-   "runs": 2891,
-   "failures": 156
+   "lastRunAt": 1794683877414,
+   "nextRunAt": 1794683877414,
+   "lastStatus": "error",
+   "lastDurationMs": 210,
+   "lastError": "HEARTBEAT COLD app:3000 204ms streak=1",
+   "runs": 2893,
+   "failures": 157
   }
  },
  "lastSweep": {
-  "at": "2026-11-14T19:07:57.450Z",
+  "at": "2026-11-14T19:17:57.541Z",
   "verdict": "AMBER",
   "reason": "sentinel :3030 verdict AMBER",
   "services": {
    "app": {
     "up": true,
     "status": 200,
-    "ms": 23
+    "ms": 22
    },
    "liq": {
     "up": true,
@@ -86,17 +86,17 @@
    "trade": {
     "up": true,
     "status": 200,
-    "ms": 1
+    "ms": 0
    },
    "armor": {
     "up": true,
     "status": 200,
-    "ms": 0
+    "ms": 1
    },
    "watchdog": {
     "up": true,
     "status": 200,
-    "ms": 1
+    "ms": 0
    },
    "sentinel": {
     "up": true,
@@ -106,12 +106,12 @@
    "ws": {
     "up": true,
     "status": 400,
-    "ms": 0
+    "ms": 1
    },
    "bridge": {
     "up": true,
     "status": 200,
-    "ms": 1
+    "ms": 0
    }
   },
   "anomalies": [
@@ -139,19 +139,19 @@
   "ok": true
  },
  "lastDigest": {
-  "at": "2026-11-14T17:14:54.174Z",
+  "at": "2026-11-14T19:14:54.136Z",
   "ok": true,
-  "newN": 4
+  "newN": 8
  },
  "lastKeepwarm": {
-  "at": "2026-11-14T19:07:57.452Z",
-  "ok": true,
-  "ms": 38,
-  "bootAt": "2026-11-14T19:04:24.258Z",
-  "gitSha": "8fbe4c5",
-  "coldStreak": 0
+  "at": "2026-11-14T19:17:57.623Z",
+  "ok": false,
+  "ms": 204,
+  "bootAt": null,
+  "gitSha": null,
+  "coldStreak": 1
  },
- "coldStreak": 0,
+ "coldStreak": 1,
  "alertLedger": {
   "sentinel-red": 1794564477724,
   "review-llm-unavailable": 1794644262258,
@@ -162,34 +162,6 @@
  "wsDownStreak": 0,
  "staleStreak": 0,
  "history": [
-  {
-   "id": "sweep",
-   "at": 1794673677423,
-   "status": "ok",
-   "durationMs": 335,
-   "detail": "AMBER: sentinel :3030 verdict AMBER"
-  },
-  {
-   "id": "keepwarm",
-   "at": 1794673677423,
-   "status": "ok",
-   "durationMs": 342,
-   "detail": "HEARTBEAT OK 342ms boot=16:06:22Z sha=3fc67d1"
-  },
-  {
-   "id": "keepwarm",
-   "at": 1794673977415,
-   "status": "ok",
-   "durationMs": 28,
-   "detail": "HEARTBEAT OK 28ms boot=16:06:22Z sha=3fc67d1"
-  },
-  {
-   "id": "keepwarm",
-   "at": 1794674277415,
-   "status": "ok",
-   "durationMs": 32,
-   "detail": "HEARTBEAT OK 32ms boot=16:35:48Z sha=f811436"
-  },
   {
    "id": "sweep",
    "at": 1794674277414,
@@ -511,6 +483,34 @@
    "status": "ok",
    "durationMs": 38,
    "detail": "HEARTBEAT OK 38ms boot=19:04:24Z sha=8fbe4c5"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1794683577414,
+   "status": "ok",
+   "durationMs": 19,
+   "detail": "HEARTBEAT OK 19ms boot=19:10:26Z sha=1774f27"
+  },
+  {
+   "id": "digest",
+   "at": 1794683693442,
+   "status": "ok",
+   "durationMs": 694,
+   "detail": "digest new=8 settled=2 bridge=ok"
+  },
+  {
+   "id": "sweep",
+   "at": 1794683877414,
+   "status": "ok",
+   "durationMs": 127,
+   "detail": "AMBER: sentinel :3030 verdict AMBER"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1794683877414,
+   "status": "error",
+   "durationMs": 210,
+   "detail": "HEARTBEAT COLD app:3000 204ms streak=1"
   }
  ],
  "watchRuns": [
