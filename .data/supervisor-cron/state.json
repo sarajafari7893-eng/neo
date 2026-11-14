@@ -2,24 +2,24 @@
  "ver": "supervisor-cron 1.7.0",
  "pid": 2253,
  "startedAt": "2026-11-14T08:16:11.491Z",
- "updatedAt": "2026-11-14T14:02:57.433Z",
+ "updatedAt": "2026-11-14T14:16:15.329Z",
  "jobs": {
   "sweep": {
-   "lastRunAt": 1794664677414,
-   "nextRunAt": 1794665277414,
+   "lastRunAt": 1794665277414,
+   "nextRunAt": 1794665877414,
    "lastStatus": "ok",
-   "lastDurationMs": 43,
+   "lastDurationMs": 42,
    "lastError": null,
-   "runs": 1454,
+   "runs": 1455,
    "failures": 0
   },
   "progress": {
-   "lastRunAt": 1794610060994,
+   "lastRunAt": 1794665771534,
    "nextRunAt": 1794665771533,
    "lastStatus": "ok",
-   "lastDurationMs": 2727,
+   "lastDurationMs": 3795,
    "lastError": null,
-   "runs": 196,
+   "runs": 197,
    "failures": 0
   },
   "review": {
@@ -59,24 +59,24 @@
    "failures": 0
   },
   "keepwarm": {
-   "lastRunAt": 1794664977414,
-   "nextRunAt": 1794664977414,
+   "lastRunAt": 1794665577414,
+   "nextRunAt": 1794665877414,
    "lastStatus": "ok",
-   "lastDurationMs": 19,
+   "lastDurationMs": 17,
    "lastError": null,
-   "runs": 2831,
+   "runs": 2833,
    "failures": 156
   }
  },
  "lastSweep": {
-  "at": "2026-11-14T13:57:57.457Z",
-  "verdict": "AMBER",
-  "reason": "sentinel :3030 verdict AMBER",
+  "at": "2026-11-14T14:07:57.456Z",
+  "verdict": "GREEN",
+  "reason": "all services up · sentinel not RED",
   "services": {
    "app": {
     "up": true,
     "status": 200,
-    "ms": 28
+    "ms": 27
    },
    "liq": {
     "up": true,
@@ -86,17 +86,17 @@
    "trade": {
     "up": true,
     "status": 200,
-    "ms": 1
+    "ms": 0
    },
    "armor": {
     "up": true,
     "status": 200,
-    "ms": 0
+    "ms": 1
    },
    "watchdog": {
     "up": true,
     "status": 200,
-    "ms": 3
+    "ms": 0
    },
    "sentinel": {
     "up": true,
@@ -106,21 +106,15 @@
    "ws": {
     "up": true,
     "status": 400,
-    "ms": 1
+    "ms": 2
    },
    "bridge": {
     "up": true,
     "status": 200,
-    "ms": 0
+    "ms": 1
    }
   },
-  "anomalies": [
-   {
-    "class": "sentinel-amber",
-    "sev": "warn",
-    "msg": "sentinel :3030 verdict AMBER"
-   }
-  ],
+  "anomalies": [],
   "data": {
    "lastEventAgeMin": 0
   },
@@ -135,7 +129,7 @@
   "verdict": null
  },
  "lastProgress": {
-  "at": "2026-11-13T22:47:43.718Z",
+  "at": "2026-11-14T14:16:15.327Z",
   "ok": true
  },
  "lastDigest": {
@@ -144,11 +138,11 @@
   "newN": 6
  },
  "lastKeepwarm": {
-  "at": "2026-11-14T14:02:57.433Z",
+  "at": "2026-11-14T14:12:57.431Z",
   "ok": true,
-  "ms": 19,
+  "ms": 17,
   "bootAt": "2026-11-14T14:00:04.496Z",
-  "gitSha": "ae13d4e",
+  "gitSha": "435aa44",
   "coldStreak": 0
  },
  "coldStreak": 0,
@@ -162,34 +156,6 @@
  "wsDownStreak": 0,
  "staleStreak": 0,
  "history": [
-  {
-   "id": "keepwarm",
-   "at": 1794655377415,
-   "status": "ok",
-   "durationMs": 19,
-   "detail": "HEARTBEAT OK 19ms boot=11:06:24Z sha=99ed544"
-  },
-  {
-   "id": "sweep",
-   "at": 1794655677423,
-   "status": "ok",
-   "durationMs": 112,
-   "detail": "AMBER: sentinel :3030 verdict AMBER"
-  },
-  {
-   "id": "keepwarm",
-   "at": 1794655677423,
-   "status": "ok",
-   "durationMs": 274,
-   "detail": "HEARTBEAT OK 274ms boot=11:06:24Z sha=3e5a1d0"
-  },
-  {
-   "id": "keepwarm",
-   "at": 1794655977424,
-   "status": "ok",
-   "durationMs": 36,
-   "detail": "HEARTBEAT OK 36ms boot=11:06:24Z sha=3e5a1d0"
-  },
   {
    "id": "keepwarm",
    "at": 1794656277415,
@@ -511,6 +477,34 @@
    "status": "ok",
    "durationMs": 19,
    "detail": "HEARTBEAT OK 19ms boot=14:00:04Z sha=ae13d4e"
+  },
+  {
+   "id": "sweep",
+   "at": 1794665277414,
+   "status": "ok",
+   "durationMs": 42,
+   "detail": "GREEN: all services up · sentinel not RED"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1794665277414,
+   "status": "ok",
+   "durationMs": 46,
+   "detail": "HEARTBEAT OK 46ms boot=14:00:04Z sha=435aa44"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1794665577414,
+   "status": "ok",
+   "durationMs": 17,
+   "detail": "HEARTBEAT OK 17ms boot=14:00:04Z sha=435aa44"
+  },
+  {
+   "id": "progress",
+   "at": 1794665771534,
+   "status": "ok",
+   "durationMs": 3795,
+   "detail": "sent 16 lines"
   }
  ],
  "watchRuns": [
