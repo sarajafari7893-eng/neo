@@ -2,20 +2,20 @@
  "ver": "supervisor-cron 1.7.0",
  "pid": 2255,
  "startedAt": "2026-11-16T15:22:09.622Z",
- "updatedAt": "2026-11-16T18:31:30.609Z",
+ "updatedAt": "2026-11-16T18:37:58.603Z",
  "jobs": {
   "sweep": {
-   "lastRunAt": 1794853677414,
-   "nextRunAt": 1794854277414,
+   "lastRunAt": 1794854277414,
+   "nextRunAt": 1794854877414,
    "lastStatus": "ok",
-   "lastDurationMs": 39,
+   "lastDurationMs": 1187,
    "lastError": null,
-   "runs": 1705,
+   "runs": 1706,
    "failures": 0
   },
   "progress": {
    "lastRunAt": 1794853888909,
-   "nextRunAt": 1794853888909,
+   "nextRunAt": 1794875488909,
    "lastStatus": "ok",
    "lastDurationMs": 1700,
    "lastError": null,
@@ -41,12 +41,12 @@
    "failures": 0
   },
   "backup": {
-   "lastRunAt": 1794843088910,
-   "nextRunAt": 1794853888910,
+   "lastRunAt": 1794853888911,
+   "nextRunAt": 1794864688911,
    "lastStatus": "ok",
-   "lastDurationMs": 25957,
+   "lastDurationMs": 45131,
    "lastError": null,
-   "runs": 93,
+   "runs": 94,
    "failures": 1
   },
   "digest": {
@@ -59,24 +59,24 @@
    "failures": 0
   },
   "keepwarm": {
-   "lastRunAt": 1794853677415,
-   "nextRunAt": 1794853977414,
-   "lastStatus": "error",
-   "lastDurationMs": 205,
-   "lastError": "HEARTBEAT COLD app:3000 201ms streak=1",
-   "runs": 3332,
+   "lastRunAt": 1794854277414,
+   "nextRunAt": 1794854277414,
+   "lastStatus": "ok",
+   "lastDurationMs": 1189,
+   "lastError": null,
+   "runs": 3334,
    "failures": 163
   }
  },
  "lastSweep": {
-  "at": "2026-11-16T18:27:57.453Z",
+  "at": "2026-11-16T18:37:58.601Z",
   "verdict": "AMBER",
   "reason": "sentinel :3030 verdict AMBER",
   "services": {
    "app": {
     "up": true,
     "status": 200,
-    "ms": 28
+    "ms": 1142
    },
    "liq": {
     "up": true,
@@ -101,7 +101,7 @@
    "sentinel": {
     "up": true,
     "status": 200,
-    "ms": 0
+    "ms": 1
    },
    "ws": {
     "up": true,
@@ -144,14 +144,14 @@
   "newN": 7
  },
  "lastKeepwarm": {
-  "at": "2026-11-16T18:27:57.619Z",
-  "ok": false,
-  "ms": 201,
-  "bootAt": null,
-  "gitSha": null,
-  "coldStreak": 1
+  "at": "2026-11-16T18:37:58.603Z",
+  "ok": true,
+  "ms": 1189,
+  "bootAt": "2026-11-16T18:33:14.364Z",
+  "gitSha": "cf973f7",
+  "coldStreak": 0
  },
- "coldStreak": 1,
+ "coldStreak": 0,
  "alertLedger": {
   "sentinel-red": 1794564477724,
   "review-llm-unavailable": 1794789180639,
@@ -162,34 +162,6 @@
  "wsDownStreak": 0,
  "staleStreak": 0,
  "history": [
-  {
-   "id": "keepwarm",
-   "at": 1794844377415,
-   "status": "ok",
-   "durationMs": 37,
-   "detail": "HEARTBEAT OK 37ms boot=15:46:16Z sha=8a55cc6"
-  },
-  {
-   "id": "keepwarm",
-   "at": 1794844677414,
-   "status": "ok",
-   "durationMs": 33,
-   "detail": "HEARTBEAT OK 33ms boot=15:46:16Z sha=8a55cc6"
-  },
-  {
-   "id": "sweep",
-   "at": 1794844677414,
-   "status": "ok",
-   "durationMs": 42,
-   "detail": "AMBER: sentinel :3030 verdict AMBER"
-  },
-  {
-   "id": "keepwarm",
-   "at": 1794844977414,
-   "status": "ok",
-   "durationMs": 19,
-   "detail": "HEARTBEAT OK 19ms boot=15:58:11Z sha=06cbaac"
-  },
   {
    "id": "keepwarm",
    "at": 1794845277414,
@@ -511,6 +483,34 @@
    "status": "ok",
    "durationMs": 1700,
    "detail": "sent 16 lines"
+  },
+  {
+   "id": "backup",
+   "at": 1794853888911,
+   "status": "ok",
+   "durationMs": 45131,
+   "detail": "snapshot ok in 45s: SNAPSHOT OK — nexus-snapshot-20261116-183128.zip (49M) · 12 snapshots retained (max 12) · wal:VACUUM-COPY-CONSISTENT+CHECKPOINTED · cal:OK · enc:ENCRYPTED · off-site: DISABLED(oper"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1794853977414,
+   "status": "ok",
+   "durationMs": 745,
+   "detail": "HEARTBEAT OK 745ms boot=18:27:59Z sha=cf973f7"
+  },
+  {
+   "id": "sweep",
+   "at": 1794854277414,
+   "status": "ok",
+   "durationMs": 1187,
+   "detail": "AMBER: sentinel :3030 verdict AMBER"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1794854277414,
+   "status": "ok",
+   "durationMs": 1189,
+   "detail": "HEARTBEAT OK 1189ms boot=18:33:14Z sha=cf973f7"
   }
  ],
  "watchRuns": [
