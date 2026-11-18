@@ -1,8 +1,8 @@
 {
  "schemaVersion": 1,
  "kind": "deep",
- "at": "2026-11-17T11:51:07.927Z",
- "tehran": "17/11/2026, 15:21:07",
+ "at": "2026-11-18T12:17:41.356Z",
+ "tehran": "18/11/2026, 15:47:41",
  "verdict": "AMBER",
  "anomalies": [
   {
@@ -17,74 +17,74 @@
    "label": "app :3000",
    "up": true,
    "status": 200,
-   "ms": 109
+   "ms": 40
   },
   {
    "key": "ws",
    "label": "price-ws :3003",
    "up": true,
    "status": 400,
-   "ms": 2
+   "ms": 6
   },
   {
    "key": "bridge",
    "label": "telegram-bridge :3005",
    "up": true,
    "status": 200,
-   "ms": 1
+   "ms": 2
   },
   {
    "key": "liq",
    "label": "liq :3010",
    "up": true,
    "status": 200,
-   "ms": 1
+   "ms": 2
   },
   {
    "key": "trade",
    "label": "trade :3011",
    "up": true,
    "status": 200,
-   "ms": 1
+   "ms": 2
   },
   {
    "key": "watchdog",
    "label": "p0-watchdog :3020",
    "up": true,
    "status": 200,
-   "ms": 1
+   "ms": 2
   }
  ],
  "mem": {
-  "availableMb": 2260
+  "availableMb": 706
  },
  "disk": {
-  "rootFreeGb": 3.69,
-  "tmpFreeGb": 3.69
+  "rootFreeGb": 3.07,
+  "tmpFreeGb": 3.07
  },
  "db": {
   "ok": true,
-  "signals": 4094,
-  "events": 80024,
-  "prices": 122018,
-  "assets": 30,
+  "signals": 4151,
+  "events": 80086,
+  "prices": 95419,
+  "assets": 27,
   "pumps": 2307,
-  "events1h": 932,
-  "lastEventAgeMs": 6892,
+  "events1h": 896,
+  "lastEventAgeMs": 18260,
   "stuckActive": 0,
   "orphanEvents": 0,
   "stuckPumpTracks": 0,
-  "dbBytes": 65683456,
-  "walBytes": 4120032
+  "dbBytes": 65949696,
+  "walBytes": 4144752
  },
  "backup": {
   "ok": true,
   "dir": "/tmp/my-project/backups",
   "encCount": 12,
   "zipCount": 12,
-  "newestEncMs": 1794907912116.933,
-  "newestAnyMs": 1794907912116.933,
-  "encAgeMs": 8355196.066894531
+  "newestEncMs": 1794994309635.7017,
+  "newestAnyMs": 1794994309635.7017,
+  "encAgeMs": 9951535.298339844
  },
  "watchdog": {
   "ok": true,
@@ -107,12 +107,12 @@
   },
   "nonOk": 1,
   "memLevel": "ok",
-  "memAvailableMb": 2243,
-  "paused": true
+  "memAvailableMb": 707,
+  "paused": false
  },
  "log": {
-  "windowLines": 225,
-  "errors": 8,
+  "windowLines": 458,
+  "errors": 9,
   "http500": 0,
   "oom": 0,
   "enospc": 0,
@@ -125,24 +125,24 @@
   "ok": true,
   "source": "live-api",
   "mode": "veto",
-  "generatedAt": "2026-11-17T11:51:07.386Z",
+  "generatedAt": "2026-11-18T12:17:41.185Z",
   "stats": {
-   "total": 13013,
-   "passSide": 7785,
-   "rejectSide": 5228,
-   "vetoCount": 9773,
-   "tradeCount": 3240,
-   "modelSharePct": 36.2,
+   "total": 13208,
+   "passSide": 7930,
+   "rejectSide": 5278,
+   "vetoCount": 9955,
+   "tradeCount": 3253,
+   "modelSharePct": 35.6,
    "modelGroundedPct": 100,
-   "avgConfidence": 65.3,
-   "gateAgreement": 3734,
+   "avgConfidence": 65.1,
+   "gateAgreement": 3779,
    "paperOpen": 12,
-   "paperSettled": 1501,
+   "paperSettled": 1506,
    "recent24h": {
-    "n": 193,
+    "n": 191,
     "modelSharePct": 0,
-    "lastModelAgeH": 139,
-    "lastVerdictAgeH": 0.1
+    "lastModelAgeH": 163.4,
+    "lastVerdictAgeH": 0.2
    }
   },
   "arms": [
@@ -153,7 +153,7 @@
     "pct": 100,
     "starved": false,
     "reachable": true,
-    "fed": 1746,
+    "fed": 1754,
     "lastFedAgeH": null
    },
    {
@@ -163,7 +163,7 @@
     "pct": 100,
     "starved": false,
     "reachable": true,
-    "fed": 6039,
+    "fed": 6176,
     "lastFedAgeH": null
    },
    {
@@ -173,7 +173,7 @@
     "pct": 100,
     "starved": false,
     "reachable": true,
-    "fed": 1496,
+    "fed": 1501,
     "lastFedAgeH": null
    },
    {
@@ -193,7 +193,7 @@
   "tSum": 120,
   "nSumReach": 107,
   "tSumReach": 120,
-  "fenceEntries24hFloor": 316
+  "fenceEntries24hFloor": 331
  },
  "rawcal": {
   "armed": true,
@@ -201,40 +201,35 @@
   "issuedTotal": 2668,
   "target": 3217,
   "heartbeatAgeH": 0,
-  "heartbeatAt": "2026-11-17T1150Z OPEN (protected) — v14.6 auto-abort live: winner-lane degraded capture suspended (AUTO-ABORT: FAPI-DEG-W cohor"
+  "heartbeatAt": "2026-11-18T1217Z OPEN (protected) — v14.6 auto-abort live: winner-lane degraded capture suspended (AUTO-ABORT: FAPI-DEG-W cohor"
  },
  "cards": {
   "ok": true,
-  "sentinelAgeSec": 7,
-  "ticks": 84,
+  "sentinelAgeSec": 4,
+  "ticks": 551,
   "refreshed1h": 5,
-  "failures1h": 19,
-  "staleHot": 5,
+  "failures1h": 2,
+  "staleHot": 3,
   "worst": [
    {
-    "symbol": "HAEDALUSDT",
-    "ageMin": 10,
+    "symbol": "SOPHUSDT",
+    "ageMin": 20,
     "heat": "warm"
    },
    {
-    "symbol": "INITUSDT",
-    "ageMin": 5,
+    "symbol": "MMTUSDT",
+    "ageMin": 1,
     "heat": "hot"
    },
    {
-    "symbol": "SOPHUSDT",
-    "ageMin": 4,
+    "symbol": "BREVUSDT",
+    "ageMin": 0,
     "heat": "hot"
    },
    {
     "symbol": "HUMAUSDT",
-    "ageMin": 1,
+    "ageMin": 0,
     "heat": "hot"
-   },
-   {
-    "symbol": "ICPUSDT",
-    "ageMin": 1,
-    "heat": "warm"
    }
   ]
  },
@@ -247,6 +242,6 @@
   "failStreak": 0,
   "baselineMark": 0
  },
- "uptimeSec": 3600,
+ "uptimeSec": 25200,
  "ver": "nexus-sentinel 1.3.2"
 }
