@@ -6,7 +6,7 @@
 // (weight budget + global ban awareness + single-flight). Telemetry lane —
 // sheddable under pressure; every caller is throw/null-tolerant already.
 
-import { gateFetch, fapiBanActivity } from "./fapi-gate"; // v13.3 — ch.7-ب: honest fapi-plane health for the surrogate demote
+import { gateFetch } from "./fapi-gate";
 import { liquidationPressure } from "./liquidations";
 import { bridgeOiHist, bridgeTape, bridgeKlines, spot5mMove, fapi5mMove, futTickerRow, type FlowSource } from "./flow-bridge";
 import { getCoreRevert } from "./core-revert"; // v13.0 CORE-REVERT — operator revert mandate
@@ -239,7 +239,7 @@ export async function fetchFlowMetrics(symbol: string): Promise<FlowMetrics | nu
 
       // v6.7: real USD taker flow + whale prints from the same aggTrades pull
       // (trades ≤1000 ≈ last minutes on liquid symbols; windows clipped by T).
-      // v12.2 TASK-52 (v14.0): tape ladder — fapi aggTrades → SPOT-MIRROR trades →
+      // v12.2 TASK-52: tape ladder — fapi aggTrades → BYBIT recent-trade →
       // SPOT-MIRROR trades (spot = last resort: spot flow ≠ perp flow).
       let agg = aggTrades.status === "fulfilled" ? aggTrades.value : [];
       if (agg.length === 0) {
@@ -578,7 +578,7 @@ export async function scoreFlow(symbol: string, direction: "LONG" | "SHORT", pri
   // ── v12.8 SURROGATE-FLOW CAP (AUDIT-20261023, operator mandate «اصلاح
   // پیشنهادی را کامل و مهندسی اجرا کن») ──
   // Forensics NX-3014 (BTWUSDT 03:13Z): the flow bundle read "CONFIRMS +10"
-  // while its source was the SPOT-MIRROR bridge (fapi banned) on a symbol whose
+  // while its source was the BYBIT bridge (fapi banned) on a symbol whose
   // BINANCE quote was null and whose cross-venue dislocation ran 90-105bps —
   // the price collapsed −4.5% within 48s of deploy (SL −61.2% in 103s). A
   // surrogate venue's tape is REAL tape, but it is the WRONG venue's tape for
@@ -588,29 +588,10 @@ export async function scoreFlow(symbol: string, direction: "LONG" | "SHORT", pri
   // surrogate bundle can never confirm NOR fully veto; it can still feed the
   // flowVetoScore ≤−4 soft veto (score −5/−6 survives the clamp) and rides as
   // honest telemetry. BINANCE-sourced bundles are untouched.
-  //
-  // ── v13.3 SURROGATE-FLOW DEMOTE (ch.7 item ①-ب, operator mandate trace
-  // 1a1a8ea4186c6571 «پیشنهادات باقی مانده مهندسی را کامل اجرا کن») ──
-  // NX-3247 anatomy (engineering report ch.4-1): with fapi starved, the flow
-  // verdict was sourced «SPOT-MIRROR bridge» and read CONFLICTS −9 against a
-  // REAL Binance-futures buy flow the operator could see — the engine decided
-  // with a surrogate's eyes at the exact top. While the fapi plane is starving
-  // (global ban window live OR ≥2 egress IPs banned — fapiBanActivity()), a
-  // non-BINANCE bundle is demoted to INFORMATIONAL-ONLY: score contribution 0,
-  // verdict NEUTRAL, reason carries the demote tag. This branch runs BEFORE the
-  // core-revert advisory check — CORE-REVERT restores the v12.7 core, it was
-  // never an authorization for surrogate verdict-making during famine. When
-  // fapi recovers, the historical v12.8 cap semantics resume unchanged.
   if (bridgeSrc && bridgeSrc !== "BINANCE") {
-    const famine = fapiBanActivity().active; // v13.3 ch.7-ب — honest fapi-plane health
-    if (famine) {
-      score = 0;
-      reasons.push(`SURROGATE-FLOW DEMOTE (ch.7-ب): fapi starved + source ${bridgeSrc} → flow bundle is INFORMATIONAL-ONLY this evaluation (score contribution 0, verdict NEUTRAL; NX-3247 CONFLICTS-9-from-mirror forensics — the engine does not decide on a surrogate's eyes while the real perp plane is starved)`);
-    } else {
-      const crSurrogate = await getCoreRevert();
-      if (!crSurrogate.enabled) score = Math.max(-6, Math.min(6, score));
-      reasons.push(`SURROGATE-FLOW CAP: source ${bridgeSrc} ≠ BINANCE${crSurrogate.enabled ? " · CORE-REVERT advisory: clamp lifted, surrogate tape rides as telemetry (v12.7 doctrine — the +12/+8/cap stack was the no-Binance drought engine)" : " — conviction clamped ±6, surrogate flow cannot CONFIRM a deploy (NX-3014 48s-collapse forensics, v12.8)"}`);
-    }
+    const crSurrogate = await getCoreRevert();
+    if (!crSurrogate.enabled) score = Math.max(-6, Math.min(6, score));
+    reasons.push(`SURROGATE-FLOW CAP: source ${bridgeSrc} ≠ BINANCE${crSurrogate.enabled ? " · CORE-REVERT advisory: clamp lifted, surrogate tape rides as telemetry (v12.7 doctrine — the +12/+8/cap stack was the no-Binance drought engine)" : " — conviction clamped ±6, surrogate flow cannot CONFIRM a deploy (NX-3014 48s-collapse forensics, v12.8)"}`);
   }
 
   const verdict = score >= 8 ? "CONFIRMS" : score <= -8 ? "CONFLICTS" : "NEUTRAL";

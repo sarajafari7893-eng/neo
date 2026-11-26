@@ -61,13 +61,6 @@ if [ -n "$ENV_MISSING" ]; then
   fi
 fi
 
-# ── (0e) BRIDGE-KEYS plane — RETIRED 2026-11-05 ────────────────────────────
-# TOOBIT EXEC BRIDGE decommissioned by operator mandate (trace 1a1a8ea4186c6571):
-# live trades flattened (XAU closed, 0 positions / 0 orders, exchange-verified),
-# module + watchdog + cron 491600 removed. Key-restore plane intentionally gone —
-# the remaining tbenv-*.enc escrow in /tmp/my-project/backups/env/ is dead weight;
-# the API key itself should be revoked in the Toobit panel.
-
 # ── (0c) NEXTCACHE plane — warm .next restore (P1 spike-cut) ───────────────
 NC_STATUS="cold"
 NC_OUT=$(bash "$ROOT/scripts/next-cache.sh" restore 2>/dev/null || true)

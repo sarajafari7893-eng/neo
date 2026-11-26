@@ -45,7 +45,7 @@
 // State lives on globalThis so Turbopack's dev module-graph duplication
 // (route graph vs engine graph) still shares ONE process-wide bucket.
 //
-// SPOT (api.binance.com) and mirror-plane hosts (v14.0 Binance-only) must
+// SPOT (api.binance.com) and other exchanges (OKX/Bybit/Hyperliquid) must
 // NOT pass through here — futures fapi host only.
 //
 // ── v12.0 EGRESS/IP MANAGER (Task 44-②, operator order «مدیریت egress/IP
@@ -72,25 +72,7 @@
 // NEXUS_FAPI_HOST in .env to a reachable futures-mirror and restart the app.
 // Default stays the canonical host. Downstream replaceability ladder is
 // already layered: fapi-gate (this) → SPOT-MIRROR aggTrade WS → spot REST
-// klines/price fallback → Binance-only liq lanes (v14.0).
-//
-// ── v14.2 BAN-AWARE RECOVERY PACER (operator order «توصیه‌ها را کامل و مهندسی
-// انجام بده», trace 1a1a15fb6bc0bd75 — audit rec #3 «throttle REST بن-آگاه»,
-// NX-3247 forensics fc143950) ───────────────────────────────────────────────
-// WHY: the old budget was FLAT — the instant a ban window expired the full
-// 1100 weight/min came back at once, every starved scanner refilled its
-// rotation in the same minute, and the pool re-saturated into a fresh 418
-// spiral (measured 10-19: 11:58Z→12:34Z→13:09Z pause spiral). The pacer:
-//   · RECOVERY RAMP — for 10min after a global ban window ends, the effective
-//     budget ramps 25%→100% linearly. Early recovery minutes carry the
-//     CRITICAL lane first (engine price feed / triggers), telemetry scanners
-//     stretch back out gradually instead of stampeding.
-//   · POOL-DISTRESS CAP — while ≥2 named egress IPs sit inside live ban
-//     windows (the 10-18 measurement: 3 named IPs banned simultaneously),
-//     the effective budget is capped at 50% — fewer lottery draws, less ban
-//     pressure, named-IP evidence stays intel-shaped.
-// CRITICAL lane keeps its negative retry; the floor (200/min) is the same
-// clamp configureFapiGate enforces, so the pacer can never zero the plane.
+// klines/price fallback → multi-venue liq (bybit/okx/bitget).
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 
 const FAPI_HOST = process.env.NEXUS_FAPI_HOST?.trim().replace(/\/+$/, "") || "https://fapi.binance.com";
@@ -127,11 +109,6 @@ const PROBE_COOLDOWN_MS = 120_000; // one early-probe attempt per 2min while a w
 const BAN_PERSIST_DIR = `${process.cwd()}/.data/fapi-gate`;
 const BAN_PERSIST_PATH = `${BAN_PERSIST_DIR}/bans.json`;
 const BAN_PERSIST_DEBOUNCE_MS = 30_000;
-// v14.2 ban-aware recovery pacer
-const PACER_RECOVERY_MS = 10 * 60_000; // post-ban ramp window (25%→100%)
-const PACER_RAMP_FLOOR = 0.25; // budget fraction at the first recovery minute
-const PACER_DISTRESS_CAP = 0.5; // budget cap while ≥2 named IPs are banned live
-const PACER_MIN_BUDGET = 200; // same clamp floor as configureFapiGate
 
 export type FapiGatePriority = "critical" | "telemetry";
 
@@ -159,8 +136,6 @@ export interface FapiGateStats {
   // v12.0 egress manager
   probesIssued: number; // rotation-aware early probes attempted during a ban window
   probeLifts: number; // windows lifted early because a clean draw succeeded
-  effectiveBudgetPer60s: number; // v14.2 pacer view of the budget (≤ budgetPer60s)
-  aimdFactor: number; // v14.3 rolling-cycle AIMD shed (1.0 healthy → 0.25 floor) — chapter-7 item ②
 }
 
 interface SpendEntry { at: number; w: number }
@@ -174,9 +149,6 @@ interface GateState {
   ipBans: Map<string, number>; // named egress IP → ban end (observability + pool evidence)
   recentBanEvents: Array<{ at: number; ip: string }>; // named-IP ban events (observability)
   allBanStreak: number; // consecutive gateFetch calls where EVERY attempt was banned
-  aimdFactor: number; // v14.3 AIMD shed — ×0.7 per named-IP ban, +0.05/min clean recovery
-  lastBanEventAt: number; // v14.3 — last named-IP ban event (recovery clock anchor)
-  lastAimdRecoverAt: number; // v14.3 — last additive-recovery application
   // v12.0 egress manager
   sampledIp: string | null;
   sampledAt: number;
@@ -192,7 +164,6 @@ interface GateState {
     retriesAfterBan: number;
     probesIssued: number;
     probeLifts: number;
-    effectiveBudgetPer60s: number;
   };
 }
 
@@ -209,14 +180,11 @@ const state: GateState =
     ipBans: new Map(),
     recentBanEvents: [],
     allBanStreak: 0,
-    aimdFactor: 1,
-    lastBanEventAt: 0,
-    lastAimdRecoverAt: 0,
     sampledIp: null,
     sampledAt: 0,
     lastBannedIp: null,
     lastProbeAt: 0,
-    stats: { attempted: 0, allowed: 0, droppedBudget: 0, droppedBan: 0, lastBanUntil: 0, singleFlightShared: 0, retriesAfterBan: 0, probesIssued: 0, probeLifts: 0, effectiveBudgetPer60s: DEFAULT_BUDGET },
+    stats: { attempted: 0, allowed: 0, droppedBudget: 0, droppedBan: 0, lastBanUntil: 0, singleFlightShared: 0, retriesAfterBan: 0, probesIssued: 0, probeLifts: 0 },
   });
 
 // ── v12.0 ban-ledger persistence (survive restarts without re-probing) ──
@@ -227,7 +195,7 @@ const state: GateState =
 // is MAJORITY-CLEAN, yet the v12.1 rule “one named-IP ban in the ledger ⇒
 // GLOBAL zero-network window until the worst ban end” blacked out the whole
 // fapi plane (flow BINANCE rung, venue consensus, OI/funding/tape/depth) for
-// up to 35min per event and pushed flow weighting ×0.5 for most of its life.
+// up to 35min per event and pushed flow to BYBIT ×0.5 for most of its life.
 //   · NAMED-IP entries («1.2.3.4»: until) = pool INTEL: recorded, retried
 //     around (≤2, 120ms — pool rotation), but they NO LONGER arm the global
 //     silence. Worst case stays bounded by the existing escalation ladder
@@ -364,38 +332,6 @@ export function fapiBanRemainingMs(): number {
   return Math.max(0, state.banUntil - Date.now());
 }
 
-// ── v14.2 BAN-ACTIVITY PROBE (operator order «توصیه‌ها را کامل و مهندسی انجام
-// بده» — audit rec #1 «تعلیق issue خودکار RAW-CAL هنگام بن فعال fapi») ─────
-// ONE honest answer to «is the fapi plane ban-degraded right now?», shared by
-// the RAW-CAL issuer and any future consumer. Active when EITHER the global
-// zero-network window is live (unknown-scope / pool-wide evidence) OR the pool
-// shows distress (≥2 named egress IPs banned simultaneously — the 10-18/10-19
-// storm shape). A SINGLE named-IP ban is NOT distress (v12.6 majority-clean
-// pool policy — flow keeps riding the ladder there).
-export interface FapiBanActivity {
-  active: boolean;
-  reason: string | null;
-  globalRemainingMs: number;
-  namedLiveIps: number;
-  effectiveBudgetPer60s: number;
-}
-
-export function fapiBanActivity(): FapiBanActivity {
-  const now = Date.now();
-  const globalRemainingMs = Math.max(0, state.banUntil - now);
-  const namedLiveIps = namedLiveBanCount(now);
-  if (globalRemainingMs > 0) {
-    return { active: true, reason: `fapi GLOBAL ban window live — ${Math.round(globalRemainingMs / 1000)}s left`, globalRemainingMs, namedLiveIps, effectiveBudgetPer60s: effectiveBudgetPer60s() };
-  }
-  if (namedLiveIps >= 2) {
-    return { active: true, reason: `fapi pool distress — ${namedLiveIps} named egress IPs inside live ban windows`, globalRemainingMs, namedLiveIps, effectiveBudgetPer60s: effectiveBudgetPer60s() };
-  }
-  return { active: false, reason: null, globalRemainingMs, namedLiveIps, effectiveBudgetPer60s: effectiveBudgetPer60s() };
-}
-
-// NOTE v14.3: fapiBanActivity()/fapiGateStats() close over the same pacer —
-// the AIMD factor is visible in fapiGateStats().aimdFactor for observability.
-
 export function fapiGateStats(): FapiGateStats {
   const now = Date.now();
   pruneWindow(now);
@@ -415,8 +351,6 @@ export function fapiGateStats(): FapiGateStats {
     retriesAfterBan: state.stats.retriesAfterBan,
     probesIssued: state.stats.probesIssued,
     probeLifts: state.stats.probeLifts,
-    effectiveBudgetPer60s: effectiveBudgetPer60s(),
-    aimdFactor: Number(state.aimdFactor.toFixed(3)),
   };
 }
 
@@ -476,71 +410,10 @@ function pruneWindow(now: number): void {
 }
 
 /** Reserve `weight` from the rolling window. Returns the spend entry (for refunds) or null. */
-// ── v14.2 BAN-AWARE RECOVERY PACER ────────────────────────────────────────
-// The ONLY budget the rolling window spends against. A flat budget after a
-// ban ended = instant re-saturation stampede (the 10-19 spiral); the pacer
-// gives the pool a 10min ramp and caps telemetry while the pool shows live
-// distress. Global-window minutes are NOT handled here (gateFetch drops
-// everything while the window is live) — the pacer shapes the BEFORE
-// (distress) and AFTER (recovery) of each ban episode.
-function namedLiveBanCount(now: number): number {
-  let n = 0;
-  for (const [, until] of state.ipBans) if (until > now) n++;
-  return n;
-}
-
-// ── v14.3 ROLLING-CYCLE AIMD PACER (chapter-7 item ② «backoff واقعی», operator
-// mandate trace 1a1a8ea4186c6571) — the missing third leg of the v14.2 pacer.
-// Measured failure mode (engineering report NX3247+LIVE): the 3-IP egress pool
-// rides a ROLLING ~20min ban cycle — bans expire, the full budget floods back
-// instantly (named-IP bans never armed the global window ⇒ no ramp), the pool
-// re-saturates in the same minute and re-bans. Fix: an AIMD shed factor that
-// DECREASES multiplicatively on every named-IP ban event (×0.7, floor 0.25) and
-// recovers ADDITIVELY during clean minutes (+0.05/min, cap 1.0). Sustained ban
-// churn ⇒ progressively quieter pool without any operator tuning; a genuinely
-// healthy pool heals back to full budget in ~15 clean minutes.
-const AIMD_DROP = 0.7;
-const AIMD_FLOOR = 0.25;
-const AIMD_RECOVER_PER_MIN = 0.05;
-
-function recoverAimd(now: number): void {
-  if (state.aimdFactor >= 1) { state.lastAimdRecoverAt = now; return; }
-  if (state.lastBanEventAt === 0) return;
-  const anchor = Math.max(state.lastAimdRecoverAt, state.lastBanEventAt);
-  const cleanMin = Math.floor((now - anchor) / 60_000);
-  if (cleanMin <= 0) return;
-  state.aimdFactor = Math.min(1, state.aimdFactor + cleanMin * AIMD_RECOVER_PER_MIN);
-  state.lastAimdRecoverAt = now;
-}
-
-function noteAimdBanEvent(now: number): void {
-  recoverAimd(now);
-  state.aimdFactor = Math.max(AIMD_FLOOR, state.aimdFactor * AIMD_DROP);
-  state.lastBanEventAt = now;
-  state.lastAimdRecoverAt = now;
-}
-
-export function effectiveBudgetPer60s(): number {
-  const now = Date.now();
-  let factor = 1;
-  recoverAimd(now); // v14.3 — additive clean-minute recovery before clamping
-  factor = Math.min(factor, state.aimdFactor);
-  // POOL DISTRESS — ≥2 named egress IPs inside live ban windows: cap telemetry.
-  if (namedLiveBanCount(now) >= 2) factor = Math.min(factor, PACER_DISTRESS_CAP);
-  // RECOVERY RAMP — 10min linear 25%→100% after the last global window ends.
-  if (state.banUntil > 0) {
-    const sinceBan = now - state.banUntil;
-    if (sinceBan >= 0 && sinceBan < PACER_RECOVERY_MS) {
-      factor = Math.min(factor, PACER_RAMP_FLOOR + (1 - PACER_RAMP_FLOOR) * (sinceBan / PACER_RECOVERY_MS));
-    }
-  }
-  return Math.max(PACER_MIN_BUDGET, Math.round(state.budgetPer60s * factor));
-}
-
 function takeWeight(weight: number): SpendEntry | null {
   const now = Date.now();
   pruneWindow(now);
-  if (state.windowSum + weight > effectiveBudgetPer60s()) return null;
+  if (state.windowSum + weight > state.budgetPer60s) return null;
   const entry: SpendEntry = { at: now, w: weight };
   state.spend.push(entry);
   state.windowSum += weight;
@@ -587,7 +460,6 @@ function noteBanBody(status: number, body: string): { ip: string; until: number 
     }
     state.recentBanEvents.push({ at: now, ip });
     if (state.recentBanEvents.length > 64) state.recentBanEvents.splice(0, state.recentBanEvents.length - 64);
-    noteAimdBanEvent(now); // v14.3 — every named-IP ban deepens the rolling-cycle shed
     return { ip, until };
   }
   const untilMatch = /banned until (\d+)/i.exec(body);

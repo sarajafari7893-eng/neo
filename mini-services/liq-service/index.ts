@@ -1,55 +1,36 @@
-// ── NEXUS liq-service (:3010) v3.1 — REAL forced-liquidation aggregation, BINANCE + BYBIT mirror ──
-// v3.1 (operator mandate trace 1a18eba43d494571 — «liq feed بدون دیتا است؛ آیا
-// می‌شود از دیتای TOOBIT استفاده کرد؟»): measured verdict on this egress —
-//   ① Binance forceOrder frames (ALL lanes: !forceOrder@arr AND per-symbol
-//      ring) are egress-muted since ~10-28: sockets open, subscribe ACK
-//      arrives, ZERO data frames (probe 2026-10-30: 45s × arr+btcusdt = 0
-//      frames while bookTicker/aggTrade flow). The 54-socket ring ran 3.6h
-//      with events=0 — statistically impossible on a healthy fstream pipe.
-//   ② TOOBIT has NO liquidation channel AT ALL (proof 2026-10-30: official
-//      format {event:"sub",topic,symbol,params} verified live on
-//      /quote/ws/v1 — trade streams flow, topic liquidation/forceOrder both
-//      "Invalid topic"; JKorf/Toobit.Net full official client implements
-//      trade/kline/ticker/orderbook only; REST demo has no market liq
-//      endpoint). Own-account forceOrders is private + useless market-wide.
-//   ③ BYBIT v5 allLiquidation WORKS from this egress (probe: 1273 frames/45s
-//      on BTCUSDT alone). Lane-③ = batched allLiquidation topics over the
-//      same 54-symbol list, venue-tagged "bybit" — transparent, never mixed
-//      into Binance counters, side semantics identical (Sell = long wrecked).
-// The v3.0 Binance lanes stay armed: if egress unmutes them, their counters
-// simply start moving again (they are the mandate trace 1a185042c872b4f9
-// original feed — semantics untouched).
-// v3.0 (operator mandate trace 1a185042c872b4f9 — «ردپای OKX/Bybit در کجا وجود
-// دارد و با بایننس جایگزین شود»): the v2 4-venue aggregation is rebuilt
-// Binance-ONLY. Two Binance lanes, one venue, zero invented data:
-//   ① market-wide !forceOrder@arr (original feed, semantics untouched)
-//   ② PER-SYMBOL <sym>@forceOrder ring over a curated ~54 top-perp list —
-//      the v14.0 engineering answer to the measured egress pathology
-//      (2026-09-27: !forceOrder@arr silent 2h+ while host delivers frames;
-//      2026-10-28: market-wide streams MUTED from this egress while per-symbol
-//      streams sustain — the v13.5 futures bookTicker ring proves it). Every
-//      ring socket is raw per-symbol (the format that WORKS here), feeds the
-//      same venue state, and reconnects with its own backoff.
-// Public JSON contract (consumed by src/lib/liquidations.ts — fields intact):
+// ── NEXUS liq-service (:3010) v2 — 4-venue REAL forced-liquidation aggregation ──
+// Venues (all key-less public WS, zero invented data):
+//   binance : wss://fstream.binance.com/ws/!forceOrder@arr   — all-market force orders (original feed, untouched semantics)
+//   bybit   : wss://stream.bybit.com/v5/public/linear        — allLiquidation.{SYM} over a curated ~50 top USDT perps
+//   okx     : wss://ws.okx.com:8443/ws/v5/public             — liquidation-orders SWAP = one sub covers ALL perpetuals
+//   bitget  : wss://ws.bitget.com/v2/ws/public               — liquidation-orders USDT-FUTURES (attempted; degrades honestly
+//                                                              to connected:false + health note if the exchange rejects it)
+// Public JSON contract (consumed by src/lib/liquidations.ts — fields intact, only additive keys added):
 //   GET /liquidations → { status:{connected,dataStalled,buffered,lastEventAt,uptimeSec,venues}, recent:[…], bySymbol:{…} }
 //   GET /health       → all original fields + venues
 // SIDE CONVENTION — mirrors the original Binance handler EXACTLY (ground truth, do not flip):
 //   side "SELL" = forced SELL order ⇒ a LONG position was wrecked  → longsUsd10m
 //   side "BUY"  = forced BUY  order ⇒ a SHORT position was wrecked → shortsUsd10m
+// Venue mappings (verified against official docs):
+//   bybit: S is the POSITION side — "Buy ⇒ a long position has been liquidated" ⇒ Buy→SELL, Sell→BUY
+//   okx:   posSide (long/short) preferred; fallback order side sell⇒closes long ⇒ sell→SELL, buy→BUY
+// OKX notional: sz is in CONTRACTS ⇒ sized with ctVal from public REST /public/instruments (refreshed 6h + lazy on miss);
+//   unknown contract size ⇒ usd 0 (event still counted, nothing fabricated). Coin-margined (-USD-SWAP) ctValCcy=USD.
 
 const PORT = 3010;
-const RING_CAP = 5000;
+const RING_CAP = 5000; // was 600 (Binance-only); 4 venues ⇒ ring sized so the 1h aggregate window stays meaningful
 const STALL_MS = 2 * 60_000;
-const WARMUP_MS = 2 * 60_000; // grace after boot before "never any event" counts as stalled
+const WARMUP_MS = 2 * 60_000; // grace after boot before "never any event from any venue" counts as stalled
 
-const BINANCE_ARR_WS = "wss://fstream.binance.com/ws/!forceOrder@arr";
+const BINANCE_WS = "wss://fstream.binance.com/ws/!forceOrder@arr";
 const HEARTBEAT_URL = "wss://fstream.binance.com/ws/btcusdt@aggTrade"; // busy stream: proves frames CAN reach this host
+const BYBIT_WS = "wss://stream.bybit.com/v5/public/linear";
+const OKX_WS = "wss://ws.okx.com:8443/ws/v5/public";
+const BITGET_WS = "wss://ws.bitget.com/v2/ws/public";
 
-// Curated USDT perps for the per-symbol forceOrder ring (~54 top-by-volume,
-// plain base-coin units only — 1000X symbols excluded so p×v stays true USD
-// notional; the !forceOrder@arr lane already covers the whole market when it
-// flows, the ring guarantees the majors during market-stream muting).
-const FORCE_SYMBOLS = [
+// Curated Bybit linear USDT perps (~50 top-by-volume, plain base-coin units only — 1000X symbols excluded so
+// p×v stays true USD notional; Binance !forceOrder already covers the whole market incl. PEPE/SHIB-class names).
+const BYBIT_SYMBOLS = [
   "BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT", "BNBUSDT", "ADAUSDT", "AVAXUSDT", "LINKUSDT", "TONUSDT",
   "TRXUSDT", "DOTUSDT", "LTCUSDT", "NEARUSDT", "APTUSDT", "ARBUSDT", "OPUSDT", "SUIUSDT", "FILUSDT", "INJUSDT",
   "ATOMUSDT", "POLUSDT", "SEIUSDT", "WIFUSDT", "BOMEUSDT", "JUPUSDT", "PYTHUSDT", "RENDERUSDT", "FETUSDT", "WLDUSDT",
@@ -68,10 +49,10 @@ interface LiqEvent {
   venue: string; // additive origin tag — client-side LiqEvent fields remain intact
 }
 
-type VenueName = "binance" | "bybit" | "okx";
+type VenueName = "binance" | "bybit" | "okx" | "bitget";
 interface VenueState {
   connected: boolean;
-  degraded: boolean;
+  degraded: boolean; // exchange refused the subscription (e.g. bitget channel unavailable)
   lastEventAt: number | null;
   events: number;
   reconnects: number;
@@ -81,11 +62,16 @@ interface VenueState {
   pingTimer: ReturnType<typeof setInterval> | null;
 }
 
-const VENUE_NAMES: VenueName[] = ["binance", "bybit", "okx"];
+const VENUE_NAMES: VenueName[] = ["binance", "bybit", "okx", "bitget"];
 function mkVenueState(): VenueState {
   return { connected: false, degraded: false, lastEventAt: null, events: 0, reconnects: 0, note: "", ws: null, backoffMs: 0, pingTimer: null };
 }
-const venues: Record<VenueName, VenueState> = { binance: mkVenueState(), bybit: mkVenueState(), okx: mkVenueState() };
+const venues: Record<VenueName, VenueState> = {
+  binance: mkVenueState(),
+  bybit: mkVenueState(),
+  okx: mkVenueState(),
+  bitget: mkVenueState(),
+};
 
 const ring: LiqEvent[] = [];
 let lastEventAt: number | null = null;
@@ -131,7 +117,7 @@ function anyConnected(): boolean {
   return VENUE_NAMES.some((v) => venues[v].connected);
 }
 function computeStalled(): boolean {
-  // dataStalled ⇔ ≥1 socket open BUT no lane has delivered an event in the stall window
+  // dataStalled ⇔ ≥1 socket open BUT no venue has delivered an event in the stall window
   // (or nothing ever arrived past the warmup grace). All-sockets-down is "down" (connected:false), not stalled.
   const now = Date.now();
   if (!anyConnected()) return false;
@@ -147,7 +133,7 @@ function venuesPayload() {
   return out;
 }
 
-// ── aggregation (identical math to v1/v2) ──────────────────────────────────
+// ── aggregation (identical math to v1; now fed by all venues) ──────────────
 function aggregates() {
   const now = Date.now();
   const bySymbol: Record<string, { usd10m: number; usd1h: number; longsUsd10m: number; shortsUsd10m: number; count: number; last: number }> = {};
@@ -168,65 +154,50 @@ function aggregates() {
   return bySymbol;
 }
 
-// shared frame parser — both Binance lanes deliver {e:"forceOrder", o:{…}}
-function handleForceOrderFrame(raw: string): void {
+// ── venue: BINANCE (original feed, unchanged semantics) ───────────────────
+function connectBinance() {
+  const st = venues.binance;
   try {
-    const msg = JSON.parse(raw) as { e?: string; o?: { s: string; S: string; ap: string; q: string; T: number } };
-    if (msg.e === "forceOrder" && msg.o) {
-      const o = msg.o;
-      const price = Number(o.ap);
-      const qty = Number(o.q);
-      if (!isFinite(price) || !isFinite(qty)) return;
-      pushEvent("binance", { symbol: o.s, side: o.S as "BUY" | "SELL", price, qty, usd: Number((price * qty).toFixed(2)), at: o.T || Date.now() });
-    }
-  } catch {
-    /* skip malformed frame */
+    const ws = new WebSocket(BINANCE_WS);
+    st.ws = ws;
+    ws.onopen = () => {
+      st.connected = true;
+      st.backoffMs = 0;
+      console.log("[liq-service] binance connected to !forceOrder@arr");
+    };
+    ws.onmessage = (ev) => {
+      try {
+        const msg = JSON.parse(String(ev.data)) as { e?: string; o?: { s: string; S: string; ap: string; q: string; T: number } };
+        if (msg.e === "forceOrder" && msg.o) {
+          const o = msg.o;
+          const price = Number(o.ap);
+          const qty = Number(o.q);
+          if (!isFinite(price) || !isFinite(qty)) return;
+          pushEvent("binance", { symbol: o.s, side: o.S as "BUY" | "SELL", price, qty, usd: Number((price * qty).toFixed(2)), at: o.T || Date.now() });
+        }
+      } catch {
+        /* skip malformed frame */
+      }
+    };
+    ws.onclose = () => reconnect("binance", connectBinance);
+    ws.onerror = () => {
+      st.connected = false;
+    };
+  } catch (err) {
+    st.connected = false;
+    console.error("[liq-service] binance connect error", err);
+    setTimeout(connectBinance, 5000);
   }
 }
 
-// ── lane ③: BYBIT allLiquidation mirror (v3.1 — the egress-proven venue) ─
-// Bybit v5 public/linear: batched {op:"subscribe",args:["allLiquidation.<SYM>",…]}
-// (10 topics/request), ping {op:"ping"} every 20s. Frame: {topic,type:"snapshot",
-// data:[{T,s,S,v,p}]} — S:"Sell" = forced sell = LONG wrecked (Binance "SELL"
-// semantics — the SIDE CONVENTION above holds verbatim across both venues).
-// v3.2.1 MUTED-LANE PARKING: lanes ② (54-socket binance forceOrder ring) and
-// ③ (bybit allLiquidation WS) are PROVEN egress-muted (sockets open, zero data
-// frames for hours — probes 2026-10-30). They stay CODED but PARKED by default:
-// 55 dead sockets cost RAM (this box OOM-kills under 4GB churn) and churn
-// reconnects. LIQ_MUTED_LANES=1 re-arms them (e.g. if egress policy changes).
-const MUTED_LANES = process.env.LIQ_MUTED_LANES === "1";
-const BYBIT_WS = "wss://stream.bybit.com/v5/public/linear";
-const BYBIT_BATCH = 10; // v5 arg limit per subscribe request
-const BYBIT_PING_MS = 20_000;
-
-function handleBybitFrame(raw: string): void {
-  try {
-    const msg = JSON.parse(raw) as { topic?: string; data?: unknown };
-    if (!msg.topic || !msg.topic.startsWith("allLiquidation") || !Array.isArray(msg.data)) return;
-    for (const row of msg.data as Array<{ T?: number; s?: string; S?: string; v?: string; p?: string }>) {
-      if (!row?.s || !row?.p || !row?.v) continue;
-      const price = Number(row.p);
-      const qty = Number(row.v);
-      if (!isFinite(price) || !isFinite(qty) || price <= 0 || qty <= 0) continue;
-      pushEvent("bybit", {
-        symbol: row.s,
-        side: row.S === "Buy" ? "BUY" : "SELL", // Sell = long wrecked (same convention as Binance)
-        price,
-        qty,
-        usd: Number((price * qty).toFixed(2)),
-        at: row.T || Date.now(),
-      });
-    }
-  } catch {
-    /* skip malformed frame */
-  }
+// ── venue: BYBIT v5 (allLiquidation, curated list) ─────────────────────────
+// Doc: S is the POSITION side — "Buy ⇒ a long position has been liquidated". Our convention: longs wrecked ⇒ "SELL".
+function bybitSide(S: string): "BUY" | "SELL" | null {
+  if (S === "Buy") return "SELL"; // long position liquidated
+  if (S === "Sell") return "BUY"; // short position liquidated
+  return null;
 }
-
-function connectBybit(): void {
-  if (!MUTED_LANES) {
-    console.log("[liq-service] lane-3 bybit allLiquidation PARKED (egress-muted; LIQ_MUTED_LANES=1 to arm)");
-    return;
-  }
+function connectBybit() {
   const st = venues.bybit;
   try {
     const ws = new WebSocket(BYBIT_WS);
@@ -234,261 +205,244 @@ function connectBybit(): void {
     ws.onopen = () => {
       st.connected = true;
       st.backoffMs = 0;
-      // batched subscribe over the curated list (same 54 top-perps as Binance ring)
-      for (let i = 0; i < FORCE_SYMBOLS.length; i += BYBIT_BATCH) {
-        const args = FORCE_SYMBOLS.slice(i, i + BYBIT_BATCH).map((s) => `allLiquidation.${s}`);
-        try { ws.send(JSON.stringify({ op: "subscribe", args })); } catch { /* onclose → reconnect */ }
+      // batched subscribes keep one bad symbol from poisoning the whole op
+      for (let i = 0; i < BYBIT_SYMBOLS.length; i += 10) {
+        try {
+          ws.send(JSON.stringify({ op: "subscribe", args: BYBIT_SYMBOLS.slice(i, i + 10).map((s) => `allLiquidation.${s}`) }));
+        } catch (err) {
+          console.error("[liq-service] bybit subscribe chunk error", err);
+        }
       }
-      console.log(`[liq-service] bybit lane-3 connected — allLiquidation ×${FORCE_SYMBOLS.length} symbols (${Math.ceil(FORCE_SYMBOLS.length / BYBIT_BATCH)} batches)`);
+      startPing("bybit", 20_000, JSON.stringify({ op: "ping" })); // Bybit v5 keepalive per docs
+      console.log(`[liq-service] bybit connected — ${BYBIT_SYMBOLS.length} allLiquidation topics`);
     };
-    ws.onmessage = (ev) => handleBybitFrame(String(ev.data));
+    ws.onmessage = (ev) => {
+      try {
+        const msg = JSON.parse(String(ev.data)) as {
+          op?: string;
+          success?: boolean;
+          ret_msg?: string;
+          topic?: string;
+          data?: Array<{ T?: number; s?: string; S?: string; v?: string; p?: string }>;
+        };
+        if (msg.op === "subscribe" && msg.success === false) {
+          st.note = `sub error: ${String(msg.ret_msg ?? "unknown").slice(0, 180)}`;
+          console.error(`[liq-service] bybit ${st.note}`);
+          return;
+        }
+        if (typeof msg.topic === "string" && msg.topic.startsWith("allLiquidation.") && Array.isArray(msg.data)) {
+          for (const d of msg.data) {
+            const side = bybitSide(d.S ?? "");
+            const price = Number(d.p);
+            const qty = Number(d.v); // executed size in base coin (linear USDT) ⇒ p×v = true USD notional
+            if (!side || !d.s || !isFinite(price) || !isFinite(qty) || price <= 0 || qty <= 0) continue;
+            pushEvent("bybit", { symbol: d.s, side, price, qty, usd: Number((price * qty).toFixed(2)), at: d.T || Date.now() });
+          }
+        }
+      } catch {
+        /* skip control/pong frames */
+      }
+    };
     ws.onclose = () => reconnect("bybit", connectBybit);
     ws.onerror = () => {
       st.connected = false;
     };
-    startPing("bybit", BYBIT_PING_MS, JSON.stringify({ op: "ping" }));
   } catch (err) {
     st.connected = false;
-    console.error("[liq-service] bybit lane-3 connect error", err);
+    console.error("[liq-service] bybit connect error", err);
     setTimeout(connectBybit, 5000);
   }
 }
 
-// ── lane ④: OKX REST liquidation-orders poller (v3.2 — the ONLY flowing market liq source) ──
-// Proof matrix 2026-10-30 (trace 1a18eba43d494571): Binance forceOrder WS muted,
-// Bybit allLiquidation WS muted (ACK'd, 0 frames/120s while publicTrade flowed
-// 408 frames) — this egress filters LIQUIDATION push streams specifically across
-// exchanges. OKX public REST GET /api/v5/public/liquidation-orders?instType=SWAP
-// &instId=<SYM>-USDT-SWAP&state=filled returns REAL filled liquidations (bkPx,
-// posSide, side, sz contracts, ts). Per-symbol cursor-free polling with ts-dedupe;
-// sz (contracts) × ctVal = base qty; × bkPx = USD notional.
-// SIDE MAP (same convention as Binance lanes): posSide=long & side=sell → forced
-// SELL → LONG wrecked → "SELL"; posSide=short & side=buy → "BUY".
-const OKX_REST = "https://www.okx.com/api/v5/public/liquidation-orders";
-const OKX_INSTS_URL = "https://www.okx.com/api/v5/public/instruments?instType=SWAP";
-const OKX_TICKERS_URL = "https://www.okx.com/api/v5/market/tickers?instType=SWAP";
-const OKX_POLL_MS = 12_000;
-const OKX_CONCURRENCY = 4;
-const OKX_WORKER_GAP_MS = 180; // per-worker inter-request gap — the endpoint is rate-limited (measured 50011/51014 on an unthrottled 53-burst); 4 workers × (fetch+180ms) ≈ ≤20req/2s
-const OKX_MAX_SYMBOLS = 120; // 54 curated majors + top-volume OKX USDT swaps — market-wide coverage shrinks false "quiet-tape" stalls (2min STALL_MS honest semantics)
-interface OkxTarget { instId: string; binanceSym: string; ctVal: number }
-let okxTargets: OkxTarget[] = [];
-const okxLastTs = new Map<string, number>(); // instId → newest ts already ingested
-const okxDedupe = new Map<string, number>(); // rowkey → seenAt (10min pruning)
-
-async function okxFetchJson(url: string, timeoutMs = 8000): Promise<any> {
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+// ── venue: OKX v5 (liquidation-orders SWAP — all instruments, one sub) ─────
+// Doc: details.side = ORDER side, details.posSide = position side; sz is in CONTRACTS for SWAP.
+const okxCtVal = new Map<string, { ctVal: number; ccy: string }>();
+let okxCtValFetchedAt = 0;
+async function loadOkxInstruments(reason: string) {
   try {
-    const res = await fetch(url, { signal: ctrl.signal, cache: "no-store", headers: { Connection: "close" } });
-    if (!res.ok) throw new Error(`okx http ${res.status}`);
-    return await res.json();
-  } finally {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 10_000);
+    const res = await fetch("https://www.okx.com/api/v5/public/instruments?instType=SWAP", { signal: ctrl.signal });
     clearTimeout(timer);
-  }
-}
-
-async function okxBuildTargets(): Promise<void> {
-  try {
-    const d = await okxFetchJson(OKX_INSTS_URL);
-    const byInst = new Map<string, any>();
-    for (const r of d?.data ?? []) byInst.set(r.instId, r);
-    okxTargets = [];
-    for (const sym of FORCE_SYMBOLS) {
-      const instId = `${sym.replace(/USDT$/, "")}-USDT-SWAP`; // BTCUSDT → BTC-USDT-SWAP
-      const inst = byInst.get(instId);
-      if (!inst) continue; // not on OKX — honest skip
-      okxTargets.push({ instId, binanceSym: sym, ctVal: Number(inst.ctVal) || 0 });
-    }
-    // v3.2.2 coverage extension — the 54 curated majors alone go quiet for
-    // minutes at a time (measured: OKX filled-liq window flat 22:19→22:35 with
-    // BTC newest 16min old) and trip the honest 2min STALL_MS. Extend with the
-    // top-volume OKX USDT swaps (same symbol style; skip existing) so the ring
-    // approximates the market-wide !forceOrder@arr fidelity the feed was born with.
-    try {
-      const tk = await okxFetchJson(OKX_TICKERS_URL);
-      const tickers: Array<{ instId?: string; volCcy24h?: string }> = Array.isArray(tk?.data) ? tk.data : [];
-      const have = new Set(okxTargets.map((t) => t.instId));
-      const ranked = tickers
-        .filter((t) => t.instId?.endsWith("-USDT-SWAP") && !have.has(t.instId) && Number(t.volCcy24h ?? 0) > 0)
-        .sort((a, b) => Number(b.volCcy24h ?? 0) - Number(a.volCcy24h ?? 0));
-      for (const t of ranked) {
-        if (okxTargets.length >= OKX_MAX_SYMBOLS) break;
-        const instId = t.instId!;
-        const inst = byInst.get(instId);
-        if (!inst) continue;
-        const base = instId.replace("-USDT-SWAP", "");
-        okxTargets.push({ instId, binanceSym: `${base}USDT`, ctVal: Number(inst.ctVal) || 0 });
+    const j = (await res.json()) as { code?: string; data?: Array<{ instId?: string; ctVal?: string; ctValCcy?: string }> };
+    if (j?.code === "0" && Array.isArray(j.data)) {
+      for (const inst of j.data) {
+        if (!inst.instId) continue;
+        okxCtVal.set(inst.instId, { ctVal: Number(inst.ctVal), ccy: String(inst.ctValCcy ?? "") });
       }
-    } catch {
-      /* tickers extension is best-effort — the 54 majors still stand */
+      okxCtValFetchedAt = Date.now();
+      console.log(`[liq-service] okx instrument specs loaded (${okxCtVal.size} SWAP) via ${reason}`);
     }
-    console.log(`[liq-service] okx lane-4 targets ready — ${okxTargets.length} symbols (${FORCE_SYMBOLS.length} curated + ${okxTargets.length - FORCE_SYMBOLS.length >= 0 ? okxTargets.length - FORCE_SYMBOLS.length : 0} volume-extended)`);
   } catch (err) {
-    console.error("[liq-service] okx instruments load failed — retry 30s", err);
-    setTimeout(okxBuildTargets, 30_000);
+    console.error("[liq-service] okx instruments fetch failed", err);
   }
 }
-
-function okxIngestPoll(instId: string, binanceSym: string, ctVal: number, rows: Array<Record<string, unknown>>): number {
-  let added = 0;
-  const last = okxLastTs.get(instId) ?? 0;
-  let newest = last;
-  for (const x of rows) {
-    const ts = Number(x.ts ?? x.time ?? 0);
-    if (!ts || ts <= last) continue; // cursor gate — only NEW rows
-    if (Date.now() - ts > 1_800_000) continue; // freshness gate — the endpoint seeds up to 100 recent fills per uly (can reach back hours); >30min-old fills are history, not live-feed rows (v3.2.1)
-    if (ts > newest) newest = ts;
-    const side = x.posSide === "long" ? "SELL" : "BUY"; // long+sell wreck = forced SELL (Binance semantics)
-    const sz = Number(x.sz ?? 0);
-    const bkPx = Number(x.bkPx ?? 0);
-    if (!(sz > 0) || !(bkPx > 0) || !ctVal) continue;
-    const key = `${instId}|${ts}|${side}|${sz}`;
-    if (okxDedupe.has(key)) continue;
-    okxDedupe.set(key, Date.now());
-    pushEvent("okx", {
-      symbol: binanceSym,
-      side: side as "BUY" | "SELL",
-      price: bkPx,
-      qty: Number((sz * ctVal).toFixed(6)),
-      usd: Number((sz * ctVal * bkPx).toFixed(2)),
-      at: ts,
-    });
-    added++;
-  }
-  if (newest > last) okxLastTs.set(instId, newest);
-  if (instId === "BTC-USDT-SWAP" && Date.now() - lastOkxDbgAt > 60_000) {
-    lastOkxDbgAt = Date.now();
-    const fresh = rows.filter((x) => Number(x.ts ?? 0) > last).length;
-    console.log(`[okx-dbg] BTC rows=${rows.length} fresh(>cursor)=${fresh} cursor=${new Date(last).toISOString()} newestRow=${rows.length ? new Date(Number(rows[0]?.ts ?? 0)).toISOString() : "-"}`);
-  }
-  return added;
+function okxCtValMiss() {
+  if (Date.now() - okxCtValFetchedAt > 60_000) void loadOkxInstruments("lazy-miss");
 }
-let lastOkxDbgAt = 0;
-
-async function okxPollOnce(target: OkxTarget): Promise<boolean> {
+// coin-margined (-USD-SWAP): ctValCcy = USD ⇒ notional = sz×ctVal ; linear (USDT/USDC): notional = sz×ctVal×px
+function okxNotional(instId: string, sz: number, px: number): number {
+  const spec = okxCtVal.get(instId);
+  if (!spec || !isFinite(spec.ctVal) || spec.ctVal <= 0) return 0;
+  return spec.ccy === "USD" ? sz * spec.ctVal : sz * spec.ctVal * px;
+}
+function okxSymbol(instId: string): string {
+  const m = instId.match(/^([A-Z0-9]+)-(USDT|USDC|USD)-SWAP$/);
+  return m ? m[1] + m[2] : instId.replaceAll("-", ""); // BTC-USDT-SWAP → BTCUSDT (Binance-style)
+}
+function okxSide(posSide?: string, side?: string): "BUY" | "SELL" | null {
+  if (posSide === "long") return "SELL"; // long position wrecked
+  if (posSide === "short") return "BUY";
+  if (side === "sell") return "SELL"; // order-side fallback: a sell order closes a long
+  if (side === "buy") return "BUY";
+  return null;
+}
+function connectOkx() {
+  const st = venues.okx;
   try {
-    // NOTE: this endpoint accepts uly/instFamily only for SWAP (instId → code 50015 param error)
-    const uly = target.instId.replace("-SWAP", ""); // BTC-USDT-SWAP → BTC-USDT
-    const d = await okxFetchJson(`${OKX_REST}?instType=SWAP&uly=${uly}&state=filled`);
-    if (d?.code !== "0") return false;
-    const groups = Array.isArray(d.data) ? d.data : [];
-    const rows = groups.flatMap((g: any) => (Array.isArray(g?.details) ? g.details : []));
-    okxIngestPoll(target.instId, target.binanceSym, target.ctVal, rows);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-let okxCycleInFlight = false;
-async function okxPollCycle(): Promise<void> {
-  if (okxTargets.length === 0) return;
-  if (okxCycleInFlight) return; // overlap guard — a 120-target cycle can outlast the 12s tick; skip rather than race the shared idx cursor (v3.2.2)
-  okxCycleInFlight = true;
-  try {
-    const st = venues.okx;
-    // bounded-concurrency worker pool
-    let idx = 0;
-    let ok = 0;
-    async function worker(): Promise<void> {
-      while (idx < okxTargets.length) {
-        const t = okxTargets[idx++];
-        if (await okxPollOnce(t)) ok++;
-        if (OKX_WORKER_GAP_MS > 0) await new Promise((r) => setTimeout(r, OKX_WORKER_GAP_MS)); // rate-limit pacing (v3.2.2)
-      }
-    }
-    await Promise.all(Array.from({ length: Math.min(OKX_CONCURRENCY, okxTargets.length) }, worker));
-    if (ok > 0) {
-      st.connected = true;
-      st.backoffMs = 0;
-    } else {
-      st.connected = false;
-      st.reconnects++;
-    }
-    // prune dedupe window (10min)
-    const cut = Date.now() - 600_000;
-    if (okxDedupe.size > 8000) for (const [k, t] of okxDedupe) if (t < cut) okxDedupe.delete(k);
-  } finally {
-    okxCycleInFlight = false;
-  }
-}
-
-function startOkxPoller(): void {
-  void okxBuildTargets().then(() => {
-    if (okxTargets.length === 0) return;
-    setInterval(() => void okxPollCycle(), OKX_POLL_MS);
-    void okxPollCycle();
-    console.log(`[liq-service] okx lane-4 poller armed — every ${OKX_POLL_MS / 1000}s × ${okxTargets.length} instIds (REST, egress-proven)`);
-  });
-}
-
-// ── lane ①: market-wide !forceOrder@arr (original feed, unchanged) ─────────
-function connectBinance() {
-  const st = venues.binance;
-  try {
-    const ws = new WebSocket(BINANCE_ARR_WS);
+    const ws = new WebSocket(OKX_WS);
     st.ws = ws;
     ws.onopen = () => {
-      st.connected = true;
       st.backoffMs = 0;
-      console.log("[liq-service] binance lane-1 connected to !forceOrder@arr");
+      ws.send(JSON.stringify({ op: "subscribe", args: [{ channel: "liquidation-orders", instType: "SWAP" }] }));
+      startPing("okx", 25_000, "ping"); // OKX drops silent conns <30s — text "ping" per docs
+      console.log("[liq-service] okx connected — liquidation-orders SWAP subscribe sent");
     };
-    ws.onmessage = (ev) => handleForceOrderFrame(String(ev.data));
-    ws.onclose = () => reconnect("binance", connectBinance);
+    ws.onmessage = (ev) => {
+      const raw = String(ev.data);
+      if (raw === "pong") return;
+      try {
+        const msg = JSON.parse(raw) as {
+          event?: string;
+          code?: string;
+          msg?: string;
+          arg?: { channel?: string };
+          data?: Array<{ instId?: string; details?: Array<{ instId?: string; side?: string; posSide?: string; bkPx?: string; sz?: string; ts?: string }> }>;
+        };
+        if (msg.event === "error") {
+          st.degraded = true;
+          st.connected = false;
+          st.note = `subscribe rejected: ${msg.code ?? "?"} ${msg.msg ?? ""}`.trim().slice(0, 180);
+          console.error(`[liq-service] okx ${st.note}`);
+          return;
+        }
+        if (msg.event === "subscribe") {
+          st.connected = true;
+          st.degraded = false;
+          st.note = "";
+          console.log("[liq-service] okx liquidation-orders SWAP subscribed");
+          return;
+        }
+        if (msg.arg?.channel === "liquidation-orders" && Array.isArray(msg.data)) {
+          for (const d of msg.data) {
+            for (const x of d.details ?? []) {
+              const instId = x.instId ?? d.instId ?? "";
+              if (!instId) continue;
+              const side = okxSide(x.posSide, x.side);
+              const price = Number(x.bkPx);
+              const sz = Number(x.sz);
+              if (!side || !isFinite(price) || !isFinite(sz) || price <= 0 || sz <= 0) continue;
+              const spec = okxCtVal.get(instId);
+              if (!spec) okxCtValMiss(); // self-heal sizing map, event still recorded below with usd 0
+              const usdRaw = spec ? okxNotional(instId, sz, price) : 0;
+              // qty reported in base coin so price×qty ≈ usd stays internally consistent
+              const qty = spec ? (spec.ccy === "USD" ? Number(((sz * spec.ctVal) / price).toFixed(6)) : Number((sz * spec.ctVal).toFixed(6))) : sz;
+              if (!isFinite(qty) || qty <= 0) continue;
+              pushEvent("okx", {
+                symbol: okxSymbol(instId),
+                side,
+                price,
+                qty,
+                usd: Number(usdRaw.toFixed(2)),
+                at: Number(x.ts) || Date.now(),
+              });
+            }
+          }
+        }
+      } catch {
+        /* skip malformed frame */
+      }
+    };
+    ws.onclose = () => reconnect("okx", connectOkx);
     ws.onerror = () => {
       st.connected = false;
     };
   } catch (err) {
     st.connected = false;
-    console.error("[liq-service] binance lane-1 connect error", err);
-    setTimeout(connectBinance, 5000);
+    console.error("[liq-service] okx connect error", err);
+    setTimeout(connectOkx, 5000);
   }
 }
 
-// ── lane ②: per-symbol forceOrder ring (v14.0 — the egress-proven format) ──
-// One raw socket per symbol (the bookTicker-ring pattern proven live from this
-// egress). All sockets feed venues.binance; each keeps an independent backoff
-// so one dead stream cannot churn the rest.
-interface RingSock { sym: string; ws: WebSocket | null; backoffMs: number; reconnects: number }
-const forceRing = new Map<string, RingSock>();
-let ringLogged = 0;
-
-function connectForceSymbol(rs: RingSock): void {
+// ── venue: BITGET v2 (attempted; degrades honestly if channel rejected) ────
+let bitgetLoggedFirstFrame = false;
+function connectBitget() {
+  const st = venues.bitget;
   try {
-    const ws = new WebSocket(`wss://fstream.binance.com/ws/${rs.sym.toLowerCase()}@forceOrder`);
-    rs.ws = ws;
+    const ws = new WebSocket(BITGET_WS);
+    st.ws = ws;
     ws.onopen = () => {
-      rs.backoffMs = 0;
-      venues.binance.connected = true;
-      if (ringLogged < 3) {
-        ringLogged++;
-        console.log(`[liq-service] binance lane-2 ring open (${rs.sym.toLowerCase()}@forceOrder) — ${ringLogged}/3 logged`);
+      st.backoffMs = 0;
+      // channel availability is only known once the exchange ACKs — do not claim connected yet
+      ws.send(JSON.stringify({ op: "subscribe", args: [{ instType: "USDT-FUTURES", channel: "liquidation-orders" }] }));
+      startPing("bitget", 25_000, "ping"); // Bitget keepalive: text "ping" per docs
+      console.log("[liq-service] bitget ws open — liquidation-orders USDT-FUTURES subscribe sent");
+    };
+    ws.onmessage = (ev) => {
+      const raw = String(ev.data);
+      if (raw === "pong") return;
+      try {
+        const msg = JSON.parse(raw) as {
+          event?: string;
+          code?: string;
+          msg?: string;
+          arg?: { channel?: string };
+          data?: Array<Record<string, unknown>>;
+        };
+        if (msg.event === "error") {
+          st.connected = false;
+          st.degraded = true;
+          st.note = `channel rejected: ${msg.code ?? "?"} ${msg.msg ?? ""}`.trim().slice(0, 180);
+          console.error(`[liq-service] bitget DEGRADED — ${st.note}`);
+          return;
+        }
+        if (msg.event === "subscribe") {
+          st.connected = true;
+          st.degraded = false;
+          st.note = "";
+          console.log("[liq-service] bitget liquidation-orders subscribed");
+          return;
+        }
+        if (msg.arg?.channel === "liquidation-orders" && Array.isArray(msg.data)) {
+          if (!bitgetLoggedFirstFrame) {
+            bitgetLoggedFirstFrame = true;
+            console.log("[liq-service] bitget first liq frame:", raw.slice(0, 500));
+          }
+          for (const d of msg.data) {
+            const symbol = String(d.instId ?? d.symbol ?? "").toUpperCase();
+            if (!symbol) continue;
+            const posSide = typeof d.posSide === "string" ? d.posSide : typeof d.holdSide === "string" ? (d.holdSide as string) : undefined;
+            const side =
+              posSide === "long" ? "SELL" : posSide === "short" ? "BUY" : d.side === "sell" ? "SELL" : d.side === "buy" ? "BUY" : null;
+            const price = Number(d.bkPx ?? d.price ?? d.px ?? 0);
+            const qty = Number(d.sz ?? d.size ?? d.baseVolume ?? 0);
+            if (!side || !isFinite(price) || !isFinite(qty) || price <= 0 || qty <= 0) continue;
+            pushEvent("bitget", { symbol, side, price, qty, usd: Number((price * qty).toFixed(2)), at: Number(d.ts) || Date.now() });
+          }
+        }
+      } catch {
+        /* skip malformed frame */
       }
     };
-    ws.onmessage = (ev) => handleForceOrderFrame(String(ev.data));
-    ws.onclose = () => {
-      rs.backoffMs = Math.min((rs.backoffMs || 2500) * 2, 60_000);
-      rs.reconnects++;
-      venues.binance.reconnects++;
-      setTimeout(() => connectForceSymbol(rs), rs.backoffMs);
+    ws.onclose = () => reconnect("bitget", connectBitget);
+    ws.onerror = () => {
+      st.connected = false;
     };
-    ws.onerror = () => {};
-  } catch {
-    setTimeout(() => connectForceSymbol(rs), 5000);
+  } catch (err) {
+    st.connected = false;
+    console.error("[liq-service] bitget connect error", err);
+    setTimeout(connectBitget, 5000);
   }
-}
-function connectForceRing(): void {
-  if (!MUTED_LANES) {
-    console.log("[liq-service] lane-2 forceOrder ring PARKED (egress-muted; LIQ_MUTED_LANES=1 to arm)");
-    return;
-  }
-  for (const sym of FORCE_SYMBOLS) {
-    const rs: RingSock = { sym, ws: null, backoffMs: 0, reconnects: 0 };
-    forceRing.set(sym, rs);
-    connectForceSymbol(rs);
-  }
-  console.log(`[liq-service] binance lane-2 forceOrder ring spawning ${FORCE_SYMBOLS.length} per-symbol sockets`);
 }
 
 // ── heartbeat watchdog (unchanged v1 pattern: busy Binance aggTrade stream) ─
@@ -506,19 +460,23 @@ function connectHeartbeat() {
 }
 
 // ── boot ────────────────────────────────────────────────────────────────────
+void loadOkxInstruments("boot");
+setInterval(() => void loadOkxInstruments("6h-refresh"), 6 * 3_600_000);
 connectBinance();
-connectForceRing();
+connectBybit();
+connectOkx();
+connectBitget();
 connectHeartbeat();
-connectBybit(); // v3.1 — lane-3 BYBIT allLiquidation mirror (armed; egress-muted today)
-startOkxPoller(); // v3.2 — lane-④ OKX REST liquidation-orders poller (the ONLY flowing market liq source)
 
-// ── venue-liveness supervisor (v2.1 → v3.0) ────────────────────────────────
-// A socket can sit "connected" while delivering NOTHING for hours — the
-// fstream half-open pathology (same reason trade-service's futures aggTrade
-// WS is suppressed and SPOT-MIRROR exists). Rule: only force a reconnect when
-// the HOST is provably alive (heartbeat btcusdt@aggTrade fresh <10min) but
-// the lane itself has been silent >60min. The lane-2 ring self-heals per
-// socket; this supervisor covers lane-1 (the market-wide arr socket).
+// ── venue-liveness supervisor (v2.1, Task 41, operator bug report) ──────────
+// A venue socket can sit "connected" while delivering NOTHING for hours —
+// observed 2026-09-27: binance !forceOrder@arr silent 2h+ (events=0) while
+// bybit fired 138 and okx 463 — the fstream half-open pathology (same reason
+// trade-service's futures aggTrade WS is suppressed and SPOT-MIRROR exists).
+// Rule: only force a reconnect when the HOST is provably alive (heartbeat
+// btcusdt@aggTrade fresh <10min) but the venue itself has been silent >60min.
+// That isolates venue-specific dead streams from host-level outages and caps
+// churn at ≤1 reconnect/hour/venue. Counters stay honest (reconnects++).
 const LIVENESS_TICK_MS = 5 * 60_000;
 const LIVENESS_SILENT_MS = 60 * 60_000;
 const LIVENESS_HB_FRESH_MS = 10 * 60_000;
@@ -526,15 +484,12 @@ setInterval(() => {
   const now = Date.now();
   const hbFresh = lastHeartbeatFrame && now - lastHeartbeatFrame < LIVENESS_HB_FRESH_MS;
   if (!hbFresh) return; // host-level problem — venue churn would be noise
-  // v3.1 — lane-1 arr + lane-3 bybit supervisor (same rule: a socket can sit
-  // "connected" delivering nothing; pongs keep it alive without data, so
-  // silence while the host is provably fresh = force reconnect)
-  for (const v of ["binance", "bybit"] as VenueName[]) {
+  for (const v of ["binance", "bybit", "okx", "bitget"] as VenueName[]) {
     const st = venues[v];
     if (!st.connected || !st.ws) continue;
     const silentFor = st.lastEventAt ? now - st.lastEventAt : now - startedAt;
     if (silentFor > LIVENESS_SILENT_MS) {
-      console.log(`[liq-service] liveness: ${v} lane silent ${Math.round(silentFor / 60000)}min while host delivers frames — forcing reconnect`);
+      console.log(`[liq-service] liveness: ${v} silent ${Math.round(silentFor / 60000)}min while host delivers frames — forcing reconnect`);
       try { st.ws.close(); } catch { /* onclose → reconnect */ }
     }
   }
@@ -555,7 +510,7 @@ const server = Bun.serve({
         lastEventAt,
         uptimeSec: Math.round((Date.now() - startedAt) / 1000),
         note: dataStalled
-          ? "no liquidation data from ANY lane within the stall window — Binance/Bybit liq push streams are egress-muted (sockets open, zero frames) and the OKX REST poller is failing; no invented data"
+          ? "no liquidation frames from ANY venue within the stall window — sockets may be open but data frames are not reaching this host; no invented data"
           : "ok",
         venues: venuesPayload(),
       });
@@ -579,4 +534,4 @@ const server = Bun.serve({
   },
 });
 
-console.log(`[liq-service] v3.2.1 listening on :${server.port} (BINANCE arr [1 socket] + OKX REST poller x53 + lanes②③ ${MUTED_LANES ? "ARMED" : "PARKED"})`);
+console.log(`[liq-service] v2 listening on :${server.port} (venues: binance+bybit+okx+bitget)`);

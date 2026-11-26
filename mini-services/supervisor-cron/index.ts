@@ -50,7 +50,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSy
 import { Database } from "bun:sqlite";
 import ZAI from "z-ai-web-dev-sdk";
 
-const VER = "supervisor-cron 1.7.0"; // v1.7.0 mission-2026-11-02: PROMOTE-gate line leads with gating legs + ETA basis; dual-rate win-rate (TP-proven + pnl-positive) — honesty upgrade
+const VER = "supervisor-cron 1.6.0"; // v1.6.0 trace-1a15f7d945d27ead: toobit exec-bridge :3021 joins the senior sweep — health probe + /doctrine violation feed (AMBER paper / crit live)
 const ROOT = "/home/z/my-project";
 const DIR = `${ROOT}/.data/supervisor-cron`;
 const STATE = `${DIR}/state.json`;
@@ -272,11 +272,7 @@ function eventFreshness(): { ageMin: number | null; lastAt: string | null; err?:
   try {
     const db = new Database(`${ROOT}/db/custom.db`, { readonly: true });
     db.exec("PRAGMA busy_timeout=2500");
-    // v1.x type-safe fix (operator mandate 2026-11-02): createdAt is mixed-type in SQLite
-    // (80k epoch-numeric rows + 1 legacy ISO-text row) — bare MAX() returns the ISO string
-    // lexicographically → Number() → NaN → false "no-rows / UNREADABLE" P0 alarms.
-    // CAST(AS REAL) compares numerically: ISO text casts to 2026.0 (harmless), epochs compare true.
-    const row = db.query("SELECT MAX(CAST(createdAt AS REAL)) mx, COUNT(*) n FROM SignalEvent").get() as { mx: number | string | null; n: number } | null;
+    const row = db.query("SELECT MAX(createdAt) mx, COUNT(*) n FROM SignalEvent").get() as { mx: number | string | null; n: number } | null;
     db.close();
     const mx = row?.mx != null ? Number(row.mx) : null;
     if (!mx || !Number.isFinite(mx)) return { ageMin: null, lastAt: null, err: "no-rows" };
@@ -306,9 +302,10 @@ async function jobSweep(): Promise<{ verdict: string; reason: string; anomalies:
   // (ws down, feed frozen ~20h) never raised an alert because :3003 was never probed.
   probes.push(await probe("ws :3003", "http://127.0.0.1:3003/", (s) => s === 400 || s === 200)); // socket.io answers 400 on plain GET = ALIVE
   probes.push(await probe("bridge :3005", "http://127.0.0.1:3005/health", (s) => s === 200));
-  // v1.3.0 DOCTRINE SUPERVISOR: RETIRED 2026-11-05 — toobit exec-bridge :3021
-  // decommissioned by operator mandate (trace 1a1a8ea4186c6571); the tbt probe
-  // + doctrine violation feed were removed with the module.
+  // v1.3.0 DOCTRINE SUPERVISOR (trace 1a15f7d945d27ead): toobit exec-bridge :3021
+  // joins the senior sweep — health probe + /doctrine violation feed below.
+  const tbtProbe = await probe("tbt :3021", "http://127.0.0.1:3021/health", (s) => s === 200);
+  probes.push(tbtProbe);
 
   // sentinel verdict field
   let verdict = "UNKNOWN";
@@ -331,6 +328,29 @@ async function jobSweep(): Promise<{ verdict: string; reason: string; anomalies:
   }
   if (verdict === "RED") anomalies.push({ class: "sentinel-red", sev: "crit", msg: `sentinel :3030 verdict RED` });
   else if (verdict === "AMBER") anomalies.push({ class: "sentinel-amber", sev: "warn", msg: `sentinel :3030 verdict AMBER` });
+
+  // ── v1.3.0: TOOBIT EXEC-BRIDGE doctrine feed (پیگیری و دکترین) ─────────
+  // Only consulted when the bridge is up (svc-down already covers the other
+  // case). Violations are AMBER in PAPER, crit in LIVE (real money at risk).
+  if (tbtProbe.up) {
+    const tbtDoc = await fetchJson("http://127.0.0.1:3021/doctrine", 6_000);
+    if (!tbtDoc.ok || !tbtDoc.data || typeof tbtDoc.data !== "object") {
+      anomalies.push({ class: "tbt-doctrine-unreachable", sev: "warn", msg: "toobit-bridge :3021 /doctrine unreachable while health is up — doctrine supervisor degraded" });
+      log("warn", "tbt-doctrine-unreachable", { err: tbtDoc.err });
+    } else {
+      const dd = tbtDoc.data as { mode?: string; doctrine?: { violationsN?: number; lastViolation?: { kind?: string; detail?: string } | null; skipBy?: Record<string, number> } | null };
+      const vn = Number(dd.doctrine?.violationsN ?? 0);
+      if (vn > 0) {
+        const last = dd.doctrine?.lastViolation;
+        anomalies.push({
+          class: "tbt-doctrine-violation",
+          sev: dd.mode === "LIVE" ? "crit" : "warn",
+          msg: `toobit-bridge doctrine: ${vn} violation(s) — last=${last?.kind ?? "?"}: ${String(last?.detail ?? "").slice(0, 140)}`,
+        });
+        log("warn", "tbt-doctrine-violations", { n: vn, last: last?.kind });
+      }
+    }
+  }
 
   // ── RECOVERY-0929: data freshness + streak escalation + heal nudge ─────────
   const wsProbe = probes.find((p) => p.key === "ws");
@@ -442,16 +462,7 @@ async function jobProgress(): Promise<{ ok: boolean; detail: string }> {
     const balance = Number(acc.balance ?? 0);
     const pnl24 = Number(stats.pnl24hUsd ?? 0);
     const estPct24 = balance > 0 ? Math.round((pnl24 / balance) * 1000) / 10 : null;
-    lines.push(`▸ <b>وین‌ریت</b> — کل (TP-proven): <code>${Number(stats.winRate ?? 0)}%</code> (n=${Number(stats.totalSignals ?? 0)})`);
-    // v11.7 dual-rate honesty (mission 2026-11-02): the TP-proven rate collapsed to
-    // ~27% in a BE-trail-heavy week while the pnl-positive rate held ~65% — 18/32
-    // SL rows closed POSITIVE (mid-ladder breakeven trails, reachedTp=0 by design,
-    // engine v6.5). Reporting only the TP-proven number made a healthy-PnL week
-    // read as a collapse. Both truths, one line:
-    const posN = signals.filter((s) => Number(s.pnlPercent ?? 0) > 0 && ["TP1", "TP2", "TP3", "SL", "EXPIRED", "CLOSED"].includes(String(s.status ?? ""))).length;
-    const settledN = signals.filter((s) => ["TP1", "TP2", "TP3", "SL", "EXPIRED", "CLOSED"].includes(String(s.status ?? ""))).length;
-    const posRate = settledN > 0 ? Math.round((posN / settledN) * 100) : 0;
-    lines.push(`  · نرخ مثبت-PnL (تسویه‌شده): <code>${posRate}%</code> (n=${settledN} — BE-trail exits مثبت را هم می‌شمارد)`);
+    lines.push(`▸ <b>وین‌ریت</b> — کل: <code>${Number(stats.winRate ?? 0)}%</code> (n=${Number(stats.totalSignals ?? 0)})`);
     lines.push(`  · ۲۴س: <code>${w.h24.winRatePct}%</code> (n=${w.h24.n}) · ۷روز: <code>${w.d7.winRatePct}%</code> (n=${w.d7.n})`);
     lines.push(`  · PNL ۲۴س: <code>${pnl24 >= 0 ? "+" : ""}${pnl24.toFixed(2)}$</code> · EST PNL%≈ <code>${estPct24 ?? "?"}%</code> (بر پایه بالانس ${balance.toFixed(2)}$)`);
     lines.push(`  · اکوییتی کل: <code>${Number(stats.totalPnlUsd ?? 0).toFixed(2)}$</code> · بالانس: <code>${balance.toFixed(2)}$</code> · فی‌ها: <code>${Number(acc.feesPaid ?? 0).toFixed(2)}$</code>`);
@@ -690,17 +701,10 @@ async function jobReview(): Promise<{ status: string }> {
   // numbers from /api/oos-tracker (protocol §2/§9 bars), honest fallback if
   // the app is briefly down.
   const oosT = (oos.ok && oos.data && typeof oos.data === "object" ? oos.data : null) as
-    | { totalOosN?: number; totalTarget?: number; totalFillPct?: number; weakStrategies?: string[]; etaDaysToBar?: number | null; etaBasis?: string; verdict?: string; settlePacePerDay14d?: number; operatorBar?: { perStrategyTarget?: number; blockedLegs?: string[]; legs?: Array<{ strategy: string; oosN: number; target: number; status: string; etaDays: number | null }> } }
+    | { totalOosN?: number; totalTarget?: number; totalFillPct?: number; weakStrategies?: string[]; etaDaysToBar?: number | null; verdict?: string; settlePacePerDay14d?: number }
     | null;
-  // v11.7 — the gate line leads with the GATING legs: «OOS 2662/300 (100%)» beside
-  // a FAIL verdict read as a units bug; the conjunction (total ≥300 AND every leg
-  // ≥60) is now explicit, and the ETA names its basis (slowest leg / stalled).
-  const weakLegs = (oosT?.weakStrategies ?? [])
-    .map((s) => (oosT ? (oosT as unknown as { perStrategy?: Array<{ strategy: string; oosN: number; target: number; fillPct: number }> }).perStrategy?.find((r) => r.strategy === s) : undefined))
-    .filter(Boolean)
-    .map((r) => `${r!.strategy} ${r!.oosN}/${r!.target} (${r!.fillPct}%)`);
   const strategyValidationStatus = oosT && typeof oosT.totalOosN === "number"
-    ? `PROMOTE gate = ${oosT.verdict ?? "FAIL-OPEN-GAPS"}${weakLegs.length ? ` — gating leg(s): ${weakLegs.join(", ")}` : " — all per-strategy legs ≥60"} · total OOS ${oosT.totalOosN}/${oosT.totalTarget ?? 300} (${oosT.totalFillPct ?? 0}%) · pace ${oosT.settlePacePerDay14d ?? "?"}/day · ETA ${oosT.etaDaysToBar != null ? `${oosT.etaDaysToBar}d` : "n/a"}${oosT.etaBasis ? ` (${oosT.etaBasis})` : ""}${oosT.operatorBar ? ` · OPERATOR-BAR(300/leg): ${oosT.operatorBar.blockedLegs?.length ? `blocked: ${oosT.operatorBar.blockedLegs.join(", ")}` : "ALL LEGS ≥300 ✓"}` : ""} (protocol STRATEGY-VALIDATION-PROTOCOL.md; sample-size leg only) — recommend only evidence-respecting actions`
+    ? `PROMOTE gate = ${oosT.verdict ?? "FAIL-OPEN-GAPS"} — OOS ${oosT.totalOosN}/${oosT.totalTarget ?? 300} (${oosT.totalFillPct ?? 0}%) · weak per-strategy (<60): ${oosT.weakStrategies?.length ? oosT.weakStrategies.join(",") : "none"} · pace ${oosT.settlePacePerDay14d ?? "?"}/day · ETA ${oosT.etaDaysToBar != null ? `${oosT.etaDaysToBar}d` : "n/a"} (protocol STRATEGY-VALIDATION-PROTOCOL.md; sample-size leg only) — recommend only evidence-respecting actions`
     : "PROMOTE gate = FAIL (insufficient OOS n; re-validation protocol in STRATEGY-VALIDATION-PROTOCOL.md) — recommend only evidence-respecting actions";
 
   const telemetry = {
@@ -772,7 +776,7 @@ async function jobReview(): Promise<{ status: string }> {
 // Operator order 2026-09-26: «پیشنهاد ماموریت بعدی با چرخش کلید کنترل را کامل و
 // مهندسی انجام بده» — the sentinel-proposed 30-minute engineered watch:
 //   · FUTURES TAXONOMY sampler keeps landing LIVE rows on the tri-exchange
-//     fuel (fapi → SPOT-MIRROR) — freshness window 35 min per tick (v14.0 Binance-only)
+//     fuel (fapi → Bybit → spot) — freshness window 35 min per tick
 //   · shadow-veto arms fill toward the 30-sample veto threshold (honest n,
 //     no invented data)
 //   · app/ws/sentinel health each tick

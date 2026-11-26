@@ -734,7 +734,8 @@ export type GateNameDTO =
   | "STALE-CHASE"
   | "STRAT-PAUSE"
   | "SURROGATE-BREAKOUT"
-  | "V-REVERSAL";
+  | "V-REVERSAL"
+  | "TRIGGER-MTF"; // v13.3 ch.7-ج MTF-board review — engine.ts journals this gate; SENTINEL-20261126 build-sync (prod-build type error fix)
 
 // v14.0 build-sync — GovernorCohortsCard contract (the /api/ai/gauge payload
 // may omit `governors`; the card renders its honest empty state then).

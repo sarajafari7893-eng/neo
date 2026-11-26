@@ -44,7 +44,7 @@ import net from "node:net";
 // TWO-PLACE RULE respected: type+map here AND state initializer below.
 // Also: /status now re-reads the pause file (fresh paused display — the stale
 // cached pausedUntil display masked real pauses during the 2026-10-15 morning).
-const VER = "p0-watchdog 1.5.0"; // v1.5.0 trace-1a194496d358672d: tbt ZOMBIE-SWEEP — pid alive + port dead ⇒ SIGKILL holder + clear singleton lock before heal (the 2026-10-31 6h PAUSED outage: wedged bridge 2135 held bridge.pid while every heal was refused with "another instance alive")
+const VER = "p0-watchdog 1.4.9";
 // v1.4.4 (SENTINEL-RED-0929, live-fire 21:52-21:57Z): probe TIMEOUT ≠ down.
 // Dev-mode Turbopack cold-compile ran 15-29s/route under memory pressure while
 // this probe cap is 4s — a HEALTHY-but-compiling app read as "down", heals
@@ -78,7 +78,7 @@ const MEM_CRIT_MB = 250;
 // The 2026-09-20 restore resurrected bridge :3005 / trade :3011 / sentinel :3030
 // WITHOUT guardians — trade ran down for hours unnoticed. All six are now
 // probe+heal covered; heal commands mirror each service's battle-tested start.
-type SvcKey = "app" | "liq" | "ws" | "bridge" | "trade" | "sentinel" | "armor" | "cron" | "stable" | "kw" | "mem" | "warm" | "cards";
+type SvcKey = "app" | "liq" | "ws" | "bridge" | "trade" | "sentinel" | "armor" | "cron" | "stable" | "kw" | "mem" | "warm" | "tbt" | "cards";
 type Mode = "init" | "ok" | "degraded" | "healing" | "escalated";
 
 interface SvcCfg {
@@ -196,10 +196,17 @@ const SVCS: Record<SvcKey, SvcCfg> = {
     expectNote: "200",
     healCmd: `cd ${ROOT}/mini-services/warm-loop && nohup bun index.ts >> ${ROOT}/logs/warm-loop.log 2>&1 &`,
   },
-  // v1.4.9 (2026-10-20, Task-52 TOOBIT-BRIDGE): RETIRED 2026-11-05 — the
-  // toobit-bridge :3021 execution mirror was decommissioned by operator mandate
-  // (trace 1a1a8ea4186c6571): account flattened, module removed. The tbt watch
-  // entry + heal command are intentionally gone so the bridge can never respawn.
+  // v1.4.9 (2026-10-20, Task-52 TOOBIT-BRIDGE): toobit-bridge :3021 — the
+  // signal-card EXECUTION mirror (PAPER/LIVE, reconciliation, latency
+  // telemetry). Read-only on the ledger (bun:sqlite readonly); orders go to
+  // api.toobit.com. Plain bun, no --hot (LEASH doctrine). Two-place rule kept.
+  tbt: {
+    label: "toobit-bridge :3021",
+    url: "http://127.0.0.1:3021/health",
+    expect: (s) => s === 200,
+    expectNote: "200",
+    healCmd: `cd ${ROOT}/mini-services/toobit-bridge && nohup bun index.ts >> ${ROOT}/logs/toobit-bridge.log 2>&1 &`,
+  },
   // v1.5.0 (2026-10-24, SENTINEL-M0M2 → operator order «ماژول نظارت کارت‌های کهنه»):
   // card-sentinel :3022 — flow-card freshness governor (heat-hold + fast refresh
   // via :3000/api/internal/flow-refresh). Read-only on the ledger; loopback
@@ -240,6 +247,7 @@ const state: Record<SvcKey, SvcState> = {
   kw: freshSvc(), // v1.4.6 two-place rule (KEEP-WARM-INTERNAL) — DO NOT remove
   mem: freshSvc(), // v1.4.7 two-place rule (MEM-GUARD v2) — DO NOT remove
   warm: freshSvc(), // v1.4.8 two-place rule (Task-45 Q4 warm-loop orphan) — DO NOT remove
+  tbt: freshSvc(), // v1.4.9 two-place rule (TOOBIT-BRIDGE) — DO NOT remove
   cards: freshSvc(), // v1.5.0 two-place rule (CARD-SENTINEL) — DO NOT remove
 };
 function freshSvc(): SvcState {
@@ -472,8 +480,6 @@ function heal(key: SvcKey, cfg: SvcCfg, st: SvcState) {
   if (st.mode === "escalated") {
     void tgSend("crit", `🛡 <b>P0-WATCHDOG · ESCALATED</b>\n<code>${cfg.label}</code> DOWN — ${st.heals} heal attempts failed\nlast HTTP: ${st.lastStatus ?? "unreachable"} · mem ${mem.availableMb ?? "?"}MB\n${tehran()} IRST`);
   }
-  // ── v1.5.0 ZOMBIE-SWEEP (tbt only): RETIRED 2026-11-05 with the bridge —
-  // the toobit-bridge singleton-lock zombie class no longer exists.
   try { Bun.spawn(["bash", "-c", cfg.healCmd], { stdin: "ignore", stdout: "ignore", stderr: "ignore" }); }
   catch (e) { log("crit", "heal-spawn-error", { err: String(e).slice(0, 120) }, key); }
   writeHealStamp(key); // v10.16: announce to layer-2 (300s cross-layer guard)
@@ -640,7 +646,7 @@ try {
   process.exit(0);
 }
 log("info", "boot", { ver: VER, pid: process.pid, port: PORT });
-console.log(`[${tehran()}] ${VER} armed on :${PORT} — app:3000 ws:3003 bridge:3005 liq:3010 trade:3011 sentinel:3030 armor:3016 cron:3015 stable:3017 kw:3018 mem:3019 cards:3022`);
+console.log(`[${tehran()}] ${VER} armed on :${PORT} — app:3000 ws:3003 bridge:3005 liq:3010 trade:3011 sentinel:3030 armor:3016 cron:3015 stable:3017 kw:3018 mem:3019 tbt:3021 cards:3022`);
 persistState();
 
 process.on("SIGTERM", () => { log("info", "shutdown", { sig: "SIGTERM" }); releaseLock(); process.exit(0); });

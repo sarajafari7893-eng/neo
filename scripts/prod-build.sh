@@ -22,7 +22,7 @@ if curl -s -m 3 -o /dev/null http://localhost:3000/api/pulse 2>/dev/null; then
 fi
 
 echo "[prod-build] next build starting $(date -u '+%H:%M:%SZ') mem=$(awk '/MemAvailable/{printf "%dMB", $2/1024}' /proc/meminfo)"
-NODE_OPTIONS="--max-old-space-size=1536" ./node_modules/.bin/next build
+NODE_OPTIONS="--max-old-space-size=1024" ./node_modules/.bin/next build
 BUILD_RC=$?
 if [ $BUILD_RC -ne 0 ]; then
   echo "[prod-build] FAILED rc=$BUILD_RC $(date -u '+%H:%M:%SZ')"

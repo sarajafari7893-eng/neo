@@ -394,6 +394,18 @@ one_cycle() {
     fi
   fi
 
+  # ── P2.9 · DB + JOURNAL BACKUP RING (SENTINEL-20261124-DATA-HISTORY) ──
+  # 2026-11-23T23:15Z workspace reset restored a STALE platform snapshot and a
+  # month of collection history showed holes. The in-house backup ring
+  # (.data/db-backups, VACUUM INTO — read-consistent, live-WAL-safe) gives
+  # every future restore a FRESH recovery point. Fail-open; 3.5h min-interval
+  # guarded inside the script (safe vs the standalone db-backup-loop).
+  local bklast; bklast=$(cat "$PROJECT/.data/db-backups/.last-run" 2>/dev/null || echo 0)
+  if [ $(( now - ${bklast:-0} )) -ge 12600 ]; then
+    ( setsid bash "$PROJECT/scripts/db-backup.sh" </dev/null 9>&- 8>&- >/dev/null 2>&1 & )
+    say "DB BACKUP: triggered (ring .data/db-backups, 3.5h cadence)"
+  fi
+
   # ── P3 · supervisor-of-the-supervisor: keep layer-1 guardian alive ──
   # Layer-1 (mini-services/p0-watchdog :3020) owns fast healing of all three
   # services; this loop revives it if it dies or hangs (3 failed probes ≈ 3min).

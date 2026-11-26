@@ -12,10 +12,6 @@
 import { db } from "@/lib/db";
 
 export interface GateSettings {
-  // v14.0 — governor knob projections (oversight lane); the normalizer
-  // defaults them so every persisted payload predating them stays sound.
-  dlConfFloor: number;
-  maxLevCap: number;
   minScore: number; // 20–60, default 35 — BASE threshold; the EFFECTIVE threshold = minScore + regime thrAdj per candidate
   flowShortlist: number; // 1–6, default 3
   flowVetoScore: number; // 4–25, default 8 (veto when flow.score ≤ −T)
@@ -33,11 +29,6 @@ export interface GateSettings {
   // untouched; the decisive-filter/vol-barrier first-decision projections track the
   // SAME distance (fdMult) so the gates stay coherent with the ladder. 1.0 = legacy 1R.
   regimeGuard: number; // 0–2, default 1 — v6.3 regime-filter hardening (0 soft penalties · 1 chop veto · 2 +BTC-spillover & vol MR veto)
-  regimeGuardPinned: number; // 0–1, default 1 — v13.0 OPERATOR PIN (trace 1a1c1ecd9694a129, 2026-11-09): while 1, the AI governor may
-  // NOT move regimeGuard in either direction. Evidence: the governor silently re-hardened
-  // regimeGuard 0→2 after the operator's 2026-11-06 «تمام گیتهای ورودی را باز کن» order set it
-  // to 0 — REGIME then vetoed 496 candidates in 6h and issuance stalled 6.2h (last serial NX-3495).
-  // Operator orders are supreme over governor doctrine (minScore PIN precedent v8.4.2). Unpin = explicit operator mandate.
   maxActive: number; // 2–8, default 5 — v6.3 position capacity: max concurrent open signals
   riskPerTrade: number; // 0.5–1.5, default 1.0 — v6.3 margin sizing scale on confidence-sized margin
   beTrailPct: number; // 0–40, default 10 — v6.5 mid-ladder breakeven arm: when a live signal's NET pnl first
@@ -174,8 +165,6 @@ export interface GateSettings {
 // floor is a clamp, not policy — the evidence gate + hysteresis remain the
 // real anti-noise protection.
 const CLAMPS: Record<keyof GateSettings, [number, number, number]> = {
-  dlConfFloor: [0, 1, 0],
-  maxLevCap: [1, 50, 20],
   minScore: [12, 60, 35],
   minScorePinned: [0, 1, 0],
   flowShortlist: [1, 6, 3],
@@ -188,7 +177,6 @@ const CLAMPS: Record<keyof GateSettings, [number, number, number]> = {
   rrScale: [0.75, 1.35, 1.0],
   tp1RMult: [0.3, 1, 0.55],
   regimeGuard: [0, 2, 1],
-  regimeGuardPinned: [0, 1, 1],
   maxActive: [2, 8, 5],
   riskPerTrade: [0.5, 1.5, 1.0],
   beTrailPct: [0, 40, 10],
@@ -224,8 +212,6 @@ const CACHE_TTL = 15_000;
 
 function clampAll(raw: Partial<GateSettings>): GateSettings {
   return {
-    dlConfFloor: Math.min(CLAMPS.dlConfFloor[1], Math.max(CLAMPS.dlConfFloor[0], raw.dlConfFloor ?? CLAMPS.dlConfFloor[2])),
-    maxLevCap: Math.min(CLAMPS.maxLevCap[1], Math.max(CLAMPS.maxLevCap[0], Math.round(raw.maxLevCap ?? CLAMPS.maxLevCap[2]))),
     minScore: Math.min(CLAMPS.minScore[1], Math.max(CLAMPS.minScore[0], raw.minScore ?? CLAMPS.minScore[2])),
     minScorePinned: Math.min(CLAMPS.minScorePinned[1], Math.max(CLAMPS.minScorePinned[0], Math.round(raw.minScorePinned ?? CLAMPS.minScorePinned[2]))),
     flowShortlist: Math.min(CLAMPS.flowShortlist[1], Math.max(CLAMPS.flowShortlist[0], raw.flowShortlist ?? CLAMPS.flowShortlist[2])),
@@ -238,7 +224,6 @@ function clampAll(raw: Partial<GateSettings>): GateSettings {
     rrScale: Math.min(CLAMPS.rrScale[1], Math.max(CLAMPS.rrScale[0], raw.rrScale ?? CLAMPS.rrScale[2])),
     tp1RMult: Math.min(CLAMPS.tp1RMult[1], Math.max(CLAMPS.tp1RMult[0], raw.tp1RMult ?? CLAMPS.tp1RMult[2])),
     regimeGuard: Math.min(CLAMPS.regimeGuard[1], Math.max(CLAMPS.regimeGuard[0], Math.round(raw.regimeGuard ?? CLAMPS.regimeGuard[2]))),
-    regimeGuardPinned: Math.min(CLAMPS.regimeGuardPinned[1], Math.max(CLAMPS.regimeGuardPinned[0], Math.round(raw.regimeGuardPinned ?? CLAMPS.regimeGuardPinned[2]))),
     maxActive: Math.min(CLAMPS.maxActive[1], Math.max(CLAMPS.maxActive[0], Math.round(raw.maxActive ?? CLAMPS.maxActive[2]))),
     riskPerTrade: Math.min(CLAMPS.riskPerTrade[1], Math.max(CLAMPS.riskPerTrade[0], raw.riskPerTrade ?? CLAMPS.riskPerTrade[2])),
     beTrailPct: Math.min(CLAMPS.beTrailPct[1], Math.max(CLAMPS.beTrailPct[0], raw.beTrailPct ?? CLAMPS.beTrailPct[2])),

@@ -1,0 +1,252 @@
+{
+ "schemaVersion": 1,
+ "kind": "deep",
+ "at": "2026-11-26T06:56:49.774Z",
+ "tehran": "26/11/2026, 10:26:49",
+ "verdict": "AMBER",
+ "anomalies": [
+  {
+   "sev": "warn",
+   "area": "watchdog",
+   "msg": "layer-1 non-ok services: {\"app\":\"ok\",\"liq\":\"ok\",\"ws\":\"ok\",\"bridge\":\"ok\",\"trade\":\"healing\",\"sentinel\":\"healing\",\"armor\":\"healing\",\"cron\":\"healing\",\"stable\":\"ok\",\"kw\":\"healing\",\"mem\":\"ok\",\"warm\":\"healing\",\"tbt\":\"healing\",\"cards\":\"ok\"}"
+  }
+ ],
+ "services": [
+  {
+   "key": "app",
+   "label": "app :3000",
+   "up": true,
+   "status": 200,
+   "ms": 24
+  },
+  {
+   "key": "ws",
+   "label": "price-ws :3003",
+   "up": true,
+   "status": 400,
+   "ms": 7
+  },
+  {
+   "key": "bridge",
+   "label": "telegram-bridge :3005",
+   "up": true,
+   "status": 200,
+   "ms": 6
+  },
+  {
+   "key": "liq",
+   "label": "liq :3010",
+   "up": true,
+   "status": 200,
+   "ms": 6
+  },
+  {
+   "key": "trade",
+   "label": "trade :3011",
+   "up": true,
+   "status": 200,
+   "ms": 6
+  },
+  {
+   "key": "watchdog",
+   "label": "p0-watchdog :3020",
+   "up": true,
+   "status": 200,
+   "ms": 6
+  }
+ ],
+ "mem": {
+  "availableMb": 2117
+ },
+ "disk": {
+  "rootFreeGb": 3.01,
+  "tmpFreeGb": 3.01
+ },
+ "db": {
+  "ok": true,
+  "signals": 3672,
+  "events": 80041,
+  "prices": 3200,
+  "assets": 35,
+  "pumps": 2307,
+  "events1h": 47,
+  "lastEventAgeMs": 1900,
+  "stuckActive": 0,
+  "orphanEvents": 0,
+  "stuckPumpTracks": 0,
+  "dbBytes": 62484480,
+  "walBytes": 3341352
+ },
+ "backup": {
+  "ok": true,
+  "dir": "/tmp/my-project/backups",
+  "encCount": 12,
+  "zipCount": 12,
+  "newestEncMs": 1795671401061.016,
+  "newestAnyMs": 1795671401061.016,
+  "encAgeMs": 4808252.983886719
+ },
+ "watchdog": {
+  "ok": true,
+  "ver": "p0-watchdog 1.4.9",
+  "modes": {
+   "app": "ok",
+   "liq": "ok",
+   "ws": "ok",
+   "bridge": "ok",
+   "trade": "healing",
+   "sentinel": "healing",
+   "armor": "healing",
+   "cron": "healing",
+   "stable": "ok",
+   "kw": "healing",
+   "mem": "ok",
+   "warm": "healing",
+   "tbt": "healing",
+   "cards": "ok"
+  },
+  "nonOk": 7,
+  "memLevel": "ok",
+  "memAvailableMb": 2200,
+  "paused": false
+ },
+ "log": {
+  "windowLines": 119,
+  "errors": 0,
+  "http500": 3,
+  "oom": 0,
+  "enospc": 0,
+  "hydration": 0,
+  "unhandled": 0,
+  "settlementStalled": 0,
+  "turbopackPanic": 0
+ },
+ "shadow": {
+  "ok": true,
+  "source": "live-api",
+  "mode": "veto",
+  "generatedAt": "2026-11-26T06:56:49.549Z",
+  "stats": {
+   "total": 11625,
+   "passSide": 6862,
+   "rejectSide": 4763,
+   "vetoCount": 8416,
+   "tradeCount": 3209,
+   "modelSharePct": 40.1,
+   "modelGroundedPct": 100,
+   "avgConfidence": 66.7,
+   "gateAgreement": 3279,
+   "paperOpen": 10,
+   "paperSettled": 1493,
+   "recent24h": {
+    "n": 0,
+    "modelSharePct": null,
+    "lastModelAgeH": 54,
+    "lastVerdictAgeH": 54
+   }
+  },
+  "arms": [
+   {
+    "id": "real-keep",
+    "n": 30,
+    "target": 30,
+    "pct": 100,
+    "starved": false,
+    "reachable": true,
+    "fed": 1725,
+    "lastFedAgeH": null
+   },
+   {
+    "id": "real-veto",
+    "n": 30,
+    "target": 30,
+    "pct": 100,
+    "starved": false,
+    "reachable": true,
+    "fed": 5137,
+    "lastFedAgeH": null
+   },
+   {
+    "id": "paper-keep",
+    "n": 30,
+    "target": 30,
+    "pct": 100,
+    "starved": false,
+    "reachable": true,
+    "fed": 1486,
+    "lastFedAgeH": null
+   },
+   {
+    "id": "paper-veto",
+    "n": 17,
+    "target": 30,
+    "pct": 57,
+    "starved": false,
+    "reachable": true,
+    "fed": 17,
+    "lastFedAgeH": null
+   }
+  ],
+  "fillPct": 89,
+  "fillPctReach": 89,
+  "nSum": 107,
+  "tSum": 120,
+  "nSumReach": 107,
+  "tSumReach": 120,
+  "fenceEntries24hFloor": 0
+ },
+ "rawcal": {
+  "armed": true,
+  "issued": 1045,
+  "issuedTotal": 2463,
+  "target": 3217,
+  "heartbeatAgeH": 0,
+  "heartbeatAt": "2026-11-26T0656Z OPEN (degraded-winner) — fapi ban active (fapi GLOBAL ban window live — 3s left): capture continues on WS-live"
+ },
+ "cards": {
+  "ok": true,
+  "sentinelAgeSec": 65,
+  "ticks": 3,
+  "refreshed1h": 0,
+  "failures1h": 5,
+  "staleHot": 1,
+  "worst": [
+   {
+    "symbol": "ENSOUSDT",
+    "ageMin": 3244,
+    "heat": "warm"
+   },
+   {
+    "symbol": "HUMAUSDT",
+    "ageMin": 3244,
+    "heat": "warm"
+   },
+   {
+    "symbol": "MMTUSDT",
+    "ageMin": 3241,
+    "heat": "warm"
+   },
+   {
+    "symbol": "CYBERUSDT",
+    "ageMin": 3230,
+    "heat": "hot"
+   },
+   {
+    "symbol": "TRUMPUSDT",
+    "ageMin": 3230,
+    "heat": "warm"
+   }
+  ]
+ },
+ "cures": {
+  "armed": true,
+  "curing": false,
+  "cures24h": 0,
+  "lastCureAt": "2026-11-03T00:34:31.064Z",
+  "lastCureOutcome": "app-200-post-cure",
+  "failStreak": 0,
+  "baselineMark": 0
+ },
+ "uptimeSec": 4,
+ "ver": "nexus-sentinel 1.3.2"
+}

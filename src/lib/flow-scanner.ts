@@ -33,7 +33,7 @@ const BOARD_KEY = "flowscan.board";
 const BATCH = 6;
 // DATA-REVIVAL 2026-10-21 — 60s/6 symbols needed ~11min to rotate a 64-symbol
 // board; the operator mandate is flow tracking at HIGH SPEED. 20s/6 → full
-// board ~3.5min. The SPOT-MIRROR ladder carries this easily; the fapi-gate
+// board ~3.5min. Bybit public plane carries this easily; the fapi-gate
 // telemetry lane is sheddable as before.
 const MIN_INTERVAL_MS = 20_000;
 const NET_BIAS_MIN = 20; // |netScore| needed to call a LONG/SHORT board
@@ -123,7 +123,7 @@ const fbStats = (() => {
 // third rung — Binance SPOT klines via the data-vision mirror host family
 // (api.binance.com is IP-banned; data-api.binance.vision is NOT — proven live
 // by the feed probe). Spot klines share the exact field layout (takerBuy at
-// index 9) so CVD stays REAL. For niche Binance listings absent from spot
+// index 9) so CVD stays REAL. For niche Binance listings absent from Bybit
 // linear this is the only honest revival path.
 // v13.2.1 — per-host 418/429 backoff via the shared spot-host gate.
 async function spotKlines(symbol: string, tf: ScanTf, limit: number): Promise<FlowCandle[] | null> {
@@ -260,7 +260,7 @@ function analyzeTf(symbol: string, tf: ScanTf, raw: FlowCandle[], funding8h: num
   }
 
   // CVD over the last 12 closed bars — direct taker aggression from kline field 9.
-  // DATA-REVIVAL: fallback candles without field-9 carry takerBuy=NaN → cvdPct stays null
+  // DATA-REVIVAL: Bybit-fallback candles carry takerBuy=NaN → cvdPct stays null
   // (honest measured gap — never invented from price direction).
   const w12 = candles.slice(-12);
   const vol12 = w12.reduce((a, c) => a + c.volume, 0);

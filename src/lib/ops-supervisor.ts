@@ -31,8 +31,7 @@
 
 import { db } from "@/lib/db";
 import { getGateSettings, gateClamps, type GateSettings } from "@/lib/gate-settings";
-import { getFeedStatus } from "@/lib/market-feed";
-import { fapiBanRemainingMs } from "@/lib/fapi-gate"; // v14.0 — the real ban source (getFeedBanUntil never existed)
+import { getFeedStatus, getFeedBanUntil } from "@/lib/market-feed";
 import { getTriggerBusSummary } from "@/lib/triggers";
 import { rawCalStatus } from "@/lib/raw-cal";
 import { sendDirect } from "@/lib/notify";
@@ -179,7 +178,7 @@ export async function gatherOpsKpis(): Promise<OpsKpis> {
     db.signal.count({ where: { createdAt: { gte: dayStart }, tags: { contains: "RAW-CAL" } } }),
     db.advisorProposal.count({ where: { status: "PENDING" } }),
     db.engineSetting.findUnique({ where: { key: "seniorreview.state" } }).catch(() => null),
-    Promise.resolve(null) as Promise<number | null>, // v14.0 — the legacy realArmsFilled probe never existed in shadow-veto; veto telemetry rides shadow-veto-latest.json
+    import("@/lib/shadow-veto").then((m) => m.realArmsFilled().catch(() => null)),
     import("@/lib/rawcal-telemetry").then((m) => m.computeRawcalPace().catch(() => null)),
   ]);
 
@@ -206,8 +205,7 @@ export async function gatherOpsKpis(): Promise<OpsKpis> {
 
   const srState = lastNight ? (JSON.parse(lastNight.value) as { lastRunAt?: string | null }) : null;
   const paceStall = pace?.stalls?.issueStallMin ?? null;
-  const banRemainMs = fapiBanRemainingMs();
-  const banUntil = banRemainMs > 0 ? Date.now() + banRemainMs : 0;
+  const banUntil = getFeedBanUntil();
 
   return {
     wrOverall: stats?.winRate ?? null,
@@ -223,11 +221,11 @@ export async function gatherOpsKpis(): Promise<OpsKpis> {
     rawcalArmed: rawcal.armed,
     rawcalIssuedTotal: rawcal.issuedTotal,
     rawcalBook: `${rawcal.settledN}/${rawcal.target} settled · open ${rawcal.openRaw}/${rawcal.maxOpen}`,
-    rawcalArmsDone: typeof armsFilled === "number" ? armsFilled > 0 : null, // v14.0 — the probe returns a count; the state field is boolean
+    rawcalArmsDone: armsFilled,
     issueStallMin: paceStall,
     banActive: banUntil > Date.now(),
     banResumeAt: banUntil ? new Date(banUntil).toISOString() : null,
-    restHealthy: feed.source === "LIVE" || feed.source === "STALE", // v14.0 — retired cross-venue field; mapped to the Binance feed liveness
+    restHealthy: feed.restHealthy,
     busCounts: bus.counts ?? {},
     busCyclesCompleted: (bus as unknown as { cyclesCompleted?: number }).cyclesCompleted ?? 0,
     sentinel,

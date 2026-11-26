@@ -240,10 +240,6 @@ def main() -> int:
     else:
         print("[WARN] .data journals absent in snapshot zip — optional, skipped")
 
-    # secrets chain — RETIRED 2026-11-05: toobit-bridge keys are gone with the
-    # module (operator mandate trace 1a1a8ea4186c6571 — decommission, account
-    # flattened). No key reinstall happens on recovery anymore.
-
     # manifests + calibration + worklog (evidence chain)
     for rel in ("backups/MANIFEST.json", "backups/calibration-latest.json", "worklog.md"):
         src = os.path.join(STAGE, rel)

@@ -30,88 +30,17 @@
 //    whole send fails → text fallback = another imageless card). The engine
 //    message blockquote now truncates to keep the caption ≤1000.
 
-// ── v12.9 RESTART-PROOF DELIVERY — outbox cursor over SignalEvent (trace
-// 1a1ba99d0cb24dd9, operator: «توصیه‌های پیشنهادی را کامل و مهندسی اجرا کن») ──
-// DIAGNOSIS 2026-11-08: the dev server recycles every ~6–14min under the RAM
-// doctrine (lane-B self-recycles at RSS 2.4–2.5GB plateau + pulse-timeout
-// restarts when the box is squeezed). Every recycle wipes this module's
-// in-memory state and cuts in-flight fire-and-forget sends — cards mid-flight
-// at process death were lost FOREVER, and the channel mirror looked dead to
-// the operator even though the code path was intact (proven live on a fresh
-// boot: a CREATED card reached @mytradeneo in 5s; the losses all sat inside
-// restart windows). FIX — never lose a card to a process death:
-//   • SignalEvent rows are the natural outbox: fireEvent writes the row
-//     BEFORE relaying, so every card has a durable receipt in SQLite.
-//   • A persisted cursor (EngineSetting telegram.relayCursor) + a 90s sweeper
-//     re-deliver every RELAYABLE event the cursor has not confirmed — across
-//     restarts, which is exactly the window the operator was losing.
-//   • The cursor advances ONLY on confirmed delivery (operator send ok AND
-//     channel mirror ok-or-unconfigured) → at-least-once, never silent loss.
-//   • A compare-and-swap lease (telegram.relayLease, 25s TTL) keeps the
-//     multiple per-route module copies of dev mode from double-sweeping; a
-//     3-attempt cap stops poison events from wedging the walk (counted
-//     honestly in relayHealth.replay).
-//   • Non-relatable journal rows (PUMP_RADAR ban etc.) are cursor-skipped so
-//     the walk can never stall on a banned type.
-// Known tradeoff: a channel-mirror failure after a good operator send makes
-// the sweeper re-deliver to BOTH planes (rare + transient) — at-least-once is
-// the deliberate contract; per-plane dedup would re-introduce silent loss.
-
 import { db } from "@/lib/db";
 import { APP_NAME } from "./brand";
 import fs from "node:fs/promises";
-import { readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { renderStatusBanner, type BannerStatus } from "./telegram-image";
 import { renderSignalBannerV2, renderDailyPoster, type BannerV2Spec } from "./telegram-art";
 
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN ?? "";
 const ENV_CHAT = process.env.TELEGRAM_CHAT_ID ?? "";
-// v12.8 SIGNAL-CHANNEL MIRROR (operator order 2026-11-06 trace 1a1ae5194b0586d9
-// «کارت سیگنال جدید باز شده هم به کانال همزمان ارسال بشه», extended trace
-// 1a1ae5ccfa2fba91 «کانال چرخه‌ی کامل عمر سیگنال را نشان دهد») — EVERY relayed
-// lifecycle card (CREATED birth · TP1/TP2/TP3 rungs · SL stop · TTL_EXPIRED /
-// EARLY_EXIT close · TTL_EXTENDED grant · AFTERLIFE follow-up) is mirrored
-// VERBATIM to this channel: same card the operator chat receives. Fire-and-
-// forget, never blocks the engine or the operator send; empty/unset = mirror
-// dormant. Never echo the value.
-// v13.0 CHANNEL-ENV SELF-HEAL (forensic audit 2026-11-10, trace 1a1c76eb…):
-// /api/notify reported signalChannel.configured=false for DAYS while manual
-// scripts to the same channel succeeded — root cause: the const below bound
-// process.env ONCE at module load, and the booting process had NO
-// TELEGRAM_SIGNAL_CHANNEL in its environment (.env carried zero such lines).
-// The target is now read DYNAMICALLY: process.env first, then a mtime-gated
-// .env re-scan (≤30s cadence) so a var added/restored mid-flight self-heals
-// without waiting for the next recycle. Never echo the value.
-let _sigChanCache: string | null = null;
-let _sigChanScanAt = 0;
-let _sigChanEnvMtime = 0;
-function signalChannelEnv(): string {
-  const fromEnv = process.env.TELEGRAM_SIGNAL_CHANNEL ?? "";
-  if (fromEnv) {
-    _sigChanCache = fromEnv;
-    _sigChanScanAt = Date.now();
-    return fromEnv;
-  }
-  const now = Date.now();
-  if (_sigChanCache !== null && now - _sigChanScanAt < 30_000) return _sigChanCache;
-  _sigChanScanAt = now;
-  try {
-    const p = path.join(process.cwd(), ".env");
-    const st = statSync(p);
-    if (st.mtimeMs !== _sigChanEnvMtime || _sigChanCache === null) {
-      _sigChanEnvMtime = st.mtimeMs;
-      const m = readFileSync(p, "utf8").match(/^TELEGRAM_SIGNAL_CHANNEL=(.*)$/m);
-      _sigChanCache = m ? m[1]!.trim().replace(/^["']|["']$/g, "") : "";
-    }
-  } catch {
-    _sigChanCache = _sigChanCache ?? "";
-  }
-  return _sigChanCache;
-}
 
 const CHAT_OVERRIDE_KEY = "telegram.chatId";
 const ERR_RING_CAP = 8;
@@ -138,29 +67,7 @@ let lastAutoDiscoverSkipLog = 0; // v10.16: dev.log spam throttle (was ~3.5k lin
 // v12.0.1 — flood valves
 let createdPhotoTimes: number[] = []; // CREATED photo sends in the trailing hour
 let createdPhotoBudgetSkip = 0;
-// v12.7 signal-channel mirror state + its own photo flood valve (≤6/hour, same doctrine)
-let chSentCount = 0;
-let chFailCount = 0;
-let chLastSentAt: number | null = null;
-let chPhotoTimes: number[] = [];
-let chLiveLogged = false;
 let ttlGrantRelaySeen = new Map<string, number>(); // signalId → last relayed grant number
-// v12.9 outbox-cursor state (restart-proof delivery)
-const RELAY_CURSOR_KEY = "telegram.relayCursor";   // EngineSetting row: {at,id,by} — last confirmed-delivered SignalEvent
-const RELAY_LEASE_KEY = "telegram.relayLease";     // EngineSetting row: {owner,until} — sweeper CAS lease
-const REPLAY_GRACE_MS = 10_000;                    // live path owns the freshest events; the sweeper only walks older ones
-const REPLAY_SWEEP_MS = 90_000;                    // sweeper cadence
-const REPLAY_MAX_BATCH = 12;                       // events per sweep pass
-const REPLAY_MAX_ATTEMPTS = 3;                     // poison-event cap — never wedge the walk
-const REPLAY_CATCHUP_CAP_MS = 6 * 3_600_000;       // bounded catch-up after a long cursor gap
-const replayInstanceId = randomUUID();             // identity for the CAS lease (per module copy)
-let replayScheduled = false;
-let replaySent = 0;
-let replayFails = 0;
-let replaySkipped = 0;
-let lastReplayAt: number | null = null;
-let relayCursorMirror: { at: number; id: string; by?: string } | null = null; // sync-readable mirror for relayHealth
-const replayAttempts = new Map<string, number>();  // eventId → failed delivery attempts
 
 function pushErr(msg: string): void {
   errRing.unshift(`${new Date().toISOString().slice(11, 19)}Z ${msg}`);
@@ -177,11 +84,8 @@ export function relayHealth(): {
   chatId: string | null; chatResolved: boolean; chatSource: "env" | "discovered" | "none";
   sent: number; failed: number; lastSentAt: number | null; lastErrors: string[];
   pumpDumpBlocked: number; animSent: number; animFails: number; createdPhotoBudgetSkip: number;
-  signalChannel: { configured: boolean; target: string | null; sent: number; failed: number; lastSentAt: number | null };
-  replay: { cursorAt: number | null; sent: number; fails: number; skipped: number; lastSweepAt: number | null };
 } {
   const chat = chatOverride ?? ENV_CHAT;
-  const chan = signalChannelEnv(); // v13.0 dynamic read — health must reflect the LIVE env, not boot-time luck
   return {
     armed: relayArmed(),
     tokenValid: botId !== null ? true : null,
@@ -191,15 +95,6 @@ export function relayHealth(): {
     chatSource: chatOverride ? "discovered" : ENV_CHAT ? "env" : "none",
     sent: sentCount, failed: failCount, lastSentAt, lastErrors: [...errRing],
     pumpDumpBlocked, animSent, animFails, createdPhotoBudgetSkip,
-    signalChannel: {
-      configured: chan.length > 0,
-      target: chan ? `${chan.slice(0, 1)}***${chan.slice(-4)}` : null,
-      sent: chSentCount, failed: chFailCount, lastSentAt: chLastSentAt,
-    },
-    replay: {
-      cursorAt: relayCursorMirror?.at ?? null,
-      sent: replaySent, fails: replayFails, skipped: replaySkipped, lastSweepAt: lastReplayAt,
-    },
   };
 }
 
@@ -233,8 +128,7 @@ async function ensureBotIdentity(): Promise<void> {
         bootLogged = true;
         const chat = chatOverride ?? ENV_CHAT;
         const selfRefused = chat === String(botId);
-        const chan = signalChannelEnv(); // v13.0 dynamic
-        console.log(`[NOTIFY] telegram relay ${selfRefused ? "ARMED (chat PENDING)" : chat ? "ARMED" : "DORMANT (no chat)"} — bot @${botUsername} (#${botId})${selfRefused ? ` · TELEGRAM_CHAT_ID equals the bot's own id — Telegram rejects bot→bot sends; waiting for discoverChat()/override` : chat ? ` · chat ${chat.slice(0, 3)}***${chat.slice(-2)}` : " · TELEGRAM_CHAT_ID unset"}${chan ? ` · signal-channel mirror → ${chan.slice(0, 1)}***${chan.slice(-4)} (full lifecycle)` : ""}`);
+        console.log(`[NOTIFY] telegram relay ${selfRefused ? "ARMED (chat PENDING)" : chat ? "ARMED" : "DORMANT (no chat)"} — bot @${botUsername} (#${botId})${selfRefused ? ` · TELEGRAM_CHAT_ID equals the bot's own id — Telegram rejects bot→bot sends; waiting for discoverChat()/override` : chat ? ` · chat ${chat.slice(0, 3)}***${chat.slice(-2)}` : " · TELEGRAM_CHAT_ID unset"}`);
       }
     }
   } catch (e: unknown) {
@@ -568,343 +462,7 @@ async function buildCard(type: string, symbol: string | null, engineMessage: str
   return { text, photo: renderStatusBanner(spec), photoName: `${kind.toLowerCase()}-${serial}.png` };
 }
 
-// ── v12.8 SIGNAL-CHANNEL MIRROR (operator orders 2026-11-06, traces
-// 1a1ae5194b0586d9 + 1a1ae5ccfa2fba91) ──
-// FULL-LIFECYCLE cards ride to the public signal channel VERBATIM — the exact
-// final card the operator chat received (post flood-valve/caption-compaction),
-// photo banner + caption or the text fallback. Animated operator sends (TP
-// MP4s) mirror as their static PNG — presentation differs, payload identical,
-// and the channel never burns the animation budget. Fire-and-forget: failures
-// are counted + ringed and NEVER touch the operator send or the engine hot
-// path. Own photo flood valve (≤6/hour, overflow → same card as text) mirrors
-// operator doctrine.
-async function mirrorCardToChannel(card: RelayCard): Promise<void> {
-  const chan = signalChannelEnv(); // v13.0 dynamic read — never depend on boot-time env luck
-  if (!chan) return;
-  let out = card;
-  if (out.photo) {
-    const nowH = Date.now();
-    chPhotoTimes = chPhotoTimes.filter((t) => nowH - t < 3_600_000);
-    if (chPhotoTimes.length >= 6) out = { text: out.text }; // valve overflow → text, still honest
-    else chPhotoTimes.push(nowH);
-  }
-  let r: { ok: boolean; error?: string };
-  if (out.photo) {
-    r = await apiSendPhoto(chan, out.text, out.photo, out.photoName ?? "flowradar-signal.png");
-    if (!r.ok) r = await apiCall<unknown>("sendMessage", { chat_id: chan, text: out.text.slice(0, 3800), parse_mode: "HTML", disable_web_page_preview: true });
-  } else {
-    r = await apiCall<unknown>("sendMessage", { chat_id: chan, text: out.text.slice(0, 3800), parse_mode: "HTML", disable_web_page_preview: true });
-  }
-  if (r.ok) {
-    chSentCount++;
-    chLastSentAt = Date.now();
-    if (!chLiveLogged) {
-      chLiveLogged = true;
-      console.log(`[NOTIFY] signal-channel mirror LIVE → ${chan.slice(0, 1)}***${chan.slice(-4)} (first lifecycle card delivered)`);
-    }
-  } else {
-    chFailCount++;
-    pushErr(`channel: ${r.error}`);
-    console.error(`[NOTIFY] signal-channel mirror send failed: ${r.error}`);
-  }
-}
-
-// ── v12.9 outbox-cursor helpers (EngineSetting-backed, compare-and-swap) ──
-type RelayCursor = { at: number; id: string; by?: string };
-
-async function readRelaySettingJson<T>(key: string): Promise<T | null> {
-  try {
-    const row = await db.engineSetting.findUnique({ where: { key } });
-    if (!row?.value) return null;
-    return JSON.parse(row.value) as T;
-  } catch {
-    return null;
-  }
-}
-
-/** True if cursor `a` is at-or-after `b` in the (createdAt, id) walk order. */
-function cursorAtOrAfter(a: RelayCursor, b: RelayCursor): boolean {
-  if (a.at !== b.at) return a.at > b.at;
-  return a.id >= b.id;
-}
-
-/** CAS-advance the persisted cursor to `to`. Losing a race is fine — another
- * copy advanced past us, which by walk order means the event was handled. */
-async function advanceRelayCursor(to: RelayCursor): Promise<boolean> {
-  for (let i = 0; i < 3; i++) {
-    const cur = await readRelaySettingJson<RelayCursor>(RELAY_CURSOR_KEY);
-    if (cur && cursorAtOrAfter(cur, to)) return true; // already past — another writer won
-    if (!cur) {
-      try {
-        await db.engineSetting.create({ data: { key: RELAY_CURSOR_KEY, value: JSON.stringify(to) } });
-        relayCursorMirror = to;
-        return true;
-      } catch {
-        /* unique-key race → re-read and CAS on the next iteration */
-      }
-      continue;
-    }
-    const r = await db.engineSetting.updateMany({
-      where: { key: RELAY_CURSOR_KEY, value: JSON.stringify(cur) },
-      data: { value: JSON.stringify(to) },
-    });
-    if (r.count === 1) {
-      relayCursorMirror = to;
-      return true;
-    }
-  }
-  return false;
-}
-
-function scheduleReplaySweep(): void {
-  if (replayScheduled) return;
-  replayScheduled = true;
-  const first = setTimeout(() => {
-    void sweepReplayOnce().catch(() => undefined);
-  }, 8_000);
-  first.unref?.();
-  const timer = setInterval(() => {
-    void sweepReplayOnce().catch(() => undefined);
-  }, REPLAY_SWEEP_MS);
-  timer.unref?.();
-}
-
-/** v12.9 RESTART SWEEPER — walk the SignalEvent outbox from the persisted
- * cursor and re-deliver every card the cursor has not confirmed. This is the
- * fix for the restart-window card losses the operator reported: a card whose
- * fire-and-forget send was cut by a process death still has its durable
- * journal row, so the next live copy sweeps it to the operator chat + channel
- * exactly as if it had been sent live. */
-async function sweepReplayOnce(): Promise<void> {
-  if (!relayArmed()) return;
-  const now = Date.now();
-  // ── CAS lease: only one module copy sweeps at a time (dev mode compiles
-  // several copies of this module — every one of them runs this interval). ──
-  const lease = await readRelaySettingJson<{ owner: string; until: number }>(RELAY_LEASE_KEY);
-  if (lease && lease.until > now && lease.owner !== replayInstanceId) return;
-  const leaseStr = JSON.stringify({ owner: replayInstanceId, until: now + 25_000 });
-  const claimed = lease
-    ? (await db.engineSetting.updateMany({ where: { key: RELAY_LEASE_KEY, value: JSON.stringify(lease) }, data: { value: leaseStr } })).count === 1
-    : await (async () => {
-        try {
-          await db.engineSetting.create({ data: { key: RELAY_LEASE_KEY, value: leaseStr } });
-          return true;
-        } catch {
-          return false;
-        }
-      })();
-  if (!claimed) return;
-  lastReplayAt = now;
-  try {
-    let cur = await readRelaySettingJson<RelayCursor>(RELAY_CURSOR_KEY);
-    if (!cur) {
-      // first deploy: initialize at "now" — never flood the channel with
-      // ancient history; from this moment every event is cursor-tracked.
-      await advanceRelayCursor({ at: now, id: "", by: "init" });
-      return;
-    }
-    if (cur.at < now - REPLAY_CATCHUP_CAP_MS) {
-      const floorAt = now - REPLAY_CATCHUP_CAP_MS;
-      await advanceRelayCursor({ at: floorAt, id: cur.id, by: "catchup-cap" });
-      pushErr(`replay: cursor jumped forward to bound catch-up (${Math.round((cur.at - floorAt) / 60_000)}min skipped)`);
-      cur = { at: floorAt, id: cur.id };
-    }
-    const rows = await db.signalEvent.findMany({
-      where: {
-        AND: [
-          { createdAt: { lt: new Date(now - REPLAY_GRACE_MS) } },
-          {
-            OR: [
-              { createdAt: { gt: new Date(cur.at) } },
-              ...(cur.id ? [{ createdAt: new Date(cur.at), id: { gt: cur.id } }] : []),
-            ],
-          },
-        ],
-      },
-      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-      take: REPLAY_MAX_BATCH,
-      select: { id: true, type: true, symbol: true, message: true, signalId: true, createdAt: true },
-    });
-    for (const ev of rows) {
-      const curNow: RelayCursor = { at: Number(ev.createdAt), id: ev.id, by: "sweep" };
-      if (BANNED_RELAY_TYPES.has(ev.type) || !RELAYABLE_TYPES.has(ev.type)) {
-        // non-relatable journal row — the cursor must still walk past it or the
-        // whole outbox would stall on a banned type
-        replaySkipped++;
-        await advanceRelayCursor(curNow);
-        continue;
-      }
-      const attempts = replayAttempts.get(ev.id) ?? 0;
-      if (attempts >= REPLAY_MAX_ATTEMPTS) {
-        replayFails++;
-        replayAttempts.delete(ev.id);
-        pushErr(`replay: ${ev.type} ${ev.id.slice(-6)} dropped after ${REPLAY_MAX_ATTEMPTS} failed attempts`);
-        await advanceRelayCursor(curNow);
-        continue;
-      }
-      let res: { operatorOk: boolean; channelOk: boolean; chatPending: boolean };
-      try {
-        res = await deliverSignalEvent(ev.type, ev.symbol, ev.message, ev.signalId);
-      } catch (e) {
-        res = { operatorOk: false, channelOk: false, chatPending: false };
-        pushErr(`replay ${ev.type}: ${e instanceof Error ? e.message : String(e)}`);
-      }
-      if (res.operatorOk && res.channelOk) {
-        replaySent++;
-        replayAttempts.delete(ev.id);
-        await advanceRelayCursor(curNow);
-      } else if (res.chatPending) {
-        break; // honest pending state — leave for the next sweep, do not burn attempts
-      } else {
-        replayFails++;
-        replayAttempts.set(ev.id, attempts + 1);
-        break; // stop the pass on first failure — strict in-order retry next sweep
-      }
-    }
-  } finally {
-    /* lease expires on its own (25s TTL) — no release write needed */
-  }
-}
-
-/** v12.9: the single delivery body — used by BOTH the live fire-and-forget
- * path and the restart sweeper, so a replayed card is byte-identical to the
- * live one. Returns per-plane truth so the cursor only advances on real
- * delivery (at-least-once, never silent loss). */
-async function deliverSignalEvent(
-  type: string,
-  symbol: string | null,
-  message: string,
-  signalId: string | null,
-): Promise<{ operatorOk: boolean; channelOk: boolean; chatPending: boolean }> {
-  const chat = await resolveChat();
-  if (!chat) return { operatorOk: false, channelOk: false, chatPending: true }; // honest pending state — not an error, no doomed send
-  // ── v12.0.1 TASK-46 relay policy ──
-  // ① RAW-CAL CREATED cards ship their banner again (v10.4 text-only strip
-  // removed — the whole book is capture-mode now, so MOST cards went bare).
-  // Flood valve: ≤6 CREATED photo posters/hour, overflow → text + counter.
-  // ② TTL_EXTENDED grant #1 → full photo card; grants ≥2 → compact one-line
-  // text (the hourly-grant spam the operator reported). Mechanics unchanged.
-  let rawCalTextOnly = false;
-  let ttlGrantNo = 0;
-  if (type === "CREATED" && signalId) {
-    const sig = await db.signal.findUnique({ where: { id: signalId }, select: { tags: true } }).catch(() => null);
-    if (sig?.tags?.includes("RAW-CAL")) {
-      const nowH = Date.now();
-      createdPhotoTimes = createdPhotoTimes.filter((t) => nowH - t < 3_600_000);
-      if (createdPhotoTimes.length >= 6) {
-        rawCalTextOnly = true; // flood valve — still honest, just lighter
-        createdPhotoBudgetSkip++;
-      } else createdPhotoTimes.push(nowH);
-    }
-  }
-  if (type === "TTL_EXTENDED" && signalId) {
-    const sig = await db.signal.findUnique({ where: { id: signalId }, select: { ttlExtensions: true } }).catch(() => null);
-    ttlGrantNo = sig?.ttlExtensions ?? 0;
-    const seen = ttlGrantRelaySeen.get(signalId);
-    if (seen !== undefined && ttlGrantNo <= seen) return { operatorOk: true, channelOk: true, chatPending: false }; // defensive: identical grant re-fire → swallow (v12.9: counts as already-delivered for the cursor)
-    ttlGrantRelaySeen.set(signalId, ttlGrantNo);
-    if (ttlGrantRelaySeen.size > 64) {
-      const oldest = [...ttlGrantRelaySeen.entries()].sort((a, b) => a[1] - b[1])[0];
-      if (oldest) ttlGrantRelaySeen.delete(oldest[0]);
-    }
-  }
-  let card: RelayCard;
-  try {
-    card = await buildCard(type, symbol, message, signalId ?? null);
-  } catch {
-    card = { text: `📡 ${APP_NAME} ${type}${symbol ? ` · ${esc(symbol)}` : ""}\n${esc(message)}`.slice(0, 3800) };
-  }
-  if (rawCalTextOnly) card = { text: card.text }; // flood-valve overflow → text (v10.4 heritage, now budget-gated)
-  // TTL grant #2+: compact one-line text — the operator already got the full
-  // card for grant #1; hourly identical art posters were the reported spam.
-  if (type === "TTL_EXTENDED" && ttlGrantNo > 1) {
-    const sym = symbol ?? "?";
-    card = { text: `⏳ <b>TTL extended again</b> · ${esc(sym)} — grant #${ttlGrantNo} (same setup still near its rung; full card was grant #1 · dashboard shows the live mark)` };
-  }
-  // v12.0.1 caption safety: Telegram REJECTS photo captions >1024 → the whole
-  // image send fails → text fallback (another imageless card). Compact the
-  // blockquote to keep the caption under the cap.
-  if (card.photo && card.text.length > 1000) {
-    const m = card.text.match(/<blockquote>[\s\S]*?<\/blockquote>/);
-    if (m) {
-      const room = 1000 - (card.text.length - m[0].length);
-      if (room > 40) {
-        const inner = m[0].slice(12, -14);
-        card = { ...card, text: card.text.replace(m[0], `<blockquote>💬 ${inner.slice(0, Math.max(0, room - 30))}…</blockquote>`) };
-      } else card = { ...card, text: card.text.replace(m[0], "") };
-    }
-    if (card.text.length > 1000) card = { ...card, text: card.text.slice(0, 1000) };
-  }
-  let r: { ok: boolean; error?: string } | null = null;
-  // v10.20 ANIMATED OUTCOME CARDS — TP1/TP2/TP3 first try the 12-frame
-  // glow-pulse MP4 (budget-guarded); any miss degrades to the static photo.
-  let animated = false;
-  if (card.photo && card.bannerSpec && ANIMATED_TYPES.has(type) && animBudgetOk()) {
-    try {
-      const frames = await renderAnimFrames(card.bannerSpec);
-      const mp4 = await encodeAnimMp4(frames);
-      if (mp4) {
-        const mp4Name = `${(card.photoName ?? "flowradar-signal.png").replace(/\.png$/i, "")}.mp4`;
-        const a = await apiSendAnimation(chat, card.text, mp4, mp4Name);
-        if (a.ok) {
-          animated = true;
-          animSent++;
-          animTimes.push(Date.now());
-          r = { ok: true };
-        } else {
-          animFails++;
-          pushErr(`anim ${type}: ${a.error}`);
-        }
-      } else {
-        animFails++;
-      }
-    } catch (e) {
-      animFails++;
-      pushErr(`anim ${type}: ${e instanceof Error ? e.message : String(e)}`);
-    }
-  }
-  if (card.photo && !animated) {
-    r = await apiSendPhoto(chat, card.text, card.photo, card.photoName ?? "flowradar-signal.png");
-    if (!r.ok) {
-      // photo failed (size/network) — retry once as plain HTML text so the
-      // alert still lands; banner is presentation, the message is the payload
-      r = await apiCall<unknown>("sendMessage", { chat_id: chat, text: card.text.slice(0, 3800), parse_mode: "HTML", disable_web_page_preview: true });
-    }
-  } else if (!card.photo && !animated) {
-    r = await apiCall<unknown>("sendMessage", { chat_id: chat, text: card.text.slice(0, 3800), parse_mode: "HTML", disable_web_page_preview: true });
-  }
-  const operatorOk = !!(r && r.ok);
-  if (operatorOk) {
-    sentCount++;
-    lastSentAt = Date.now();
-  } else {
-    failCount++;
-    pushErr(`${type}: ${r?.error ?? "?"}`);
-    console.error(`[NOTIFY] telegram relay send failed (${type}): ${r?.error ?? "?"}`);
-  }
-  let channelOk = true;
-  // v12.8 — operator order «کانال چرخه‌ی کامل عمر سیگنال را نشان دهد»:
-  // mirror EVERY final card (exactly what the operator chat got) to the
-  // public signal channel — birth, rungs, stop, expiry, extension, afterlife.
-  // relaySignalEvent's entry gate already restricts this to RELAYABLE_TYPES;
-  // NOTE: rides on the operator chat being resolvable (resolved + persisted
-  // for weeks) — unresolved-chat pending state skips the mirror too, by
-  // design (one health gate).
-  if (signalChannelEnv()) { // v13.0 dynamic — revive without restart when .env self-heals
-    try {
-      await mirrorCardToChannel(card);
-    } catch (e) {
-      channelOk = false;
-      chFailCount++;
-      pushErr(`channel: ${e instanceof Error ? e.message : String(e)}`);
-    }
-  }
-  return { operatorOk, channelOk, chatPending: false };
-}
-
-/** Fire-and-forget relay — NEVER await this from the engine hot path. v12.9:
- * confirmed live deliveries advance the persisted outbox cursor so the
- * restart sweeper never re-delivers them. */
+/** Fire-and-forget relay — NEVER await this from the engine hot path. */
 export function relaySignalEvent(type: string, symbol: string | null, message: string, signalId?: string | null): void {
   // v10.20 PUMP/DUMP BAN (operator mandate) — swallow banned types at the
   // choke point, count honestly, never touch Telegram with them.
@@ -913,35 +471,113 @@ export function relaySignalEvent(type: string, symbol: string | null, message: s
     return;
   }
   if (!relayArmed() || !RELAYABLE_TYPES.has(type)) return;
-  scheduleReplaySweep(); // v12.9: lazily arm the outbox sweeper on first engine use
-  void deliverSignalEvent(type, symbol, message, signalId ?? null)
-    .then(async (res) => {
-      if (!res.operatorOk) return; // failed live send → cursor stays → the sweeper retries in order
-      try {
-        // Advance past the OLDEST matching journal row still after the cursor:
-        // identical re-fires create several rows, and the cursor must walk them
-        // one by one — never jump over an undelivered sibling.
-        const cur = await readRelaySettingJson<RelayCursor>(RELAY_CURSOR_KEY);
-        const newer = cur
-          ? { OR: [{ createdAt: { gt: new Date(cur.at) } }, ...(cur.id ? [{ createdAt: new Date(cur.at), id: { gt: cur.id } }] : [])] }
-          : {};
-        const row = await db.signalEvent.findFirst({
-          where: {
-            type,
-            signalId: signalId ?? null,
-            ...(symbol ? { symbol } : { symbol: null }),
-            message,
-            ...(newer as object),
-          },
-          orderBy: { createdAt: "asc" },
-          select: { id: true, createdAt: true },
-        });
-        if (row) await advanceRelayCursor({ at: Number(row.createdAt), id: row.id, by: "live" });
-      } catch {
-        /* cursor is best-effort on the live path; the sweeper is the backstop */
+  void (async () => {
+    const chat = await resolveChat();
+    if (!chat) return; // honest pending state — not an error, no doomed send
+    // ── v12.0.1 TASK-46 relay policy ──
+    // ① RAW-CAL CREATED cards ship their banner again (v10.4 text-only strip
+    // removed — the whole book is capture-mode now, so MOST cards went bare).
+    // Flood valve: ≤6 CREATED photo posters/hour, overflow → text + counter.
+    // ② TTL_EXTENDED grant #1 → full photo card; grants ≥2 → compact one-line
+    // text (the hourly-grant spam the operator reported). Mechanics unchanged.
+    let rawCalTextOnly = false;
+    let ttlGrantNo = 0;
+    if (type === "CREATED" && signalId) {
+      const sig = await db.signal.findUnique({ where: { id: signalId }, select: { tags: true } }).catch(() => null);
+      if (sig?.tags?.includes("RAW-CAL")) {
+        const nowH = Date.now();
+        createdPhotoTimes = createdPhotoTimes.filter((t) => nowH - t < 3_600_000);
+        if (createdPhotoTimes.length >= 6) {
+          rawCalTextOnly = true; // flood valve — still honest, just lighter
+          createdPhotoBudgetSkip++;
+        } else createdPhotoTimes.push(nowH);
       }
-    })
-    .catch(() => undefined);
+    }
+    if (type === "TTL_EXTENDED" && signalId) {
+      const sig = await db.signal.findUnique({ where: { id: signalId }, select: { ttlExtensions: true } }).catch(() => null);
+      ttlGrantNo = sig?.ttlExtensions ?? 0;
+      const seen = ttlGrantRelaySeen.get(signalId);
+      if (seen !== undefined && ttlGrantNo <= seen) return; // defensive: identical grant re-fire → swallow
+      ttlGrantRelaySeen.set(signalId, ttlGrantNo);
+      if (ttlGrantRelaySeen.size > 64) {
+        const oldest = [...ttlGrantRelaySeen.entries()].sort((a, b) => a[1] - b[1])[0];
+        if (oldest) ttlGrantRelaySeen.delete(oldest[0]);
+      }
+    }
+    let card: RelayCard;
+    try {
+      card = await buildCard(type, symbol, message, signalId ?? null);
+    } catch {
+      card = { text: `📡 ${APP_NAME} ${type}${symbol ? ` · ${esc(symbol)}` : ""}\n${esc(message)}`.slice(0, 3800) };
+    }
+    if (rawCalTextOnly) card = { text: card.text }; // flood-valve overflow → text (v10.4 heritage, now budget-gated)
+    // TTL grant #2+: compact one-line text — the operator already got the full
+    // card for grant #1; hourly identical art posters were the reported spam.
+    if (type === "TTL_EXTENDED" && ttlGrantNo > 1) {
+      const sym = symbol ?? "?";
+      card = { text: `⏳ <b>TTL extended again</b> · ${esc(sym)} — grant #${ttlGrantNo} (same setup still near its rung; full card was grant #1 · dashboard shows the live mark)` };
+    }
+    // v12.0.1 caption safety: Telegram REJECTS photo captions >1024 → the whole
+    // image send fails → text fallback (another imageless card). Compact the
+    // blockquote to keep the caption under the cap.
+    if (card.photo && card.text.length > 1000) {
+      const m = card.text.match(/<blockquote>[\s\S]*?<\/blockquote>/);
+      if (m) {
+        const room = 1000 - (card.text.length - m[0].length);
+        if (room > 40) {
+          const inner = m[0].slice(12, -14);
+          card = { ...card, text: card.text.replace(m[0], `<blockquote>💬 ${inner.slice(0, Math.max(0, room - 30))}…</blockquote>`) };
+        } else card = { ...card, text: card.text.replace(m[0], "") };
+      }
+      if (card.text.length > 1000) card = { ...card, text: card.text.slice(0, 1000) };
+    }
+    let r: { ok: boolean; error?: string };
+    // v10.20 ANIMATED OUTCOME CARDS — TP1/TP2/TP3 first try the 12-frame
+    // glow-pulse MP4 (budget-guarded); any miss degrades to the static photo.
+    let animated = false;
+    if (card.photo && card.bannerSpec && ANIMATED_TYPES.has(type) && animBudgetOk()) {
+      try {
+        const frames = await renderAnimFrames(card.bannerSpec);
+        const mp4 = await encodeAnimMp4(frames);
+        if (mp4) {
+          const mp4Name = `${(card.photoName ?? "flowradar-signal.png").replace(/\.png$/i, "")}.mp4`;
+          const a = await apiSendAnimation(chat, card.text, mp4, mp4Name);
+          if (a.ok) {
+            animated = true;
+            animSent++;
+            animTimes.push(Date.now());
+            r = { ok: true };
+          } else {
+            animFails++;
+            pushErr(`anim ${type}: ${a.error}`);
+          }
+        } else {
+          animFails++;
+        }
+      } catch (e) {
+        animFails++;
+        pushErr(`anim ${type}: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+    if (card.photo && !animated) {
+      r = await apiSendPhoto(chat, card.text, card.photo, card.photoName ?? "flowradar-signal.png");
+      if (!r.ok) {
+        // photo failed (size/network) — retry once as plain HTML text so the
+        // alert still lands; banner is presentation, the message is the payload
+        r = await apiCall<unknown>("sendMessage", { chat_id: chat, text: card.text.slice(0, 3800), parse_mode: "HTML", disable_web_page_preview: true });
+      }
+    } else if (!card.photo && !animated) {
+      r = await apiCall<unknown>("sendMessage", { chat_id: chat, text: card.text.slice(0, 3800), parse_mode: "HTML", disable_web_page_preview: true });
+    }
+    if (r.ok) {
+      sentCount++;
+      lastSentAt = Date.now();
+    } else {
+      failCount++;
+      pushErr(`${type}: ${r.error}`);
+      console.error(`[NOTIFY] telegram relay send failed (${type}): ${r.error}`);
+    }
+  })();
 }
 
 /** v6.3: module-state primer — Next dev compiles each route bundle separately,
@@ -949,7 +585,6 @@ export function relaySignalEvent(type: string, symbol: string | null, message: s
  * engine's copy already resolved the chat. Call before reading relayHealth(). */
 export async function primeRelayState(): Promise<void> {
   await resolveChat();
-  scheduleReplaySweep(); // v12.9: route-copy priming also arms the outbox sweeper (lease prevents multi-copy double-sweep)
 }
 
 /** Operator-initiated proof: send an arbitrary line to the resolved chat. */
@@ -1057,7 +692,7 @@ export async function sendSampleCards(): Promise<{ ok: boolean; error?: string; 
     try {
       const text = `🧪 <b>SAMPLE — CARD FORMAT PROOF</b>\n\n${composeSignalText(type, sig, msg)}`;
       const banner = BANNER_STATUS[type];
-      let r: { ok: boolean; error?: string } | null = null;
+      let r: { ok: boolean; error?: string };
       const serial = `NX-${String(sig.serial).padStart(4, "0")}`;
       const pnl = sig.pnlPercent ?? 0;
       const photo = banner
@@ -1094,29 +729,6 @@ export async function sendSampleCards(): Promise<{ ok: boolean; error?: string; 
   const okAll = results.every((r) => r.endsWith("OK"));
   if (okAll) { sentCount += samples.length; lastSentAt = Date.now(); } else failCount += results.filter((r) => !r.endsWith("OK")).length;
   return { ok: okAll, detail: results.join(" · ") };
-}
-
-/** v13.0 operator proof for the SIGNAL-CHANNEL plane: one honest one-liner
- * through the SAME apiCall the lifecycle mirror uses — proves env target + bot
- * auth + channel reachability end-to-end in one shot (audit 2026-11-10:
- * sample cards only prove the operator plane; the channel plane had no lever). */
-export async function sendChannelTest(): Promise<{ ok: boolean; configured: boolean; error?: string }> {
-  const chan = signalChannelEnv();
-  if (!chan) return { ok: false, configured: false, error: "TELEGRAM_SIGNAL_CHANNEL unset — mirror dormant (self-heal re-scans .env every 30s)" };
-  const r = await apiCall<unknown>("sendMessage", {
-    chat_id: chan,
-    text: `🧪 <b>${APP_NAME} — SIGNAL-CHANNEL TEST</b>\n${new Date().toISOString()} — mirror plane armed; full lifecycle cards (CREATED/TP1-3/SL/TTL/AFTERLIFE) mirror here.`,
-    parse_mode: "HTML",
-    disable_web_page_preview: true,
-  });
-  if (r?.ok) {
-    chSentCount++;
-    chLastSentAt = Date.now();
-  } else {
-    chFailCount++;
-    pushErr(`channeltest: ${r?.error ?? "?"}`);
-  }
-  return { ok: !!r?.ok, configured: true, error: r && !r.ok ? String(r.error) : undefined };
 }
 
 // ── v6.2.2 AUTO-DISCOVER (operator round) ─────────────────────────────────
@@ -1176,7 +788,7 @@ export function ensureAutoDiscover(): void {
           return;
         }
         const r = await discoverChat();
-        if (r && r.ok) {
+        if (r.ok) {
           clearInterval(timer);
           autoDiscoverTimer = null;
           const proof = await sendDirect(

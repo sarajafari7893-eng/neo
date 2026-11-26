@@ -456,12 +456,6 @@ if [ -n "$PASS" ]; then
   ENV_VER_COUNT=$(ls -1 "$ENVDIR"/env-*.enc 2>/dev/null | wc -l)
 fi
 
-# ── (2) TBENV — RETIRED 2026-11-05 ──────────────────────────────────────────
-# toobit-bridge/.env versioned backup is gone with the module: TOOBIT EXEC BRIDGE
-# was decommissioned by operator mandate (trace 1a1a8ea4186c6571); account
-# flattened, keys purged. The API key must be revoked in the Toobit panel.
-TBENV_STATUS="RETIRED (bridge removed 2026-11-05)"
-
 # manifest for the UI (what /api/backup GET reads — legacy fields preserved, new fields added)
 cat > "$BACKUPS/latest.json" <<EOF
 {
@@ -472,8 +466,7 @@ cat > "$BACKUPS/latest.json" <<EOF
   "offsite": "$OFFSITE_STATUS",
   "channel": "$CHANNEL_STATUS",
   "s3": "$S3_STATUS",
-  "tbenv": "$TBENV_STATUS",
-  "includes": ["src", "prisma", "mini-services", "docs", "scripts", ".zscripts", "Caddyfile", ".env", "mini-services/toobit-bridge/.env (AES-256 tbenv-* + offsite)", "worklog.md", "db/custom.db", "MANIFEST.json", "calibration-latest.json", ".data/shadow-veto.jsonl", ".data/shadow-veto.jsonl.old (rotated ring, when present)", ".data/shadow-veto-telemetry.json", ".data/shadow-veto-telemetry.jsonl", ".data/shadow-veto-latest.json", ".data/gate-journal.jsonl", ".data/rawcal-telemetry.jsonl", ".data/fourpack-journal.jsonl", ".data/fourpack-journal.jsonl.old (rotated ring, when present)", ".data/fourpack-latest.json"],
+  "includes": ["src", "prisma", "mini-services", "docs", "scripts", ".zscripts", "Caddyfile", ".env", "worklog.md", "db/custom.db", "MANIFEST.json", "calibration-latest.json", ".data/shadow-veto.jsonl", ".data/shadow-veto.jsonl.old (rotated ring, when present)", ".data/shadow-veto-telemetry.json", ".data/shadow-veto-telemetry.jsonl", ".data/shadow-veto-latest.json", ".data/gate-journal.jsonl", ".data/rawcal-telemetry.jsonl", ".data/fourpack-journal.jsonl", ".data/fourpack-journal.jsonl.old (rotated ring, when present)", ".data/fourpack-latest.json"],
   "walStatus": "$WAL_STATUS",
   "calibrationStatus": "$CAL_STATUS",
   "encrypted": "$ENC_STATUS",

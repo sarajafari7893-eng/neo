@@ -79,11 +79,8 @@ export async function GET() {
     // auxiliary status calls: never let a radar/domain hiccup kill the pulse
     const scanDomain = await getScanDomain().catch(() => null);
 
-    // v14.0 — per-plane health across the FOUR Binance planes of the consensus
-    // sweep persisted on assets (BINANCE / BINANCE-SPOT / BINANCE-FUTWS /
-    // BINANCE-GCP) — one exchange, four independent network paths.
-    // v14.1 — venue ⑤ TOOBIT: the REAL second exchange (public perp board).
-    const exchanges = ["BINANCE", "BINANCE-SPOT", "BINANCE-FUTWS", "BINANCE-GCP", "TOOBIT"].map((venue) => {
+    // derive per-venue health from the latest consensus sweep persisted on assets
+    const exchanges = ["BINANCE", "OKX", "BYBIT", "HYPERLIQUID"].map((venue) => {
       if (venue === "BINANCE") return { venue, ok: feedStatus.source === "LIVE" || feedStatus.source === "STALE", latencyMs: feedStatus.latencyMs };
       const withVenue = assets.find((a) => {
         if (!a.exchanges) return false;

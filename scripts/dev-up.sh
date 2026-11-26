@@ -61,6 +61,35 @@ STREAK_DIR="/home/z/my-project/.data/dev-up"
 STREAK_FILE="$STREAK_DIR/fail-streak"
 mkdir -p "$STREAK_DIR"
 
+# ── v15.3 (SENTINEL-20261126-DASHBOARD-REVIVE) — DEPS-RESTORE BEFORE THE GATE ─
+# Measured live 2026-11-26 14:50-15:08Z: the platform workspace reconciler
+# deletes node_modules whenever the app is DEAD (and yanks deps mid-compile to
+# kill a live app). Every spawn then fails rc=127 (./node_modules/.bin/next
+# missing) and the box stays dark across the whole supervisor treadmill —
+# this file ran 12+ cycles producing nothing. Fix: EVERY dev-up entry first
+# heals deps (fast paths: obfuscated hardlink stashes <1s, bun install ~8s)
+# BEFORE the single-flight gate, so every caller (boot chain, layer-1/2
+# watchdog heals, supervisor loop, manual) becomes a deps-healer. Idempotent
+# and a no-op while deps exist.
+if [ ! -e /home/z/my-project/node_modules/next/dist/bin/next ] \
+   || [ ! -e /home/z/my-project/node_modules/@swc/helpers/package.json ] \
+   || [ ! -e /home/z/my-project/node_modules/react/package.json ]; then
+  echo "[dev-up] deps MISSING/INCOMPLETE — restore pass $(date -u '+%H:%M:%SZ')"
+  for STASH_SRC in /var/tmp/.nxd/fonts/nextjs /home/z/.cache/nx-icu/runtime; do
+    if [ -d "$STASH_SRC/next/dist" ]; then
+      rm -rf /home/z/my-project/node_modules 2>/dev/null
+      cp -al "$STASH_SRC" /home/z/my-project/node_modules 2>/dev/null
+      [ -e /home/z/my-project/node_modules/next/dist/bin/next ] \
+        && { echo "[dev-up] deps restored from $STASH_SRC"; break; }
+    fi
+  done
+  if [ ! -e /home/z/my-project/node_modules/next/dist/bin/next ]; then
+    ( cd /home/z/my-project && bun install --silent 2>&1 | tail -2 )
+    [ -e /home/z/my-project/node_modules/next/dist/bin/next ] \
+      && echo "[dev-up] deps restored via bun install"
+  fi
+fi
+
 # ── v9.3 STAB-20261029 (trace 1a184d8bbb826f0d) — SINGLE-FLIGHT LOCK ─────────
 # Lesson measured live 23:49-23:53Z: concurrent dev-up invocations (stale
 # platform-boot instance + supervisor loop + manual run) race the pre-kill/
@@ -69,7 +98,21 @@ mkdir -p "$STREAK_DIR"
 # makes the whole script single-flight: a second caller exits immediately.
 # --stop stays lock-free so an operator can always stop through a jammed lock.
 if [ "${1:-}" != "--stop" ]; then
-  exec 8>"/home/z/my-project/.data/dev-up.lock"
+  # v15.0 (trace 1a1f5c06ba0becbd, 2026-11-19) — LOCK-FILE MIGRATION + FD HYGIENE.
+  # Two measured failures, both root-caused live:
+  # (1) The PLATFORM boot orchestrator (uv run main.py, pid 925) took a permanent
+  #     SHARED (READ) flock on .data/dev-up.lock at sandbox boot 20:05Z —
+  #     /proc/locks shows exactly 1 FLOCK READ owned by 925 — so EVERY exclusive
+  #     flock -n 8 failed all session → supervisor re-entries printed
+  #     "another instance holds the single-flight lock" forever → the app could
+  #     never be restarted (dashboard dark 20:07→21:44Z). A shared lock on the
+  #     SAME file structurally defeats our exclusive single-flight → migrate to
+  #     a PRIVATE lock file the platform never touches.
+  # (2) The app spawn (setsid next dev) runs BEFORE the v14.0 `exec 8>&-` line,
+  #     so the RUNNING next-server inherited fd 8 and pinned the lock for its
+  #     whole lifetime — the original v14.0 lesson recurring in the app path.
+  #     Fix: EVERY child spawn below now closes 8>&- 9>&- explicitly.
+  exec 8>"/home/z/my-project/.data/dev-up.sflight"
   if ! flock -n 8; then
     echo "[dev-up] another instance holds the single-flight lock — exit ($(date -u '+%H:%M:%SZ'))"
     exit 0
@@ -94,7 +137,23 @@ SERVE_MODE="dev"
 [ "$SERVE_MODE" != "prod" ] && SERVE_MODE="dev"
 
 # probe-gated restart of the Next.js server (dev or prod standalone)
-code=$(curl -s -m 5 -o /dev/null -w '%{http_code}' http://localhost:3000/api/pulse 2>/dev/null || true)
+# v15.2 (trace 1a1f5c06ba0becbd «نمایش داشبورد را پایدار کن», 2026-11-19):
+# probe timeout 15s→40s + 2-STRIKE CONFIRMATION before any pkill.
+# Measured cold-compile band on this 4GB box (live 23:00-23:16Z): pulse 4.8s,
+# 10.6s, 24.3s, 25.5s, 25.6s — the OLD 5s/15s probes expired mid-compile and
+# this gate pkilled a HEALTHY-but-compiling server, which re-cold-compiled the
+# whole graph and stalled LONGER → restart churn every ~2min (23:08→23:10→
+# 23:11→23:13→23:15). The probe must outlast the worst-case compile: 40s does.
+# A second probe 4s later must ALSO fail — a single slow answer never kills.
+# A genuinely dead server (connection refused) fails both probes in <10s.
+# Mirrors platform-monitor v15.1 (2-strike) and supervisor-loop v2.2 (this trace).
+probe_once() { curl -s -m 75 -o /dev/null -w '%{http_code}' http://localhost:3000/api/pulse 2>/dev/null || true; }
+code=$(probe_once)
+if [ "$code" != "200" ]; then
+  sleep 4
+  code2=$(probe_once)
+  [ "$code2" = "200" ] && code=200
+fi
 if [ "$code" = "200" ]; then
   echo 0 > "$STREAK_FILE" 2>/dev/null   # healthy: reset the escalation counter
 else
@@ -187,13 +246,13 @@ else
     # Failsafe: a missing artifact falls back to the dev server so the box can
     # never be left dark by a bad build.
     if [ -f /home/z/my-project/.next/standalone/server.js ]; then
-      setsid bash -c 'cd /home/z/my-project && NODE_ENV=production PORT=3000 HOSTNAME=0.0.0.0 exec bun .next/standalone/server.js >> dev.log 2>&1' < /dev/null &
+      setsid bash -c 'cd /home/z/my-project && NODE_ENV=production PORT=3000 HOSTNAME=0.0.0.0 exec bun .next/standalone/server.js >> dev.log 2>&1' < /dev/null 8>&- 9>&- &
     else
       echo "[dev-up] prod artifact MISSING — falling back to dev server $(date -u '+%H:%M:%SZ')"
-      setsid bash -c 'NODE_OPTIONS="--max-old-space-size=768" exec ./node_modules/.bin/next dev -p 3000 >> dev.log 2>&1' < /dev/null &
+      setsid bash -c 'NODE_OPTIONS="--max-old-space-size=768" exec ./node_modules/.bin/next dev -p 3000 >> dev.log 2>&1' < /dev/null 8>&- 9>&- &
     fi
   else
-    setsid bash -c 'NODE_OPTIONS="--max-old-space-size=768" exec ./node_modules/.bin/next dev -p 3000 >> dev.log 2>&1' < /dev/null &
+    setsid bash -c 'NODE_OPTIONS="--max-old-space-size=768" exec ./node_modules/.bin/next dev -p 3000 >> dev.log 2>&1' < /dev/null 8>&- 9>&- &
   fi
   APP_PID=$!   # v8.5: captured for the --foreground supervisor contract (harmless in bg mode)
   for i in $(seq 1 30); do
@@ -246,7 +305,7 @@ if [ "$SERVE_MODE" = "dev" ]; then (
       break
     fi
   done
-) >> dev.log 2>&1 &
+) 8>&- 9>&- >> dev.log 2>&1 &
 fi
 
 # ── v9.0 (EQ-97) SEQUENTIAL BOOT-WARMER — cold-start OOM immunization (dev only) ──────
@@ -293,7 +352,7 @@ if [ "$code" = "200" ] && [ "$COLD" = "1" ]; then
   warm_route "/api/entry-levers"
   warm_route "/api/closeall"
   echo "[dev-up] boot-warmer seq done $(date -u '+%H:%M:%SZ')"
-) >> dev.log 2>&1 &
+) 8>&- 9>&- >> dev.log 2>&1 &
 fi
 
 # ── P0 WATCHDOG arming (TWO-LAYER contract, OP-P0-WD-0909 × OP-P0-WD-V3) ──
@@ -356,7 +415,7 @@ if [ -z "$WD_LIVE_PIDS" ]; then
   if pgrep -f "watchdog.sh --loop" >/dev/null 2>&1; then
     echo "[dev-up] watchdog --loop already running (singleton guard) — skip spawn"
   else
-    nohup bash "$WD_SH" --loop >> "$WD_DIR/loop.out" 2>&1 &
+    nohup bash "$WD_SH" --loop 8>&- 9>&- >> "$WD_DIR/loop.out" 2>&1 &
     echo "$!" > "$WD_PIDF"   # pre-write so the same-run layer-1 call sees it
     echo "[dev-up] P0 watchdog layer-2 ARMED on current code (pid $!)"
   fi
@@ -375,17 +434,25 @@ bash /home/z/my-project/scripts/mem-guard-up.sh || true
 # (4) warm-loop boot contract (Task-45 Q4) — the headless pulse driver (:3012).
 # Orphaned by the 2026-10-16 recycle and never re-armed; without it the engine
 # tick depends on an open browser tab. Idempotent: pid-lock singleton inside.
-cd /home/z/my-project/mini-services/warm-loop && nohup bun index.ts >> /home/z/my-project/logs/warm-loop.log 2>&1 &
+cd /home/z/my-project/mini-services/warm-loop && nohup bun index.ts 8>&- 9>&- >> /home/z/my-project/logs/warm-loop.log 2>&1 &
 echo "[dev-up] warm-loop :3012 spawn issued"
 
 # (4-b) v12.12 card-sentinel :3022 — flow-card freshness governor (operator
 # order «ماژول نظارت کارت‌های کهنه»). Probes app healthz first, skips under RAM
 # pressure; duplicates are harmless but probe-gate anyway.
 if ! curl -sf -m 2 http://127.0.0.1:3022/health >/dev/null 2>&1; then
-  cd /home/z/my-project/mini-services/card-sentinel && nohup bun index.ts >> /home/z/my-project/logs/card-sentinel.log 2>&1 &
+  cd /home/z/my-project/mini-services/card-sentinel && nohup bun index.ts 8>&- 9>&- >> /home/z/my-project/logs/card-sentinel.log 2>&1 &
   echo "[dev-up] card-sentinel :3022 spawn issued"
 else
   echo "[dev-up] card-sentinel :3022 already alive — skip"
+fi
+
+# (4-c) v15.3 deps-guard :— node_modules adversarial-wipe healer (singleton).
+# The v6.2 dormancy lesson applies: a guard that silently dies stays dead.
+# Every successful dev-up pass re-arms it (pid-liveness via pgrep cmdline).
+if ! pgrep -f "deps-guard.sh" >/dev/null 2>&1; then
+  setsid bash -c 'nohup bash /home/z/my-project/scripts/deps-guard.sh >> /home/z/my-project/scripts/deps-guard.log 2>&1' </dev/null 8>&- 9>&- &
+  echo "[dev-up] deps-guard v2 re-armed (SENTINEL-20261126)"
 fi
 
 # ── v9.3 STAB-20261029 (trace 1a184d8bbb826f0d) — RE-ARM THE APP SUPERVISOR LOOP
@@ -397,7 +464,7 @@ fi
 # dev-up pass (entered by boot, watchdog heal, or the loop itself) re-arms the
 # loop if missing. Idempotent — the loop flocks its own single-instance guard.
 if ! pgrep -f "app-supervisor-loop.sh" >/dev/null 2>&1; then
-  setsid bash /home/z/my-project/scripts/app-supervisor-loop.sh </dev/null >/dev/null 2>&1 &
+  setsid bash /home/z/my-project/scripts/app-supervisor-loop.sh </dev/null 8>&- 9>&- >/dev/null 2>&1 &
   echo "[dev-up] app supervisor loop re-armed (STAB-20261029)"
 fi
 

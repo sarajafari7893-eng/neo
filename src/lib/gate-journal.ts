@@ -93,13 +93,12 @@ export type GateName =
   | "CHASE-EXTREME" // v12.8 AUDIT-20261023 — ≥1.5×ATR extended burst + RSI extreme refused outright (NX-3013 top-tick RSI 87.4 / NX-3020 hole-chase)
   | "REENTRY-WHIPSAW" // v12.8 AUDIT-20261023 — opposite-direction flip <240m after a net-negative stop refused for all machine lanes (NX-3014→NX-3020 −61.2%×2)
   | "FLUSH-EXHAUSTION" // v12.9 AUDIT-NX3046 — deploying WITH a ≥max(12%,1.2×ATR%) 4-bar cascade / SHORT below 20-bar low in a live waterfall / implied SL < 0.5×max-3-bar-range (NX-3046 −40.4% terminal-tick, dead in 23.4s)
-  | "SINGLE-VENUE" // v12.9 AUDIT-NX3046 — only ONE live venue: cross-venue confirmation impossible, machine deploy refused (single-plane tape doctrine); operator-forced passes tagged
+  | "SINGLE-VENUE" // v12.9 AUDIT-NX3046 — only ONE live venue: cross-venue confirmation impossible, machine deploy refused (JCT 12 deploys/48h on BYBIT-only tape); operator-forced passes tagged
   | "CASCADE-FREEZE" // v12.10 — price-ws tick-velocity freeze: ≥±5% inside a 60s sliding window (flush OR squeeze) freezes BOTH-direction deploys 10min (L3 liq-stream layer is structurally silent for microcaps; NX-3046 was detected 359s late)
   | "STALE-BAR" // v12.10 — stale detection inputs × hot tape: flow-board age beyond calibrated budgets while the live 4-bar tape is moving (NX-3046: 281s stale × −40% flush; NX-3040: 9.7min stale) — refusing to decide on dead structure
   | "STALE-CHASE" // v13.0 CORE-REVERT — data-driven late-entry filter: trigger-event age >20m or |move since event| >4.5% refuses (W42 buckets: 10-20m 5/5 SL; BIRB +10.63%/JCT +5.13% at entry both SL)
   | "REARM-BRAKE-BE" // v13.0 CORE-REVERT — BE-banked SL re-entry window 45m (BIRB 15:22 +4.67% BE-SL → 15:34 re-entry SL −61.2% 12min later)
-  | "SURROGATE-BREAKOUT" // v13.1 P0 data-quality gate — BREAKOUT refused while the flow tape is surrogate (non-BINANCE bridge): native BREAKOUT WR 64% +$110.45 (n=188) vs surrogate WR 35% −$33.07 (n=31), 15-day ledger audit 2026-10-25
-  | "TRIGGER-MTF"; // v13.3 ch.7-ج — EVENT-TRIGGER spawn refused when the MTF flow board's net leans against the trade (NX-3247 top-tick forensics; trigger lane only)
+  | "SURROGATE-BREAKOUT"; // v13.1 P0 data-quality gate — BREAKOUT refused while the flow tape is surrogate (non-BINANCE bridge): native BREAKOUT WR 64% +$110.45 (n=188) vs surrogate WR 35% −$33.07 (n=31), 15-day ledger audit 2026-10-25
 
 export interface GateBlock {
   at: number;
@@ -243,15 +242,6 @@ export async function gateJournalRefresh(maxAgeMs = REFRESH_MIN_INTERVAL_MS): Pr
   if (refreshing) return refreshing;
   refreshing = (async () => {
     try {
-      // VERDICT-CORE audit 2026-11-05 — COLD-GENERATION READ FIX: hydrate() only
-      // ran on WRITE paths, so a freshly-compiled read generation started with
-      // readPos=0 and tailed the file's OLDEST bytes (11-03 history) — 12h-window
-      // stats came back EMPTY and the core wrote "journal is empty" (observed live
-      // on cycle #1412's first POST). Hydrate cold generations here (once, single-
-      // flight, readPos=file-size) so the first refresh already sees the freshest
-      // 6000-line history. Warm generations (hydratedAt>0) are untouched — re-running
-      // hydrate on them would re-push tail records into the rings.
-      if (hydratedAt === 0) await hydrate();
       const st = await stat(FILE).catch(() => null);
       if (!st) return;
       if (st.size < readPos) readPos = 0; // rotated — restart the tail on the fresh file
@@ -430,14 +420,6 @@ export interface GateStats {
   blocks: Array<{ gate: GateName; count: number; lastReason: string }>;
   deploys: number;
   avgDeployScore: number | null;
-  // VERDICT-CORE audit 2026-11-05 (operator mandate) — ring-honesty disclosure:
-  // the block ring caps at BLOCK_CAP; with heavy churn (~8-11 blocks/min in chop)
-  // it holds only ~60-90 min of accepted records, so per-gate counts are a
-  // RECENT-CHURN SNAPSHOT (and dedup-topology-skewed: single-key gates like
-  // MEMORY compress, multi-symbol gates like REGIME fan out) — never a true
-  // window census. Consumers (AI core narrative) MUST disclose this.
-  blocksRingSize: number;
-  blocksRingSaturated: boolean;
 }
 
 export function gateStats(windowHours = 6): GateStats {
@@ -503,8 +485,6 @@ export function gateStats(windowHours = 6): GateStats {
     blocks: [...blockMap.entries()].map(([gate, e]) => ({ gate, count: e.count, lastReason: e.lastReason })).sort((a, b) => b.count - a.count),
     deploys: deploysWin.length,
     avgDeployScore: deploysWin.length ? Number((deploysWin.reduce((a, d) => a + Math.abs(d.score), 0) / deploysWin.length).toFixed(1)) : null,
-    blocksRingSize: blocks.length,
-    blocksRingSaturated: blocks.length >= BLOCK_CAP,
   };
 }
 
@@ -527,9 +507,7 @@ export async function gateJournalForCore(windowHours = 12, maxBoundary = 8): Pro
   stats: GateStats;
   boundaryFiles: string[];
   blockFiles: string[];
-  boundarySamples: GateSample[]; // raw rows behind boundaryFiles — deterministic lesson verification (VERDICT-CORE audit 2026-11-05)
 }> {
-  await gateJournalReady(); // hydrate cold generations BEFORE tailing (audit 2026-11-05: read-path emptiness fix)
   await gateJournalRefresh(0); // grounding consumers always see fresh rings
   const stats = gateStats(windowHours);
   const nearGate = samples
@@ -552,7 +530,7 @@ export async function gateJournalForCore(windowHours = 12, maxBoundary = 8): Pro
     `${stats.samples} threshold verdicts in ${windowHours}h: ${stats.byBand.PASS} passed, ${stats.byBand.BOUNDARY} landed in the boundary band (gap −8..0, ${stats.boundary?.sharePct ?? 0}% of evaluations, avg gap ${stats.boundary?.avgGap ?? "n/a"}), ${stats.byBand.REJECT} rejected outright.`,
     `Dominant confirm factor: ${topConfirm ? `${topConfirm.factor} (×${topConfirm.count}, avg ${topConfirm.avgVote})` : "n/a"}. Dominant oppose factor: ${topOppose ? `${topOppose.factor} (×${topOppose.count}, avg ${topOppose.avgVote})` : "n/a"}.`,
     `Threshold modifiers live: ${stats.thrModifiers.map((t) => `${t.name}×${t.count} avg ${t.avg >= 0 ? "+" : ""}${t.avg}`).join(" · ") || "none"}.`,
-    `Hard blocks: ${stats.blocks.map((b) => `${b.gate}×${b.count}`).join(" · ") || "none"}.${stats.blocksRingSaturated ? ` [BLOCK-RING SATURATED at ${stats.blocksRingSize} — these counts are the newest ~${stats.blocksRingSize} accepted records only (≈60-90min of churn), NOT the full ${windowHours}h census; single-key gates (MEMORY) are dedup-compressed while multi-symbol gates (REGIME) fan out — treat as recent-churn snapshot]` : ""} Deployed: ${stats.deploys}${stats.avgDeployScore !== null ? ` (avg |score| ${stats.avgDeployScore})` : ""}.`,
+    `Hard blocks: ${stats.blocks.map((b) => `${b.gate}×${b.count}`).join(" · ") || "none"}. Deployed: ${stats.deploys}${stats.avgDeployScore !== null ? ` (avg |score| ${stats.avgDeployScore})` : ""}.`,
   ].join(" ");
-  return { narrative, stats, boundaryFiles, blockFiles, boundarySamples: nearGate };
+  return { narrative, stats, boundaryFiles, blockFiles };
 }
