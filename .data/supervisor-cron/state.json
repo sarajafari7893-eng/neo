@@ -2,33 +2,33 @@
  "ver": "supervisor-cron 1.6.0",
  "pid": 2253,
  "startedAt": "2026-11-26T15:40:03.906Z",
- "updatedAt": "2026-11-26T18:27:17.867Z",
+ "updatedAt": "2026-11-26T19:17:16.307Z",
  "jobs": {
   "sweep": {
-   "lastRunAt": 1795717635252,
-   "nextRunAt": 1795717635252,
+   "lastRunAt": 1795720635253,
+   "nextRunAt": 1795720635252,
    "lastStatus": "ok",
-   "lastDurationMs": 2615,
+   "lastDurationMs": 1054,
    "lastError": null,
-   "runs": 1285,
+   "runs": 1290,
    "failures": 0
   },
   "progress": {
-   "lastRunAt": 1795697835254,
-   "nextRunAt": 1795719435254,
+   "lastRunAt": 1795719435257,
+   "nextRunAt": 1795741035257,
    "lastStatus": "ok",
-   "lastDurationMs": 1364,
+   "lastDurationMs": 283,
    "lastError": null,
-   "runs": 194,
+   "runs": 195,
    "failures": 0
   },
   "review": {
-   "lastRunAt": 1795676235255,
-   "nextRunAt": 1795719435255,
+   "lastRunAt": 1795719435258,
+   "nextRunAt": 1795762635258,
    "lastStatus": "ok",
-   "lastDurationMs": 2395,
+   "lastDurationMs": 10649,
    "lastError": null,
-   "runs": 120,
+   "runs": 121,
    "failures": 0
   },
   "watch": {
@@ -41,13 +41,13 @@
    "failures": 0
   },
   "backup": {
-   "lastRunAt": 1795708635278,
-   "nextRunAt": 1795719435278,
-   "lastStatus": "ok",
-   "lastDurationMs": 19419,
-   "lastError": null,
-   "runs": 73,
-   "failures": 1
+   "lastRunAt": 1795719435279,
+   "nextRunAt": 1795730235279,
+   "lastStatus": "error",
+   "lastDurationMs": 134,
+   "lastError": "exit 1: SNAPSHOT ABORTED — rootfs sanity floor (3MB free < 50MB); runtime writes at risk.",
+   "runs": 74,
+   "failures": 2
   },
   "digest": {
    "lastRunAt": 1795714935906,
@@ -59,29 +59,29 @@
    "failures": 0
   },
   "keepwarm": {
-   "lastRunAt": 1795717635252,
-   "nextRunAt": 1795717935252,
-   "lastStatus": "ok",
-   "lastDurationMs": 1845,
-   "lastError": null,
-   "runs": 2493,
-   "failures": 167
+   "lastRunAt": 1795720635253,
+   "nextRunAt": 1795720935252,
+   "lastStatus": "error",
+   "lastDurationMs": 122,
+   "lastError": "HEARTBEAT COLD app:3000 63ms streak=5",
+   "runs": 2503,
+   "failures": 175
   }
  },
  "lastSweep": {
-  "at": "2026-11-26T18:27:17.221Z",
+  "at": "2026-11-26T19:17:15.376Z",
   "verdict": "RED",
-  "reason": "sentinel verdict RED",
+  "reason": "app :3000 down",
   "services": {
    "app": {
-    "up": true,
-    "status": 200,
-    "ms": 1836
+    "up": false,
+    "status": 500,
+    "ms": 44
    },
    "liq": {
     "up": true,
     "status": 200,
-    "ms": 2
+    "ms": 0
    },
    "trade": {
     "up": true,
@@ -91,7 +91,7 @@
    "armor": {
     "up": true,
     "status": 200,
-    "ms": 3
+    "ms": 0
    },
    "watchdog": {
     "up": true,
@@ -106,12 +106,12 @@
    "ws": {
     "up": true,
     "status": 400,
-    "ms": 15
+    "ms": 1
    },
    "bridge": {
     "up": true,
     "status": 200,
-    "ms": 2
+    "ms": 0
    },
    "tbt": {
     "up": true,
@@ -120,6 +120,11 @@
    }
   },
   "anomalies": [
+   {
+    "class": "app-down",
+    "sev": "crit",
+    "msg": "app :3000 DOWN (HTTP 500) · healthz=500 → pulse fallback"
+   },
    {
     "class": "sentinel-red",
     "sev": "crit",
@@ -141,16 +146,16 @@
   },
   "streaks": {
    "wsDown": 0,
-   "stale": 17
+   "stale": 22
   }
  },
  "lastReview": {
-  "at": "2026-11-26T06:57:16.963Z",
-  "status": "llm_unavailable",
-  "verdict": null
+  "at": "2026-11-26T18:57:25.703Z",
+  "status": "ok",
+  "verdict": "RED"
  },
  "lastProgress": {
-  "at": "2026-11-26T12:57:16.617Z",
+  "at": "2026-11-26T18:57:15.540Z",
   "ok": true
  },
  "lastDigest": {
@@ -159,150 +164,24 @@
   "newN": 8
  },
  "lastKeepwarm": {
-  "at": "2026-11-26T18:27:17.097Z",
-  "ok": true,
-  "ms": 1845,
-  "bootAt": "2026-11-26T18:27:14.328Z",
-  "gitSha": "b86f891",
-  "coldStreak": 0
+  "at": "2026-11-26T19:17:15.375Z",
+  "ok": false,
+  "ms": 63,
+  "bootAt": null,
+  "gitSha": null,
+  "coldStreak": 5
  },
- "coldStreak": 0,
+ "coldStreak": 5,
  "alertLedger": {
-  "sentinel-red": 1795716435912,
+  "sentinel-red": 1795720636306,
   "review-llm-unavailable": 1795676236964,
-  "app-down": 1795712835513,
-  "data-stale": 1795717637867,
+  "app-down": 1795720636056,
+  "data-stale": 1795720035958,
   "tbt-doctrine-violation": 1793832478469
  },
  "wsDownStreak": 0,
- "staleStreak": 17,
+ "staleStreak": 22,
  "history": [
-  {
-   "id": "keepwarm",
-   "at": 1795708335253,
-   "status": "ok",
-   "durationMs": 23,
-   "detail": "HEARTBEAT OK 23ms boot=15:51:20Z sha=4a0b9ec"
-  },
-  {
-   "id": "keepwarm",
-   "at": 1795708635253,
-   "status": "ok",
-   "durationMs": 57,
-   "detail": "HEARTBEAT OK 57ms boot=15:57:04Z sha=4a0b9ec"
-  },
-  {
-   "id": "sweep",
-   "at": 1795708635252,
-   "status": "ok",
-   "durationMs": 149,
-   "detail": "RED: signal ledger stale — pipeline frozen"
-  },
-  {
-   "id": "backup",
-   "at": 1795708635278,
-   "status": "ok",
-   "durationMs": 19419,
-   "detail": "snapshot ok in 19s: SNAPSHOT OK — nexus-snapshot-20261126-155715.zip (43M) · 12 snapshots retained (max 12) · wal:VACUUM-COPY-CONSISTENT+CHECKPOINTED · cal:OK · enc:ENCRYPTED · off-site: DISABLED(oper"
-  },
-  {
-   "id": "keepwarm",
-   "at": 1795708935253,
-   "status": "ok",
-   "durationMs": 30,
-   "detail": "HEARTBEAT OK 30ms boot=16:00:37Z sha=580d2aa"
-  },
-  {
-   "id": "keepwarm",
-   "at": 1795709235253,
-   "status": "ok",
-   "durationMs": 47,
-   "detail": "HEARTBEAT OK 47ms boot=16:05:04Z sha=0c5baa9"
-  },
-  {
-   "id": "sweep",
-   "at": 1795709235253,
-   "status": "ok",
-   "durationMs": 279,
-   "detail": "RED: sentinel verdict RED"
-  },
-  {
-   "id": "keepwarm",
-   "at": 1795709535252,
-   "status": "error",
-   "durationMs": 2,
-   "detail": "HEARTBEAT COLD app:3000 1ms streak=1"
-  },
-  {
-   "id": "keepwarm",
-   "at": 1795709835252,
-   "status": "ok",
-   "durationMs": 26,
-   "detail": "HEARTBEAT OK 26ms boot=16:16:29Z sha=ddb4008"
-  },
-  {
-   "id": "sweep",
-   "at": 1795709835252,
-   "status": "ok",
-   "durationMs": 47,
-   "detail": "RED: sentinel verdict RED"
-  },
-  {
-   "id": "keepwarm",
-   "at": 1795710135252,
-   "status": "ok",
-   "durationMs": 53,
-   "detail": "HEARTBEAT OK 52ms boot=16:22:05Z sha=8ee7708"
-  },
-  {
-   "id": "keepwarm",
-   "at": 1795710435253,
-   "status": "ok",
-   "durationMs": 1572,
-   "detail": "HEARTBEAT OK 1572ms boot=16:27:14Z sha=8ee7708"
-  },
-  {
-   "id": "sweep",
-   "at": 1795710435253,
-   "status": "ok",
-   "durationMs": 1850,
-   "detail": "RED: sentinel verdict RED"
-  },
-  {
-   "id": "keepwarm",
-   "at": 1795710735253,
-   "status": "ok",
-   "durationMs": 363,
-   "detail": "HEARTBEAT OK 362ms boot=16:30:29Z sha=18c1525"
-  },
-  {
-   "id": "sweep",
-   "at": 1795711035252,
-   "status": "ok",
-   "durationMs": 160,
-   "detail": "RED: sentinel verdict RED"
-  },
-  {
-   "id": "keepwarm",
-   "at": 1795711035253,
-   "status": "ok",
-   "durationMs": 164,
-   "detail": "HEARTBEAT OK 163ms boot=16:36:57Z sha=18c1525"
-  },
-  {
-   "id": "keepwarm",
-   "at": 1795711335258,
-   "status": "ok",
-   "durationMs": 104,
-   "detail": "HEARTBEAT OK 104ms boot=16:41:12Z sha=81abe98"
-  },
-  {
-   "id": "keepwarm",
-   "at": 1795711635258,
-   "status": "ok",
-   "durationMs": 104,
-   "detail": "HEARTBEAT OK 104ms boot=16:46:32Z sha=81abe98"
-  },
   {
    "id": "sweep",
    "at": 1795711635258,
@@ -526,6 +405,132 @@
    "status": "ok",
    "durationMs": 2615,
    "detail": "RED: sentinel verdict RED"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1795717935258,
+   "status": "ok",
+   "durationMs": 50,
+   "detail": "HEARTBEAT OK 50ms boot=18:31:17Z sha=81d1cb4"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1795718235252,
+   "status": "error",
+   "durationMs": 2,
+   "detail": "HEARTBEAT COLD app:3000 0ms streak=1"
+  },
+  {
+   "id": "sweep",
+   "at": 1795718235252,
+   "status": "ok",
+   "durationMs": 297,
+   "detail": "RED: app :3000 down"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1795718535258,
+   "status": "error",
+   "durationMs": 1,
+   "detail": "HEARTBEAT COLD app:3000 0ms streak=2"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1795718835258,
+   "status": "error",
+   "durationMs": 2,
+   "detail": "HEARTBEAT COLD app:3000 1ms streak=3"
+  },
+  {
+   "id": "sweep",
+   "at": 1795718835258,
+   "status": "ok",
+   "durationMs": 257,
+   "detail": "RED: app :3000 down"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1795719135258,
+   "status": "ok",
+   "durationMs": 59,
+   "detail": "HEARTBEAT OK 59ms boot=18:52:05Z sha=81d1cb4"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1795719435253,
+   "status": "error",
+   "durationMs": 3,
+   "detail": "HEARTBEAT COLD app:3000 0ms streak=1"
+  },
+  {
+   "id": "sweep",
+   "at": 1795719435253,
+   "status": "ok",
+   "durationMs": 22,
+   "detail": "RED: app :3000 down"
+  },
+  {
+   "id": "backup",
+   "at": 1795719435279,
+   "status": "error",
+   "durationMs": 134,
+   "detail": "exit 1: SNAPSHOT ABORTED — rootfs sanity floor (3MB free < 50MB); runtime writes at risk."
+  },
+  {
+   "id": "progress",
+   "at": 1795719435257,
+   "status": "ok",
+   "durationMs": 283,
+   "detail": "sent 11 lines"
+  },
+  {
+   "id": "review",
+   "at": 1795719435258,
+   "status": "ok",
+   "durationMs": 10649,
+   "detail": "llm=ok"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1795719735253,
+   "status": "error",
+   "durationMs": 2,
+   "detail": "HEARTBEAT COLD app:3000 0ms streak=2"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1795720035253,
+   "status": "error",
+   "durationMs": 1,
+   "detail": "HEARTBEAT COLD app:3000 0ms streak=3"
+  },
+  {
+   "id": "sweep",
+   "at": 1795720035253,
+   "status": "ok",
+   "durationMs": 705,
+   "detail": "RED: app :3000 down"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1795720335252,
+   "status": "error",
+   "durationMs": 87,
+   "detail": "HEARTBEAT COLD app:3000 40ms streak=4"
+  },
+  {
+   "id": "keepwarm",
+   "at": 1795720635253,
+   "status": "error",
+   "durationMs": 122,
+   "detail": "HEARTBEAT COLD app:3000 63ms streak=5"
+  },
+  {
+   "id": "sweep",
+   "at": 1795720635253,
+   "status": "ok",
+   "durationMs": 1054,
+   "detail": "RED: app :3000 down"
   }
  ],
  "watchRuns": [

@@ -14,7 +14,7 @@
 // layers guard each other and this hook guards both. Fail-safe by contract:
 // never throws into the pulse path, throttled to one pass/minute, spawns
 // detached so guardians outlive app restarts.
-import { spawn } from "node:child_process";
+import { spawn, execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 
 const L1_LOCK = "/home/z/my-project/.data/p0-watchdog/lock.json";
@@ -53,6 +53,23 @@ function pidFromFile(path: string): number {
   }
 }
 
+/** v14.2 (2026-11-03 incident, operator recycle mandate): a PIDFILE-ONLY
+ * liveness guard is a phantom-spawner. The sandbox repo restore rewrote
+ * .data/watchdog/pid with a dead pid (3498); PID-REUSE then kept that pid
+ * "alive" for hours (kill(pid,0) hits a stranger), and the minute its new
+ * owner died this hook spawned a SECOND watchdog.sh --loop next to the real
+ * generation (two healers racing). The real singleton authority is the loop's
+ * CMDLINE — pgrep it before spawning. Fail-open: pgrep missing/erroring →
+ * fall back to the pidfile verdict. */
+function liveLoopPids(): number[] {
+  try {
+    const out = execFileSync("pgrep", ["-f", "watchdog.sh --loop"], { encoding: "utf8", timeout: 3000 });
+    return out.split("\n").map((l) => parseInt(l.trim(), 10)).filter((n) => Number.isFinite(n) && n > 0);
+  } catch {
+    return [];
+  }
+}
+
 /** Fire-and-forget arming pass — call from hot paths (pulse). ~1ms when both
  * guardians are healthy (two file reads per minute at most). */
 export function ensureP0Watchdog(): void {
@@ -74,7 +91,10 @@ export function ensureP0Watchdog(): void {
     }
 
     // Layer 2: fallback healer + supervisor-of-the-supervisor
-    if (!pidAlive(pidFromFile(L2_PIDF))) {
+    // v14.2 — spawn ONLY when the pidfile pid is dead AND no live --loop
+    // process exists by cmdline (the pidfile can be stale/reused — never the
+    // sole truth, see liveLoopPids above).
+    if (!pidAlive(pidFromFile(L2_PIDF)) && liveLoopPids().length === 0) {
       mkdirSync("/home/z/my-project/.data/watchdog", { recursive: true });
       const c2 = spawn("bash", [L2_SH, "--loop"], {
         cwd: "/home/z/my-project",

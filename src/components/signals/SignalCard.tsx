@@ -251,7 +251,14 @@ export default function SignalCard({
               className="hidden sm:block"
             />
           )}
-          <NeonBadge tone="amber">×{signal.leverage} LEV</NeonBadge>
+          {/* v13.3 live-execution truth: bridge intent overrides the ledger anchor when present (NX-3217 forensics) */}
+          {signal.liveIntent ? (
+            <NeonBadge tone={signal.liveIntent.leverage === signal.leverage ? "amber" : "danger"} className="shrink-0" >
+                ×{signal.liveIntent.leverage} LEV{signal.liveIntent.leverage !== signal.leverage ? ` (card ×${signal.leverage})` : " LIVE"}
+            </NeonBadge>
+          ) : (
+            <NeonBadge tone="amber">×{signal.leverage} LEV</NeonBadge>
+          )}
         </div>
       </div>
 
@@ -346,7 +353,13 @@ export default function SignalCard({
       <div className="mt-3 flex items-center gap-2">
         <ConfidenceBar value={signal.confidence} className="min-w-0 flex-1" />
         <NeonBadge tone="cyan" className="shrink-0">R:R {signal.riskReward.toFixed(1)}</NeonBadge>
-        <NeonBadge tone="muted" className="shrink-0">MARGIN {fmtUsd(signal.marginUsd)}</NeonBadge>
+        {signal.liveIntent ? (
+          <NeonBadge tone="neon" className="shrink-0" title={`live execution margin ${signal.liveIntent.marginUsdt.toFixed(2)}$ (fixed-margin mandate) · ledger anchor ${fmtUsd(signal.marginUsd)} (FLAT-10 sizing)`}>
+            MARGIN {fmtUsd(signal.liveIntent.marginUsdt)} LIVE{signal.liveIntent.marginUsdt !== signal.marginUsd ? ` · LEDGER ${fmtUsd(signal.marginUsd)}` : ""}
+          </NeonBadge>
+        ) : (
+          <NeonBadge tone="muted" className="shrink-0">MARGIN {fmtUsd(signal.marginUsd)}</NeonBadge>
+        )}
       </div>
 
       {/* ── v5.4 TP-proven ladder chips — banked levels stay visible forever ── */}

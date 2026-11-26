@@ -1,21 +1,30 @@
 import type { Metadata, Viewport } from "next";
-import { Space_Grotesk, JetBrains_Mono } from "next/font/google";
+import localFont from "next/font/local";
 import "./globals.css";
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as SonnerToaster } from "@/components/ui/sonner";
 import { Providers } from "@/components/providers";
 import { APP_TITLE, APP_OG_TITLE } from "@/lib/brand";
 
-const display = Space_Grotesk({
+// v14.2 FONT-SOVEREIGNTY (trace 1a18db2beba9b781) — the Google-font fetch at
+// dev-boot wedged once (Turbopack virtual module "Module not found:
+// @vercel/turbopack-next/internal/font/google/font" after recycle storms) and
+// the ENTIRE dashboard 500'd while every API/feed/bridge stayed healthy — one
+// more "سیستم از کار می‌افتد" mechanism. Both fonts are now VENDORED variable
+// woff2 files (src/app/fonts/): same families, same CSS variables, zero boot
+// egress dependency, immune to Google reachability and cache wedges.
+const display = localFont({
+  src: "./fonts/SpaceGrotesk-var-latin.woff2",
   variable: "--font-display",
-  subsets: ["latin"],
-  weight: ["400", "500", "600", "700"],
+  weight: "300 700",
+  display: "swap",
 });
 
-const terminal = JetBrains_Mono({
+const terminal = localFont({
+  src: "./fonts/JetBrainsMono-var-latin.woff2",
   variable: "--font-terminal",
-  subsets: ["latin"],
-  weight: ["400", "500", "600", "700", "800"],
+  weight: "100 800",
+  display: "swap",
 });
 
 export const metadata: Metadata = {

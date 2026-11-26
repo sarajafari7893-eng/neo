@@ -43,29 +43,8 @@ const INTERVAL_MS: Record<string, number> = { "15m": 900_000, "1h": 3_600_000, "
 
 // v13.2.3 (trace 1a170bba02dff781): vision first + api1-4 mid rungs (probed 200 on 2026-10-25), api last (403 from this egress).
 const SPOT_HOSTS = ["https://data-api.binance.vision", "https://api1.binance.com", "https://api2.binance.com", "https://api3.binance.com", "https://api4.binance.com", "https://api.binance.com"];
-const BYBIT_URL = "https://api.bybit.com";
-const EGRESS_TIMEOUT_MS = 15_000;
-const PAGE_MAX = 1000; // spot/bybit page cap (fapi caps at 1500, we stay at 1000)
+const PAGE_MAX = 1000; // spot page cap (fapi caps at 1500, we stay at 1000)
 const PAGES_PER_ENSURE = 6; // bounded paging per ensure() call
-
-function bybitInterval(interval: string): string | null {
-  switch (interval) {
-    case "15m": return "15";
-    case "1h": return "60";
-    case "4h": return "240";
-    default: return null;
-  }
-}
-
-async function jget<T>(url: string): Promise<T | null> {
-  try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(EGRESS_TIMEOUT_MS), cache: "no-store" });
-    if (!res.ok) return null;
-    return (await res.json()) as T;
-  } catch {
-    return null;
-  }
-}
 
 function mapBinanceRaw(raw: (string | number)[][]): Candle[] {
   return raw.map((k) => ({
@@ -183,8 +162,8 @@ async function pricePointAt(symbol: string, tMs: number, winMinMs: number, winMa
 
 export interface HorizonResolution {
   pct: number | null;
-  source: string; // SIBLING | PRICEPOINT | FAPI | SPOT-MIRROR | BYBIT | NONE
-  rungNotes: string; // honest per-rung audit trail, e.g. "sibling:miss pricepoint:miss kit:BYBIT"
+  source: string; // SIBLING | PRICEPOINT | FAPI | SPOT-MIRROR | NONE
+  rungNotes: string; // honest per-rung audit trail, e.g. "sibling:miss pricepoint:miss kit:SPOT-MIRROR"
 }
 
 // tick-rung tolerance window for a horizon: canonical horizons use the exact

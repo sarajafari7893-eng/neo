@@ -758,9 +758,20 @@ export default function SignalDetailDialog({
         </span>
       ),
     },
-    { label: "LEVERAGE", value: <span className="text-amber-neon">×{sig.leverage}</span> },
-    { label: "MARGIN", value: <span className="text-ink-2">{fmtUsd(sig.marginUsd, false)}</span> },
-    { label: "POSITION SIZE", value: <span className="text-ink">{fmtUsd(sig.marginUsd * sig.leverage)}</span> },
+    // v13.3 live-execution truth (NX-3217 forensics): when the bridge intent
+    // exists, show the exchange-side numbers; ledger anchor stays labeled.
+    ...(sig.liveIntent
+      ? ([
+          { label: "LEVERAGE", value: <span className="text-amber-neon">×{sig.liveIntent.leverage} LIVE{sig.liveIntent.leverage !== sig.leverage ? ` (ledger ×${sig.leverage})` : ""}</span> },
+          { label: "MARGIN (LIVE)", value: <span className="text-neon" title="fixed-margin mandate — bridge execution truth">{fmtUsd(sig.liveIntent.marginUsdt, false)}</span> },
+          { label: "MARGIN (LEDGER)", value: <span className="text-ink-2" title="FLAT-10 sizing anchor stored on the signal row">{fmtUsd(sig.marginUsd, false)}</span> },
+          { label: "POSITION SIZE (LIVE)", value: <span className="text-ink">{fmtUsd(sig.liveIntent.notionalUsdt)}</span> },
+        ] as const)
+      : ([
+          { label: "LEVERAGE", value: <span className="text-amber-neon">×{sig.leverage}</span> },
+          { label: "MARGIN", value: <span className="text-ink-2">{fmtUsd(sig.marginUsd, false)}</span> },
+          { label: "POSITION SIZE", value: <span className="text-ink">{fmtUsd(sig.marginUsd * sig.leverage)}</span> },
+        ] as const)),
     { label: "RISK : REWARD", value: <span className="text-cyan-neon">1 : {sig.riskReward.toFixed(1)}</span> },
     {
       label: "FEES (COMM + SWAP)",

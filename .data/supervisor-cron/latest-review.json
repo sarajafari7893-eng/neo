@@ -1,155 +1,129 @@
 {
- "at": "2026-11-26T06:57:16.963Z",
- "tehran": "26/11/2026, 10:27:16",
- "status": "llm_unavailable",
- "err": "Error: API request failed with status 401: {\"error\":\"missing X-Token header\"}",
- "review": null,
+ "at": "2026-11-26T18:57:25.703Z",
+ "tehran": "26/11/2026, 22:27:25",
+ "status": "ok",
+ "err": null,
+ "review": {
+  "verdict": "RED",
+  "summary": "سیستم با چندین نقص بحرانی مواجه است: فضای دیسک ریشه و tmp صفر شده، سرویس اصلی کار نمی‌کند و موتور ممکن است متوقف شده باشد.",
+  "findings": [
+   {
+    "sev": "P0",
+    "area": "disk-root",
+    "evidence": "rootfs 0.00GB free < 0.5GB",
+    "impact": "پایداری سیستم در معرض خطر است و ممکن است باعث از کار افتادن کامل شود"
+   },
+   {
+    "sev": "P0",
+    "area": "disk-tmp",
+    "evidence": "PolarFS /tmp 0.00GB free < 1GB — backup ring at risk",
+    "impact": "امنیت داده‌ها در معرض خطر است و پشتیبان‌گیری ممکن است کار نکند"
+   },
+   {
+    "sev": "P0",
+    "area": "engine",
+    "evidence": "no SignalEvent for 498810h+56m — engine may be stalled",
+    "impact": "پردازش سیگنال‌ها متوقف شده است که مستقیماً بر WIN RATE و EST PNL% تأثیر منفی می‌گذارد"
+   },
+   {
+    "sev": "P1",
+    "area": "app",
+    "evidence": "service down / probe failed",
+    "impact": "سرویس اصلی کار نمی‌کند و کاربران نمی‌توانند به سیستم دسترسی داشته باشند"
+   },
+   {
+    "sev": "P1",
+    "area": "rawcal",
+    "evidence": "api unreachable",
+    "impact": "سیستم کالیبراسیون خام در دسترس نیست و ممکن است دقت سیگنال‌ها کاهش یابد"
+   }
+  ],
+  "top_actions": [
+   {
+    "action": "فوراً فضای دیسک را با حذف فایل‌های غیرضروری آزاد کنید",
+    "expected_effect_on_winrate_or_pnl": "پایداری سیستم را بازیابی می‌کند و از از کار افتادن کامل جلوگیری می‌کند",
+    "effort": "S",
+    "risk": "کم - نیاز به دسترسی ریشه دارد اما عملیات استاندارد است"
+   },
+   {
+    "action": "موتور سیگنال را راه‌اندازی مجدد کنید و وضعیت SignalEvent را بررسی کنید",
+    "expected_effect_on_winrate_or_pnl": "پردازش سیگنال‌ها را از سر می‌گیرد و به WIN RATE و EST PNL% کمک می‌کند",
+    "effort": "M",
+    "risk": "متوسط - نیاز به بررسی دقیق دلیل توقف موتور دارد"
+   },
+   {
+    "action": "سرویس اصلی (app) را بررسی و راه‌اندازی مجدد کنید",
+    "expected_effect_on_winrate_or_pnl": "دسترسی کاربران را بازیابی می‌کند و امکان نظارت بر سیستم را فراهم می‌سازد",
+    "effort": "M",
+    "risk": "متوسط - نیاز به بررسی لاگ‌های خطا برای تشخیص ریشه مشکل دارد"
+   }
+  ]
+ },
  "telemetrySnapshot": {
-  "generatedAt": "2026-11-26T06:57:16.899Z",
+  "generatedAt": "2026-11-26T18:57:15.328Z",
   "liveExecution": "DISABLED (paper/research-only; SUPPRESSED engine path — honesty contract)",
-  "strategyValidationStatus": "PROMOTE gate = FAIL-OPEN-GAPS — gating leg(s): MOMENTUM 21/60 (35%) · total OOS 3094/300 (100%) · pace 4.2/day · ETA n/a (gated by stalled leg(s) with zero 14d pace: MOMENTUM) · OPERATOR-BAR(300/leg): blocked: MOMENTUM 21/300 (stalled) (protocol STRATEGY-VALIDATION-PROTOCOL.md; sample-size leg only) — recommend only evidence-respecting actions",
+  "strategyValidationStatus": "PROMOTE gate = FAIL (insufficient OOS n; re-validation protocol in STRATEGY-VALIDATION-PROTOCOL.md) — recommend only evidence-respecting actions",
   "sentinel": {
-   "verdict": "AMBER",
+   "verdict": "RED",
    "anomalies": [
+    {
+     "sev": "crit",
+     "area": "app",
+     "msg": "service down / probe failed"
+    },
+    {
+     "sev": "crit",
+     "area": "disk-root",
+     "msg": "rootfs 0.00GB free < 0.5GB"
+    },
+    {
+     "sev": "crit",
+     "area": "disk-tmp",
+     "msg": "PolarFS /tmp 0.00GB free < 1GB — backup ring at risk"
+    },
+    {
+     "sev": "crit",
+     "area": "engine",
+     "msg": "no SignalEvent for 498810h+56m — engine may be stalled"
+    },
     {
      "sev": "warn",
      "area": "watchdog",
-     "msg": "layer-1 non-ok services: {\"app\":\"ok\",\"liq\":\"ok\",\"ws\":\"ok\",\"bridge\":\"ok\",\"trade\":\"healing\",\"sentinel\":\"healing\",\"armor\":\"healing\",\"cron\":\"healing\",\"stable\":\"ok\",\"kw\":\"healing\",\"mem\":\"ok\",\"warm\":\"healing\",\"tbt\":\"healing\",\"cards\":\"ok\"}"
+     "msg": "layer-1 non-ok services: {\"app\":\"degraded\",\"liq\":\"ok\",\"ws\":\"ok\",\"bridge\":\"ok\",\"trade\":\"ok\",\"sentinel\":\"ok\",\"armor\":\"ok\",\"cron\":\"ok\",\"stable\":\"ok\",\"kw\":\"ok\",\"mem\":\"ok\",\"warm\":\"ok\",\"tbt\":\"ok\",\"cards\":\"ok\"}"
+    },
+    {
+     "sev": "warn",
+     "area": "dev.log",
+     "msg": "229 error lines in recent log window"
     }
    ],
    "mem": {
-    "availableMb": 2117
+    "availableMb": 3022
    },
    "disk": {
-    "rootFreeGb": 3.01,
-    "tmpFreeGb": 3.01
+    "rootFreeGb": 0,
+    "tmpFreeGb": 0
    },
    "backup": {
     "ok": true,
     "dir": "/tmp/my-project/backups",
     "encCount": 12,
     "zipCount": 12,
-    "newestEncMs": 1795671401061.016,
-    "newestAnyMs": 1795671401061.016,
-    "encAgeMs": 4808252.983886719
+    "newestEncMs": 1795708652269.3079,
+    "newestAnyMs": 1795708652269.3079,
+    "encAgeMs": 10758258.692138672
    },
    "rawcal": {
-    "armed": true,
-    "issued": 1045,
-    "issuedTotal": 2463,
-    "target": 3217,
+    "armed": null,
+    "error": "api unreachable",
     "heartbeatAgeH": 0,
-    "heartbeatAt": "2026-11-26T0656Z OPEN (degraded-winner) — fapi ban active (fapi GLOBAL ban window live — 3s left): capture continues on WS-live"
+    "heartbeatAt": "2026-11-26T1853Z ISSUE NX-3727 raw open 5/8"
    }
   },
-  "deepSweepQuick": "# NEXUS-SENTINEL DEEP SWEEP — 2026-11-26T06:57:15Z\n\n\n## 1 · LIVE VERDICT — AMBER\n- verdict: AMBER · scan: 2026-11-26T06:56:49.774Z\n  · app       UP  http=200 24ms\n  · ws        UP  http=400 7ms\n  · bridge    UP  http=200 6ms\n  · liq       UP  http=200 6ms\n  · trade     UP  http=200 6ms\n  · watchdog  UP  http=200 6ms\n- mem: 2117 MB avail · disk root: 3.01 GB · /tmp: 3.01 GB\n  - [warn] watchdog: layer-1 non-ok services: {\"app\":\"ok\",\"liq\":\"ok\",\"ws\":\"ok\",\"bridge\":\"ok\",\"trade\":\"healing\",\"sentinel\":\"healing\",\"armor\":\"healing\",\"cron\":\"healing\",\"stable\":\"ok\",\"kw\":\"healing\",\"mem\":\"ok\",\"warm\":\"healing\",\"tbt\":\"healing\",\"cards\":\"ok\"}\n",
-  "pulseStats": {
-   "winRate": 12,
-   "totalSignals": 60,
-   "wins": 7,
-   "losses": 21,
-   "pnl24hUsd": 5.01,
-   "totalPnlUsd": 88.97,
-   "avgPnlPercent": 15.08,
-   "streak": {
-    "type": "win",
-    "count": 2
-   },
-   "account": {
-    "startBalance": 100,
-    "balance": 427.18,
-    "equity": 426.94,
-    "unrealizedPnl": -0.24,
-    "unrealizedPnlAllRows": -0.24,
-    "unsafeOpenRows": 0,
-    "exposureUsd": 10,
-    "freeMargin": 416.94,
-    "marginUsedPct": 2.3,
-    "openPositions": 1,
-    "feesPaid": 258.149,
-    "closeAll": {
-     "enabled": true,
-     "targetUsd": 20,
-     "lastTriggeredAt": "2026-11-23T23:17:28.018Z",
-     "triggerCount": 13
-    }
-   },
-   "window24h": {
-    "n": 9,
-    "wins": 6,
-    "winRatePct": 66.7,
-    "pnlUsd": 5.01
-   },
-   "window7d": {
-    "n": 59,
-    "wins": 39,
-    "winRatePct": 66.1,
-    "pnlUsd": 88.97
-   },
-   "byStrategy": [
-    {
-     "strategy": "AI-SWING",
-     "count": 57,
-     "wins": 6,
-     "pnl": 87.5,
-     "avgConfidence": 72
-    },
-    {
-     "strategy": "AI-SCALP",
-     "count": 2,
-     "wins": 1,
-     "pnl": 1.47,
-     "avgConfidence": 78
-    }
-   ],
-   "equityCurveTail": [
-    {
-     "date": "11-20",
-     "cum": -5.31,
-     "daily": -5.31
-    },
-    {
-     "date": "11-21",
-     "cum": 63.47,
-     "daily": 68.78
-    },
-    {
-     "date": "11-24",
-     "cum": 83.96,
-     "daily": 20.49
-    },
-    {
-     "date": "11-26",
-     "cum": 88.97,
-     "daily": 5.01
-    }
-   ]
-  },
+  "deepSweepQuick": "# NEXUS-SENTINEL DEEP SWEEP — 2026-11-26T18:57:15Z\n\n\n## 1 · LIVE VERDICT — RED\n- verdict: RED · scan: 2026-11-26T18:56:50.534Z\n  · app       DOWN http=None 2ms\n  · ws        UP  http=400 3ms\n  · bridge    UP  http=200 1ms\n  · liq       UP  http=200 1ms\n  · trade     UP  http=200 2ms\n  · watchdog  UP  http=200 1ms\n- mem: 3022 MB avail · disk root: 0 GB · /tmp: 0 GB\n  - [crit] app: service down / probe failed\n  - [crit] disk-root: rootfs 0.00GB free < 0.5GB\n  - [crit] disk-tmp: PolarFS /tmp 0.00GB free < 1GB — backup ring at risk\n  - [crit] engine: no SignalEvent for 498810h+56m — engine may be stalled\n  - [warn] watchdog: layer-1 non-ok services: {\"app\":\"degraded\",\"liq\":\"ok\",\"ws\":\"ok\",\"bridge\":\"ok\",\"trade\":\"ok\",\"sentinel\":\"ok\",\"armor\":\"ok\",\"cron\":\"ok\",\"stable\":\"ok\",\"kw\":\"ok\",\"mem\":\"ok\",\"warm\":\"ok\",\"tbt\":\"ok\",\"cards\":\"ok\"}\n  - [warn] dev.log: 229 error lines in recent log window\n",
+  "pulseStats": {},
   "rawcal": {
-   "armed": true,
-   "target": 3217,
-   "settledN": 2527,
-   "openRaw": 1,
-   "rawWinRatePct": 22,
-   "disarmReason": "",
-   "paceSettledE2": 2527,
-   "paceSettleRate3h": 3,
-   "paceNeeded": 690,
-   "qualityInformativePct": 43,
-   "qualityHealthyPct": 63,
-   "qualityGate": {
-    "verdict": "RED",
-    "healthFloor": 85,
-    "blockers": [
-     "epoch-window informative 43% < 50% (n=200) — censoring regime"
-    ],
-    "window": {
-     "since": "2026-09-15T11:30:00.000Z",
-     "settled": 200,
-     "healthyPct": 63,
-     "informativePct": 43
-    }
-   }
+   "error": "unavailable"
   },
   "shadowVetoArms": [
    {
@@ -157,24 +131,24 @@
     "n": 30,
     "target": 30,
     "fillPct": 100,
-    "winRatePct": 40,
-    "starved": true
+    "winRatePct": 33.3,
+    "starved": false
    },
    {
     "id": "real-veto",
     "n": 30,
     "target": 30,
     "fillPct": 100,
-    "winRatePct": 76.7,
-    "starved": true
+    "winRatePct": 60,
+    "starved": false
    },
    {
     "id": "paper-keep",
     "n": 30,
     "target": 30,
     "fillPct": 100,
-    "winRatePct": 13.3,
-    "starved": true
+    "winRatePct": 16.7,
+    "starved": false
    },
    {
     "id": "paper-veto",
@@ -186,55 +160,26 @@
    }
   ],
   "shadowVetoStats": {
-   "total": 11625,
-   "passSide": 6862,
-   "rejectSide": 4763,
-   "vetoCount": 8416,
-   "tradeCount": 3209,
-   "modelSharePct": 40.1,
+   "total": 11764,
+   "passSide": 6926,
+   "rejectSide": 4838,
+   "vetoCount": 8497,
+   "tradeCount": 3267,
+   "modelSharePct": 39.9,
    "modelGroundedPct": 100,
-   "avgConfidence": 66.7,
-   "gateAgreement": 3279,
+   "avgConfidence": 66.6,
+   "gateAgreement": 3317,
    "paperOpen": 10,
-   "paperSettled": 1493,
+   "paperSettled": 1530,
    "recent24h": {
-    "n": 0,
-    "modelSharePct": null,
-    "lastModelAgeH": 54,
-    "lastVerdictAgeH": 54
+    "n": 139,
+    "modelSharePct": 23,
+    "lastModelAgeH": 0.3,
+    "lastVerdictAgeH": 0.3
    }
   },
   "futures": {
-   "maturity": {
-    "settled": 3576,
-    "target": 720,
-    "progressPct": 100
-   },
-   "bestFilter": {
-    "filter": "BLOCK SHORT in Q4_CAPITULATION",
-    "family": "D",
-    "rule": "SHORT signals issued in Q4_CAPITULATION context averaged -2.94% levered net (n=50, win 48%)",
-    "edge": -2.94,
-    "n": 50,
-    "confidence": "MEDIUM",
-    "source": "BOOK-EDGE"
-   },
-   "counts": {
-    "total": 3578,
-    "live": 3578,
-    "backfill": 0,
-    "settled1h": 3576,
-    "last24h": 2
-   },
-   "tape": {
-    "reachable": true,
-    "connected": true,
-    "source": "SPOT-MIRROR",
-    "symbols": 2,
-    "trades": 315,
-    "dataStalled": false
-   },
-   "taxonomyBackfill": null
+   "error": "unavailable"
   },
   "tradeService": {
    "ok": true,
@@ -245,27 +190,42 @@
    "watch": 2,
    "lastFrameAt": null,
    "spotConnected": true,
-   "spotFrames": 287,
-   "spotLastFrameAt": 1795676234684,
+   "spotFrames": 204845,
+   "spotLastFrameAt": 1795719435089,
    "spotStreams": 2,
    "spotReconnects": 0,
-   "restBannedUntil": 1795683410256,
+   "restBannedUntil": 1795723139781,
    "restProbeConsecutiveFails": 1,
    "symbols": 2,
-   "trades": 287,
-   "restPolls": 1,
-   "restErrors": 1,
+   "trades": 211948,
+   "restPolls": 13,
+   "restErrors": 2,
    "reconnects": 0,
-   "uptimeMs": 30360
+   "uptimeMs": 11830915
   },
   "lastSweepAnomalies": [
    {
-    "class": "sentinel-amber",
+    "class": "app-down",
+    "sev": "crit",
+    "msg": "app :3000 DOWN (HTTP unreachable) · healthz=err → pulse fallback"
+   },
+   {
+    "class": "sentinel-red",
+    "sev": "crit",
+    "msg": "sentinel :3030 verdict RED"
+   },
+   {
+    "class": "tbt-doctrine-violation",
     "sev": "warn",
-    "msg": "sentinel :3030 verdict AMBER"
+    "msg": "toobit-bridge doctrine: 1 violation(s) — last=NOTIONAL-DELTA: exp=25.00 act=8.20 (6719bps)"
+   },
+   {
+    "class": "data-stale",
+    "sev": "crit",
+    "msg": "data-stale: newest SignalEvent UNREADABLE old (cap 15min) · no-rows"
    }
   ],
-  "lastReviewAt": "2026-11-23T23:18:30.955Z"
+  "lastReviewAt": "2026-11-26T06:57:16.963Z"
  },
- "deepSweepChars": 630
+ "deepSweepChars": 890
 }

@@ -14,7 +14,6 @@ import EntryLeversCard from "@/components/terminal/EntryLeversCard";
 import GoldenLaneCard from "@/components/terminal/GoldenLaneCard";
 import FuturesRadarCard from "@/components/terminal/FuturesRadarCard";
 import RawCalCard from "@/components/terminal/RawCalCard";
-import ToobitBridgeCard from "@/components/terminal/ToobitBridgeCard";
 import { useMounted, useNow, useDeviceNow, usePulse } from "@/hooks/usePulse";
 import { fmtClockLocal, localTzLabel } from "@/lib/format";
 import type { EventLevel, SignalEventDTO } from "@/lib/api-types";
@@ -318,12 +317,12 @@ export default function TerminalSection() {
               {String(totalEvents).padStart(3, "0")} EV
             </span>
             {paused ? (
-              <NeonBadge tone="amber">
-                <LiveDot tone="amber" /> PAUSED
+              <NeonBadge tone="amber" title="این نشان فقط مکثِ اسکرولِ خودکارِ لاگ است — وضعیت موتور سیگنال یا اتصال صرافی را نشان نمی‌دهد؛ موتور مستقل از این دکمه به کارش ادامه می‌دهد">
+                <LiveDot tone="amber" /> SCROLL-HOLD
               </NeonBadge>
             ) : (
-              <NeonBadge tone="neon" glow>
-                <LiveDot /> LIVE
+              <NeonBadge tone="neon" glow title="جریان زندهٔ لاگ — وضعیت موتور سیگنال را نشان نمی‌دهد؛ موتور همیشه مستقل از این پنل کار می‌کند">
+                <LiveDot /> STREAM
               </NeonBadge>
             )}
           </div>
@@ -634,9 +633,9 @@ export default function TerminalSection() {
                 </span>
               </div>
               <div className="flex items-center justify-between">
-                <span className="label-tech">4-ex consensus</span>
+                <span className="label-tech">5-ex consensus</span>
                 <span className="flex items-center gap-1 font-bold tabular-nums text-cyan-neon">
-                  {(feed?.exchanges ?? []).filter((v) => v.ok).length}/4
+                  {(feed?.exchanges ?? []).filter((v) => v.ok).length}/5
                   <LiveDot tone={(feed?.exchanges ?? []).filter((v) => v.ok).length >= 3 ? "neon" : "amber"} />
                 </span>
               </div>
@@ -888,9 +887,6 @@ export default function TerminalSection() {
         <FlowScannerCard />
         <LiqDepthRadarCard />
         <VolRiskCard />
-        {/* ── TOOBIT EXEC BRIDGE — signal-card execution mirror (Task-52: PAPER/LIVE,
-            reconciliation, latency telemetry; read-only panel, key-only control) ── */}
-        <ToobitBridgeCard />
       </div>
     </section>
   );

@@ -89,10 +89,8 @@ interface FuturesAnchorDTO {
   liqLong10mUsd: number | null;
   liqShort10mUsd: number | null;
   liqUsd1h: number | null;
-  fundingByb: number | null;
-  oiByb: number | null;
-  fundingOkx: number | null;
-  oiOkx: number | null;
+  fundingSettled: number | null;
+  oiChk: number | null;
   crossSpreadBps8h: number | null;
 }
 
@@ -505,11 +503,10 @@ export default function FuturesRadarCard() {
             />
             <FamilyPanel
               letter="E"
-              title="Cross-exchange"
+              title="Cross-plane"
               rows={[
-                { k: "BIN FUND", v: pct(anchor?.funding8h, 4), cls: signCls(anchor?.funding8h) },
-                { k: "BYB FUND", v: pct(anchor?.fundingByb, 4), cls: signCls(anchor?.fundingByb) },
-                { k: "OKX FUND", v: pct(anchor?.fundingOkx, 4), cls: signCls(anchor?.fundingOkx) },
+                { k: "FUND PRED", v: pct(anchor?.funding8h, 4), cls: signCls(anchor?.funding8h) },
+                { k: "FUND STLD", v: pct(anchor?.fundingSettled, 4), cls: signCls(anchor?.fundingSettled) },
                 { k: "SPREAD 8H", v: bps(anchor?.crossSpreadBps8h), cls: signCls(anchor?.crossSpreadBps8h) },
                 ...(typeof anchor?.oiUsdM === "number" && Number.isFinite(anchor.oiUsdM)
                   ? [{ k: "OI USD", v: fmtUsd(anchor.oiUsdM * 1_000_000) }]

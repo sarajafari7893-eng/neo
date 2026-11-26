@@ -17,7 +17,7 @@ export interface PriceRow {
   at: number;
 }
 
-export type PriceSource = "WS PUSH" | "WS·BYBIT" | "WS·REST 2.5S" | "WS OFFLINE";
+export type PriceSource = "WS PUSH" | "WS·SPOT" | "WS·REST 2.5S" | "WS OFFLINE";
 
 interface PriceState {
   rows: Map<string, PriceRow>;

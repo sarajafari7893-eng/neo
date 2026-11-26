@@ -24,7 +24,10 @@ async function handle(req: Request): Promise<NextResponse> {
   try {
     const url = new URL(req.url);
     const symbol = (url.searchParams.get("symbol") ?? "").toUpperCase().trim();
-    if (!/^[A-Z0-9]{2,20}USDT$/.test(symbol)) {
+    // v13.3 fix: {1,20} — single-letter base listings (QUSDT) are REAL venues;
+    // the old {2,20} regex 400-rejected them forever and card-sentinel counted
+    // an endless failure ring (failures1h=101 — P1 of the P0-P2 package).
+    if (!/^[A-Z0-9]{1,20}USDT$/.test(symbol)) {
       return NextResponse.json({ ok: false, error: "bad symbol" }, { status: 400 });
     }
     const now = Date.now();

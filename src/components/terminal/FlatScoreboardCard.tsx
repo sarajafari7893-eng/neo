@@ -186,7 +186,7 @@ export default function FlatScoreboardCard() {
             <div className="text-[11px] font-semibold text-amber-300">جرم فیس (دشمن شمارهٔ یک هدف +۱۰۰٪)</div>
             <p className="mt-1 text-[11px] leading-relaxed text-zinc-400">
               میانگین <span className="font-bold text-amber-300">{fsb.feeMass.perTradeAvgPct}%</span> به‌ازای هر معامله · جرم ۷ روز اخیر{" "}
-              <span className="font-bold text-amber-300">−{Math.abs(fsb.feeMass.trailing7dPct)}%</span> — کتاب باید اول این را جبران کند؛ راهِ لبه: کاهش تعداد و کیفیت ورود، نه افزایش مارجین.
+              <span className="font-bold text-amber-300">−{fsb.feeMass.trailing7dPct !== null ? Math.abs(fsb.feeMass.trailing7dPct) : "—"}%</span> — کتاب باید اول این را جبران کند؛ راهِ لبه: کاهش تعداد و کیفیت ورود، نه افزایش مارجین.
             </p>
           </div>
           <div className="rounded-lg border border-white/5 bg-black/20 p-4">

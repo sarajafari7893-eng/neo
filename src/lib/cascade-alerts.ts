@@ -24,7 +24,7 @@ export interface CascadeAlert {
   side: "UP" | "DOWN";
   movePct: number; // signed move inside the window
   windowMs: number; // measured span of the move
-  lane: string; // WS lane that saw it (WS·SPOT / WS PUSH / WS·BYBIT)
+  lane: string; // WS lane that saw it (WS·SPOT / WS PUSH / WS·FUT-BOOK)
   at: number; // alert epoch ms
   until: number; // freeze expiry epoch ms
 }
