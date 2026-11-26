@@ -87,6 +87,12 @@ if [ ! -e /home/z/my-project/node_modules/next/dist/bin/next ] \
     ( cd /home/z/my-project && bun install --silent 2>&1 | tail -2 )
     [ -e /home/z/my-project/node_modules/next/dist/bin/next ] \
       && echo "[dev-up] deps restored via bun install"
+    # v15.4: bun install resets @prisma/client — the generated client (.prisma)
+    # disappears and every route 500s (fundingByb P1). Auto-heal: regenerate.
+    if [ -e /home/z/my-project/node_modules/next/dist/bin/next ] && [ ! -e /home/z/my-project/node_modules/.prisma/client/default.js ]; then
+      ( cd /home/z/my-project && bunx prisma generate >/dev/null 2>&1 ) \
+        && echo "[dev-up] prisma client regenerated" || echo "[dev-up] prisma generate FAILED (routes will 500)"
+    fi
   fi
 fi
 

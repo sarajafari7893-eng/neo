@@ -38,6 +38,18 @@ deps_ok() { nm_ok && swc_ok && react_ok; }
 
 app_alive() { curl -s -m 4 -o /dev/null http://localhost:3000/api/healthz 2>/dev/null; }
 
+# v2.2 SENTINEL-20261126: bun install resets @prisma/client and the generated
+# .prisma client vanishes — every route 500s (the fundingByb P1, hit live at
+# 19:27Z). Regenerate after ANY bun-install-based restore. Fail-open.
+prisma_ok() { [ -e "$ROOT/node_modules/.prisma/client/default.js" ]; }
+regen_prisma() {
+  if ! prisma_ok; then
+    ( cd "$ROOT" && bunx prisma generate >> "$LOG" 2>&1 ) \
+      && log "prisma client regenerated" \
+      || log "prisma generate FAILED (routes will 500)"
+  fi
+}
+
 # restore_from <src> — instant hardlink rebuild of node_modules
 restore_from() {
   [ -d "$1/next/dist" ] || return 1
@@ -65,6 +77,7 @@ if ! deps_ok; then
     date -u '+%Y-%m-%dT%H:%M:%SZ' > "$MARK" 2>/dev/null
   elif cd "$ROOT" && bun install --silent >> "$LOG" 2>&1 && deps_ok; then
     log "boot-restore via bun install OK"
+    regen_prisma
   else
     log "boot-restore FAILED — will retry each cycle"
   fi
@@ -93,6 +106,7 @@ while true; do
         cd "$ROOT" && bun install --silent >> "$LOG" 2>&1
         if deps_ok; then
           log "bun install completed the restore (+$(( $(date +%s) - T0 ))s)"
+          regen_prisma
         else
           log "restore FAILED even after bun install — next cycle retries"
           sleep 10
@@ -101,6 +115,7 @@ while true; do
       fi
     elif cd "$ROOT" && bun install --silent >> "$LOG" 2>&1 && deps_ok; then
       log "RESTORED node_modules via bun install in $(( $(date +%s) - T0 ))s (stash+deps both wiped)"
+      regen_prisma
       date -u '+%Y-%m-%dT%H:%M:%SZ' > "$MARK" 2>/dev/null
       # rebuild the stashes immediately while deps exist
       refresh_stash "$ROOT/node_modules" "$STASH1"

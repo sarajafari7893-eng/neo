@@ -178,8 +178,12 @@ function dbVitals() {
     const c = (t: string) => Number(q(`SELECT COUNT(*) AS n FROM "${t}"`)?.n ?? -1);
     const signals = c("Signal"), events = c("SignalEvent"), prices = c("PricePoint"), assets = c("MarketAsset"), pumps = c("PumpTrack");
     const since1h = nowMs() - 3600_000;
-    const ev1h = Number(q("SELECT COUNT(*) AS n FROM SignalEvent WHERE createdAt > ?", since1h)?.n ?? -1);
-    const maxRow = q("SELECT MAX(createdAt) AS m FROM SignalEvent") as { m?: number | string } | null;
+    // v14.1: mixed storage eras (pre-reset rows = INTEGER ms, post-reset rows = ISO TEXT —
+    // prisma-client drift recurrence, see SENTINEL-20261126) — numeric-only bound misses/
+    // overcounts TEXT rows; dual-branch count is era-honest.
+    const ev1hIso = new Date(since1h).toISOString().slice(0, 13);
+    const ev1h = Number(q("SELECT COUNT(*) AS n FROM SignalEvent WHERE (typeof(createdAt)='integer' AND createdAt > ?) OR (typeof(createdAt)='text' AND substr(createdAt,1,13) >= ?)", since1h, ev1hIso)?.n ?? -1);
+    const maxRow = q("SELECT createdAt AS m FROM SignalEvent ORDER BY rowid DESC LIMIT 1") as { m?: number | string } | null;
     let lastEvAgeMs: number | null = null;
     const rawM = maxRow?.m;
     // v14.1 fix (SENTINEL-20261126): Prisma/SQLite DateTime storage can surface as
