@@ -1,34 +1,28 @@
 {
  "schemaVersion": 1,
  "kind": "deep",
- "at": "2026-10-29T15:32:59.192Z",
- "tehran": "29/10/2026, 19:02:59",
+ "at": "2026-11-26T21:45:50.273Z",
+ "tehran": "27/11/2026, 01:15:50",
  "verdict": "RED",
  "anomalies": [
   {
    "sev": "crit",
-   "area": "app",
-   "msg": "service down / probe failed"
+   "area": "disk-root",
+   "msg": "rootfs 0.00GB free < 0.5GB"
   },
   {
-   "sev": "warn",
-   "area": "watchdog",
-   "msg": "layer-1 non-ok services: {\"app\":\"degraded\",\"liq\":\"ok\",\"ws\":\"ok\",\"bridge\":\"ok\",\"trade\":\"ok\",\"sentinel\":\"ok\",\"armor\":\"ok\",\"cron\":\"ok\",\"stable\":\"ok\",\"kw\":\"ok\",\"mem\":\"ok\",\"warm\":\"ok\",\"tbt\":\"ok\",\"cards\":\"ok\"}"
-  },
-  {
-   "sev": "warn",
-   "area": "dev.log",
-   "msg": "226 error lines in recent log window"
+   "sev": "crit",
+   "area": "disk-tmp",
+   "msg": "PolarFS /tmp 0.00GB free < 1GB — backup ring at risk"
   }
  ],
  "services": [
   {
    "key": "app",
    "label": "app :3000",
-   "up": false,
-   "status": null,
-   "ms": 2,
-   "tcpOpen": false
+   "up": true,
+   "status": 200,
+   "ms": 26
   },
   {
    "key": "ws",
@@ -67,41 +61,41 @@
   }
  ],
  "mem": {
-  "availableMb": 2173
+  "availableMb": 1190
  },
  "disk": {
-  "rootFreeGb": 5.37,
-  "tmpFreeGb": 5.37
+  "rootFreeGb": 0,
+  "tmpFreeGb": 0
  },
  "db": {
   "ok": true,
-  "signals": 3190,
-  "events": 80017,
-  "prices": 28189,
-  "assets": 40,
+  "signals": 3740,
+  "events": 80021,
+  "prices": 24711,
+  "assets": 41,
   "pumps": 2307,
-  "events1h": 498,
-  "lastEventAgeMs": 93007,
+  "events1h": 1182,
+  "lastEventAgeMs": 2342,
   "stuckActive": 0,
   "orphanEvents": 0,
   "stuckPumpTracks": 0,
-  "dbBytes": 65732608,
-  "walBytes": 3637992
+  "dbBytes": 62484480,
+  "walBytes": 4136512
  },
  "backup": {
   "ok": true,
   "dir": "/tmp/my-project/backups",
   "encCount": 12,
   "zipCount": 12,
-  "newestEncMs": 1793282180752.4668,
-  "newestAnyMs": 1793282180752.4668,
-  "encAgeMs": 5798433.533203125
+  "newestEncMs": 1795720207886.915,
+  "newestAnyMs": 1795720207886.915,
+  "encAgeMs": 9341943.084960938
  },
  "watchdog": {
   "ok": true,
   "ver": "p0-watchdog 1.4.9",
   "modes": {
-   "app": "degraded",
+   "app": "ok",
    "liq": "ok",
    "ws": "ok",
    "bridge": "ok",
@@ -116,46 +110,44 @@
    "tbt": "ok",
    "cards": "ok"
   },
-  "nonOk": 1,
+  "nonOk": 0,
   "memLevel": "ok",
-  "memAvailableMb": 2176,
-  "paused": false
+  "memAvailableMb": 2131,
+  "paused": true
  },
  "log": {
-  "windowLines": 3232,
-  "errors": 226,
+  "windowLines": 398,
+  "errors": 4,
   "http500": 0,
   "oom": 0,
   "enospc": 0,
   "hydration": 0,
-  "unhandled": 46,
+  "unhandled": 0,
   "settlementStalled": 0,
   "turbopackPanic": 0
  },
  "shadow": {
   "ok": true,
-  "source": "legacy-file",
-  "degraded": true,
-  "fileAgeH": 0,
+  "source": "live-api",
   "mode": "veto",
-  "generatedAt": "2026-10-29T15:30:59.912Z",
+  "generatedAt": "2026-11-26T21:45:49.907Z",
   "stats": {
-   "total": 8853,
-   "passSide": 5104,
-   "rejectSide": 3749,
-   "vetoCount": 5919,
-   "tradeCount": 2934,
-   "modelSharePct": 40.6,
+   "total": 11797,
+   "passSide": 6941,
+   "rejectSide": 4856,
+   "vetoCount": 8523,
+   "tradeCount": 3274,
+   "modelSharePct": 40.1,
    "modelGroundedPct": 100,
-   "avgConfidence": 66.6,
-   "gateAgreement": 2374,
-   "paperOpen": 9,
-   "paperSettled": 1370,
+   "avgConfidence": 66.7,
+   "gateAgreement": 3335,
+   "paperOpen": 10,
+   "paperSettled": 1530,
    "recent24h": {
-    "n": 236,
-    "modelSharePct": 27.1,
-    "lastModelAgeH": 12.1,
-    "lastVerdictAgeH": 0
+    "n": 172,
+    "modelSharePct": 37.8,
+    "lastModelAgeH": 0.1,
+    "lastVerdictAgeH": 0.1
    }
   },
   "arms": [
@@ -165,7 +157,8 @@
     "target": 30,
     "pct": 100,
     "starved": false,
-    "fed": null,
+    "reachable": true,
+    "fed": 1753,
     "lastFedAgeH": null
    },
    {
@@ -174,7 +167,8 @@
     "target": 30,
     "pct": 100,
     "starved": false,
-    "fed": null,
+    "reachable": true,
+    "fed": 5188,
     "lastFedAgeH": null
    },
    {
@@ -183,62 +177,69 @@
     "target": 30,
     "pct": 100,
     "starved": false,
-    "fed": null,
+    "reachable": true,
+    "fed": 1523,
     "lastFedAgeH": null
    },
    {
     "id": "paper-veto",
-    "n": 0,
+    "n": 17,
     "target": 30,
-    "pct": 0,
+    "pct": 57,
     "starved": false,
-    "fed": null,
+    "reachable": true,
+    "fed": 17,
     "lastFedAgeH": null
    }
   ],
-  "fillPct": 75,
-  "nSum": 90,
+  "fillPct": 89,
+  "fillPctReach": 89,
+  "nSum": 107,
   "tSum": 120,
-  "fenceEntries24hFloor": 116
+  "nSumReach": 107,
+  "tSumReach": 120,
+  "fenceEntries24hFloor": 308
  },
  "rawcal": {
-  "armed": null,
-  "error": "api unreachable",
+  "armed": true,
+  "issued": 1089,
+  "issuedTotal": 2507,
+  "target": 3217,
   "heartbeatAgeH": 0,
-  "heartbeatAt": "2026-10-29T1531Z ARMED issued=705/2116 target=3187"
+  "heartbeatAt": "2026-11-26T2145Z OPEN (degraded-winner) — fapi ban active (fapi pool distress — 2 named egress IPs inside liv): capture continu"
  },
  "cards": {
   "ok": true,
-  "sentinelAgeSec": 16,
-  "ticks": 1297,
-  "refreshed1h": 13,
-  "failures1h": 36,
-  "staleHot": 7,
+  "sentinelAgeSec": 21,
+  "ticks": 472,
+  "refreshed1h": 26,
+  "failures1h": 37,
+  "staleHot": 4,
   "worst": [
    {
-    "symbol": "QUSDT",
-    "ageMin": 386,
+    "symbol": "INITUSDT",
+    "ageMin": 16,
     "heat": "hot"
    },
    {
-    "symbol": "XANUSDT",
-    "ageMin": 45,
-    "heat": "warm"
-   },
-   {
-    "symbol": "APRUSDT",
-    "ageMin": 25,
-    "heat": "hot"
-   },
-   {
-    "symbol": "DOSUSDT",
-    "ageMin": 18,
-    "heat": "warm"
-   },
-   {
-    "symbol": "LSKUSDT",
+    "symbol": "MANTRAUSDT",
     "ageMin": 14,
     "heat": "hot"
+   },
+   {
+    "symbol": "BIGTIMEUSDT",
+    "ageMin": 4,
+    "heat": "warm"
+   },
+   {
+    "symbol": "LISTAUSDT",
+    "ageMin": 1,
+    "heat": "warm"
+   },
+   {
+    "symbol": "MEUSDT",
+    "ageMin": 1,
+    "heat": "warm"
    }
   ]
  },
@@ -251,6 +252,6 @@
   "failStreak": 0,
   "baselineMark": 0
  },
- "uptimeSec": 57600,
+ "uptimeSec": 7200,
  "ver": "nexus-sentinel 1.3.2"
 }
