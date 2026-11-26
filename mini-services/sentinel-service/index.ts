@@ -181,8 +181,23 @@ function dbVitals() {
     const ev1h = Number(q("SELECT COUNT(*) AS n FROM SignalEvent WHERE createdAt > ?", since1h)?.n ?? -1);
     const maxRow = q("SELECT MAX(createdAt) AS m FROM SignalEvent") as { m?: number | string } | null;
     let lastEvAgeMs: number | null = null;
-    const m = maxRow?.m;
-    if (m !== undefined && m !== null) lastEvAgeMs = nowMs() - (typeof m === "number" ? m : parseInt(String(m), 10) || 0);
+    const rawM = maxRow?.m;
+    // v14.1 fix (SENTINEL-20261126): Prisma/SQLite DateTime storage can surface as
+    // ms-epoch number, seconds-epoch number, or ISO-8601 TEXT depending on the row
+    // generation — parseInt() on an ISO string yields the YEAR (2026), making age
+    // ≈ nowMs and firing a false "engine stalled" crit (56.9y). Parse all three
+    // shapes defensively; null result = no crit (honest unknown), never a fake age.
+    if (rawM !== undefined && rawM !== null && String(rawM).trim() !== "") {
+      const n = typeof rawM === "number" ? rawM : Number(rawM);
+      let tMs = NaN;
+      if (Number.isFinite(n)) tMs = n > 1e12 ? n : n > 1e9 && n < 1e11 ? n * 1000 : NaN;
+      if (!Number.isFinite(tMs)) {
+        const s = String(rawM);
+        const tIso = Date.parse(s.includes("T") ? s : s.replace(" ", "T") + "Z");
+        if (Number.isFinite(tIso)) tMs = tIso;
+      }
+      if (Number.isFinite(tMs)) lastEvAgeMs = Math.max(0, nowMs() - tMs);
+    }
     // engine stuck guard: active signals whose expiresAt passed >48h (should be impossible)
     const stuck = Number(q("SELECT COUNT(*) AS n FROM Signal WHERE status IN ('ACTIVE','TP1','TP2') AND expiresAt < ?", nowMs() - 48 * 3600_000)?.n ?? 0);
     // orphan events (data-integrity, audit P1-3 family)
